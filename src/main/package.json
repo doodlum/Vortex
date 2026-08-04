@@ -226,6 +226,7 @@
     "./electron-builder.config.json",
     "./copy-native-prebuilds.mjs",
     "./postinstall.mjs",
+    "./prepare-linux-extensions.mjs",
     "./prepare-dist-package.mjs",
     "./sign.cjs"
   ],

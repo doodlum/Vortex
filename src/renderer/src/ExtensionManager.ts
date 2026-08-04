@@ -100,6 +100,7 @@ import getVortexPath from "./util/getVortexPath";
 import type { i18n } from "./util/i18n";
 import { TString } from "./util/i18n";
 import lazyRequire from "./util/lazyRequire";
+import { isLootWorker, lootWorkerDirectory } from "./util/linux/lootCompatibility";
 import { isWindowsExecutable } from "./util/linux/proton";
 import { showError } from "./util/message";
 import { deregisterProtocolHandler, registerProtocolHandler } from "./util/protocolRegistration";
@@ -2271,6 +2272,9 @@ class ExtensionManager {
     args: string[],
     options: IRunOptions,
   ): PromiseBB<void> => {
+    if (isLootWorker(args[0])) {
+      options = { ...options, cwd: lootWorkerDirectory() };
+    }
     // Community extensions often launch companion Windows tools through the API directly,
     // bypassing StarterInfo's Proton handling. On Linux, executing the .exe itself can hit
     // Steam's binfmt integration, which launches the owning game instead of the requested tool.

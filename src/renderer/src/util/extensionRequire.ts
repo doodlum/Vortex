@@ -3,6 +3,8 @@ import {} from "module";
 const Module = require("module");
 import * as childProcess from "node:child_process";
 import fs from "node:fs";
+import * as fsPromises from "node:fs/promises";
+import * as net from "node:net";
 import path from "node:path";
 
 import * as reduxAct from "redux-act";
@@ -11,6 +13,12 @@ import * as api from "../api";
 import * as reactSelect from "../controls/ReactSelectWrap";
 import ExtensionManager from "../ExtensionManager";
 import type { IRegisteredExtension } from "../types/extensions";
+import { extensionFilesystem } from "./extensionFilesystem";
+import {
+  extensionNetwork,
+  linuxLootModule,
+  linuxLootNativeModule,
+} from "./linux/lootCompatibility";
 import type { LogLevel } from "./log";
 import { webpackRequireHack } from "./webpack-hacks";
 
@@ -18,6 +26,7 @@ const identity = (input) => input;
 
 class ExtProxyHandler implements ProxyHandler<typeof api> {
   private mExt: IRegisteredExtension;
+  private mFilesystem: typeof api.fs;
   constructor(ext: IRegisteredExtension) {
     this.mExt = ext;
   }
@@ -27,6 +36,9 @@ class ExtProxyHandler implements ProxyHandler<typeof api> {
       return (level: LogLevel, message: string, metadata: any) => {
         target.log(level, `[${this.mExt.namespace}] ${message}`, metadata);
       };
+    } else if (p === "fs") {
+      this.mFilesystem ??= extensionFilesystem(target.fs);
+      return this.mFilesystem;
     } else {
       return target[p];
     }
@@ -99,6 +111,9 @@ class ExtProxyHandlerReduxAct implements ProxyHandler<typeof reduxAct> {
 const handlerMapAPI: { [extId: string]: typeof api } = {};
 const handlerMapReactAct: { [extId: string]: typeof reduxAct } = {};
 let childProcessProxy: typeof childProcess | undefined;
+let nodeFilesystemProxy: typeof fs | undefined;
+let nodeFilesystemPromisesProxy: typeof fsPromises | undefined;
+let networkProxy: typeof net | undefined;
 
 function extensionChildProcess(): typeof childProcess {
   if (process.platform !== "linux") return childProcess;
@@ -117,6 +132,21 @@ function extensionChildProcess(): typeof childProcess {
     }) as typeof childProcess;
   }
   return childProcessProxy;
+}
+
+function extensionNodeFilesystem(): typeof fs {
+  nodeFilesystemProxy ??= extensionFilesystem(fs);
+  return nodeFilesystemProxy;
+}
+
+function extensionNodeFilesystemPromises(): typeof fsPromises {
+  nodeFilesystemPromisesProxy ??= extensionFilesystem(fsPromises);
+  return nodeFilesystemPromisesProxy;
+}
+
+function extensionNetworkModule(): typeof net {
+  networkProxy ??= extensionNetwork(net);
+  return networkProxy;
 }
 
 function requireFromApplication(id: string): unknown {
@@ -138,9 +168,27 @@ function extensionRequire(orig, getExtensions: () => IRegisteredExtension[]) {
       return entry;
     }
   });
+  const extensionFor = (filename: string) => {
+    let resolved = filename;
+    try {
+      resolved = fs.realpathSync(filename);
+    } catch {
+      // The file may disappear while an extension is being removed.
+    }
+    return getExtensions().find((extension) => {
+      let extensionPath = extension.path;
+      try {
+        extensionPath = fs.realpathSync(extensionPath);
+      } catch {
+        // Keep the registered path when it no longer exists.
+      }
+      const relative = path.relative(extensionPath, resolved);
+      return relative.length === 0 || (!relative.startsWith(`..${path.sep}`) && relative !== "..");
+    });
+  };
   return function (id) {
     if (id === "vortex-api" || id === "@nexusmods/vortex-api") {
-      const ext = getExtensions().find((iter) => this.filename.startsWith(iter.path));
+      const ext = extensionFor(this.filename);
       if (ext !== undefined) {
         if (handlerMapAPI[ext.name] === undefined) {
           handlerMapAPI[ext.name] = new Proxy(api, new ExtProxyHandler(ext));
@@ -154,7 +202,7 @@ function extensionRequire(orig, getExtensions: () => IRegisteredExtension[]) {
     } else if (id === "react-select") {
       return reactSelect;
     } else if (id === "redux-act") {
-      const ext = getExtensions().find((iter) => this.filename.startsWith(iter.path));
+      const ext = extensionFor(this.filename);
       if (ext !== undefined) {
         if (handlerMapReactAct[ext.name] === undefined) {
           handlerMapReactAct[ext.name] = new Proxy(reduxAct, new ExtProxyHandlerReduxAct(ext));
@@ -162,8 +210,22 @@ function extensionRequire(orig, getExtensions: () => IRegisteredExtension[]) {
         return handlerMapReactAct[ext.name];
       }
     } else if (id === "child_process" || id === "node:child_process") {
-      const ext = getExtensions().find((iter) => this.filename.startsWith(iter.path));
+      const ext = extensionFor(this.filename);
       if (ext !== undefined) return extensionChildProcess();
+    } else if (id === "fs" || id === "node:fs" || id === "original-fs") {
+      const ext = extensionFor(this.filename);
+      if (ext !== undefined) return extensionNodeFilesystem();
+    } else if (id === "fs/promises" || id === "node:fs/promises") {
+      const ext = extensionFor(this.filename);
+      if (ext !== undefined) return extensionNodeFilesystemPromises();
+    } else if (id === "net" || id === "node:net") {
+      const ext = extensionFor(this.filename);
+      if (ext !== undefined) return extensionNetworkModule();
+    } else if (id === "./node-loot.node" && process.platform === "linux") {
+      const ext = extensionFor(this.filename);
+      if (ext !== undefined) {
+        return linuxLootNativeModule(orig.apply(this, arguments));
+      }
     }
     let moduleFilename = this.filename;
     try {
@@ -188,7 +250,7 @@ function extensionRequire(orig, getExtensions: () => IRegisteredExtension[]) {
       if (res === undefined) {
         res = orig.apply(this, arguments);
       }
-      return res;
+      return id === "loot" && process.platform === "linux" ? linuxLootModule(res as any) : res;
     } else {
       return orig.apply(this, arguments);
     }

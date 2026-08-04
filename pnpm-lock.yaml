@@ -992,9 +992,6 @@ overrides:
   '@types/node': 24.12.2
   react-dnd: 14.0.5
 
-patchedDependencies:
-  loot@6.2.2: bcc1001fd5ab04e68e27685ed2188cc867ca4cf7daf10faa379e036f8ebd4b16
-
 importers:
 
   .:
@@ -1827,7 +1824,7 @@ importers:
     optionalDependencies:
       loot:
         specifier: 'catalog:'
-        version: https://codeload.github.com/Nexus-Mods/node-loot/tar.gz/7b6028fb2caeb3a2af6a0c3d68630c033cc01e8d(patch_hash=bcc1001fd5ab04e68e27685ed2188cc867ca4cf7daf10faa379e036f8ebd4b16)
+        version: https://codeload.github.com/Nexus-Mods/node-loot/tar.gz/7b6028fb2caeb3a2af6a0c3d68630c033cc01e8d
 
   extensions/gamebryo-savegame-management:
     dependencies:
@@ -18692,7 +18689,7 @@ snapshots:
     dependencies:
       js-tokens: 4.0.0
 
-  loot@https://codeload.github.com/Nexus-Mods/node-loot/tar.gz/7b6028fb2caeb3a2af6a0c3d68630c033cc01e8d(patch_hash=bcc1001fd5ab04e68e27685ed2188cc867ca4cf7daf10faa379e036f8ebd4b16):
+  loot@https://codeload.github.com/Nexus-Mods/node-loot/tar.gz/7b6028fb2caeb3a2af6a0c3d68630c033cc01e8d:
     dependencies:
       autogypi: 0.2.2
       lodash: 4.17.23

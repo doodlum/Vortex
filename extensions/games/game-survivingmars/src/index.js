@@ -27,20 +27,10 @@ function findGame() {
     }
     return Promise.resolve(instPath.value);
   } catch (err) {
-    return (
-      util.steam
-        .findByAppId("464920")
-        // util.epicGamesLauncher is undefined where the Epic store does not instantiate --
-        // notably Linux -- so reaching through it turned "game not found" into a TypeError.
-        .catch(() =>
-          util.epicGamesLauncher !== undefined
-            ? util.epicGamesLauncher.findByAppId("Ovenbird")
-            : Promise.reject(
-                new Error("no supported game store for Surviving Mars on this platform"),
-              ),
-        )
-        .then((game) => game.gamePath)
-    );
+    return util.steam
+      .findByAppId("464920")
+      .catch(() => util.epicGamesLauncher.findByAppId("Ovenbird"))
+      .then((game) => game.gamePath);
   }
 }
 

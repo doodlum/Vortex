@@ -5,6 +5,10 @@ import { join, basename, dirname } from "node:path";
 
 import { glob } from "glob";
 
+if (process.platform === "linux") {
+  await import("./prepare-linux-extensions.mjs");
+}
+
 const WORKSPACE = join(import.meta.dirname, "../..");
 const DEST = join(import.meta.dirname, "build/bundledPlugins");
 

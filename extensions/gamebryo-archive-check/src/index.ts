@@ -120,10 +120,7 @@ async function checkForErrors(api: types.IExtensionApi, pluginsObj: any) {
     undefined,
   );
 
-  // "Data", not "data": Bethesda ships it capitalised, and on a case-sensitive filesystem the
-  // lowercase spelling does not exist, so every archive check failed with ENOENT on Linux.
-  // The rest of the gamebryo extensions already use the real name (see gameSupport.gameDataPath).
-  const dataFolder = discovery ? path.join(discovery, "Data") : undefined;
+  const dataFolder = discovery ? path.join(discovery, "data") : undefined;
 
   const normalize = (fileName: string) => {
     const noExt = path.basename(fileName, path.extname(fileName)).toLowerCase();

@@ -424,11 +424,14 @@ function genOnProfileChange(
           });
         };
 
-        const oldProfile = state.persistent.profiles[prev];
-        // changes to profile files are only saved back to the profile at this point
-        queue = queue.then(() => refreshProfile(store, oldProfile, "import"));
-
         api.events.emit("profile-will-change", current, enqueue);
+
+        const oldProfile = state.persistent.profiles[prev];
+        // Persistors registered by extensions use profile-will-change to flush their delayed
+        // writes. Copy profile-owned files only after those handlers settle, otherwise the profile
+        // can snapshot the previous plugins/load-order file even though the extension did enqueue
+        // the correct write.
+        queue = queue.then(() => refreshProfile(store, oldProfile, "import"));
 
         if (current === undefined) {
           log("info", "switched to no profile");
