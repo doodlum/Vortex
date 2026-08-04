@@ -2,14 +2,24 @@ import type * as fomodT from "@nexusmods/fomod-installer-native";
 
 import { log } from "@/logging";
 import type { ISupportedResult } from "@/types/api";
+import lazyRequire from "@/util/lazyRequire";
 
 export class VortexModTester {
   readonly #fomod: typeof fomodT;
 
   static async create(): Promise<VortexModTester | null> {
     try {
-      const nativeModule = await import("@nexusmods/fomod-installer-native");
-      return new VortexModTester(nativeModule);
+      // Keep native-module loading consistent with VortexModInstaller. A
+      // webpack dynamic import can resolve to webpack's external-module shim
+      // instead of the CommonJS exports in a packaged Electron application.
+      const nativeModule = lazyRequire<typeof fomodT>(() =>
+        require("@nexusmods/fomod-installer-native"),
+      );
+      const fomod = normalizeFomodModule(nativeModule);
+      if (fomod === undefined) {
+        throw new Error("Native FOMOD module does not export NativeModInstaller");
+      }
+      return new VortexModTester(fomod);
     } catch (err) {
       log("error", "Failed to load native FOMOD module", err);
       return null;
@@ -38,4 +48,23 @@ export class VortexModTester {
       };
     }
   };
+}
+
+export function normalizeFomodModule(
+  nativeModule: typeof fomodT & { default?: typeof fomodT },
+): typeof fomodT | undefined {
+  // Depending on whether Electron, webpack, or Node performed the CJS/ESM
+  // interop, a CommonJS module can acquire more than one `default` wrapper.
+  // Follow only that well-defined wrapper instead of depending on one bundler's
+  // namespace shape.
+  let candidate: unknown = nativeModule;
+  const seen = new Set<unknown>();
+  while (candidate !== null && typeof candidate === "object" && !seen.has(candidate)) {
+    seen.add(candidate);
+    if ((candidate as typeof fomodT).NativeModInstaller !== undefined) {
+      return candidate as typeof fomodT;
+    }
+    candidate = (candidate as { default?: unknown }).default;
+  }
+  return undefined;
 }

@@ -261,7 +261,7 @@ class PluginPersistor implements types.IPersistor {
     if (!this.mSerializeScheduled) {
       this.mSerializeScheduled = true;
       // ensure we don't try to concurrently write the files
-      this.enqueue(
+      return this.enqueue(
         () =>
           new Promise<void>((resolve) => {
             setTimeout(() => {
@@ -275,7 +275,9 @@ class PluginPersistor implements types.IPersistor {
           }),
       );
     }
-    return Promise.resolve();
+    // A serialize request that arrives while the delayed write is already scheduled must still
+    // wait for that write. Profile synchronization relies on this promise before copying files.
+    return this.mSerializeQueue;
   }
 
   private loadOrder(pluginId: string): number {

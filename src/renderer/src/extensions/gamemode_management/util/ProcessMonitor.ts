@@ -258,6 +258,25 @@ class ProcessMonitor {
       // Step 2d: Progressively reassemble tokens until we find one ending with the exe name
       // This handles unquoted paths with spaces like "/home/user/My Games/game.exe"
       const exeName = proc.name.toLowerCase();
+
+      // A Windows executable run through Wine reports its own path as argv[0], and the reported
+      // process name is useless for finding where that path ends: Wine renames the process to its
+      // main thread, so a running Skyrim is called `Main`. Reassembling until the path ends in `.exe`
+      // handles the spaces in `Skyrim Special Edition` -- but only for a command line that *is* a
+      // Windows path. Applying it to any command line matches an argument instead of the executable:
+      // Steam's own `pressure-vessel` wrapper takes the game exe as an argument, and accepting that
+      // made Vortex report the script extender as running when only the wrapper was.
+      const looksLikeWindowsPath = /^([a-zA-Z]:[\\/]|\\\\)/.test(trimmed);
+      if (looksLikeWindowsPath) {
+        let windowsPath = "";
+        for (const part of parts) {
+          windowsPath = windowsPath.length === 0 ? part : `${windowsPath} ${part}`;
+          if (windowsPath.toLowerCase().endsWith(".exe")) {
+            return hasPathSeparator(windowsPath) ? windowsPath : undefined;
+          }
+        }
+      }
+
       let assembled = "";
       for (const part of parts) {
         assembled = assembled.length === 0 ? part : `${assembled} ${part}`;
@@ -274,6 +293,44 @@ class ProcessMonitor {
     const getProcessPath = (proc: IProcessInfo): string | undefined =>
       proc.path ?? getCommandPath(proc);
 
+    /**
+     * Whether a path reported by the OS names the executable we are looking for.
+     *
+     * A Windows game run through Wine or Proton reports its own view of the world, so the command
+     * line of a running Skyrim is
+     *
+     *     Z:\home\deck\.local\share\Steam\steamapps\common\Skyrim Special Edition\SkyrimSE.exe
+     *
+     * while the game's path here is `/home/deck/.local/share/Steam/...`. Compared literally those
+     * never match, so the game was matched by name, rejected on its path, and reported as stopped
+     * while it was plainly running -- which meant the Play button never showed a running game and
+     * nothing waiting on the game's exit ever fired.
+     *
+     * Wine maps `Z:` to the filesystem root, so that case converts exactly. Any other drive letter
+     * is a mapping in the prefix that cannot be resolved from here, so those fall back to comparing
+     * the tail: the basename has already matched, and requiring its directory to match as well is
+     * the same standard the name-only fallback below settles for.
+     */
+    const sameExecutable = (procPath: string, exePath: string): boolean => {
+      // Repeated separators are collapsed because they occur in practice: a Skyrim launched through
+      // Proton reports `…\Skyrim Special Edition\\SkyrimSE.exe`. A leading `//` is left alone, since
+      // that is a UNC host rather than a doubled separator.
+      const normalise = (value: string) =>
+        value
+          .replace(/\\/g, "/")
+          .replace(/(?<!^)\/{2,}/g, "/")
+          .toLowerCase();
+      const wanted = normalise(exePath);
+      const forward = normalise(procPath);
+      const drive = /^([a-z]):\/(.*)$/.exec(forward);
+      const candidate = drive !== null && drive[1] === "z" ? `/${drive[2]}` : forward;
+      if (candidate === wanted) {
+        return true;
+      }
+      const tail = wanted.split("/").slice(-2).join("/");
+      return tail.length > 0 && candidate.endsWith(`/${tail}`);
+    };
+
     // ─── Step 3: Build lookup maps ────────────────────────────────────────────
 
     // Step 3a: Map by PID for quick validation of cached tool PIDs (avoid stale PID reuse)
@@ -285,7 +342,19 @@ class ProcessMonitor {
     // Step 3b: Map by exeId (normalized lowercase basename) for name-based candidate lookup
     const byName: { [exeId: string]: IProcessInfo[] } = processes.reduce(
       (prev: { [exeId: string]: IProcessInfo[] }, proc) => {
-        setdefault(prev, makeExeId(proc.name), []).push(proc);
+        const nameId = makeExeId(proc.name);
+        setdefault(prev, nameId, []).push(proc);
+        // The reported name is not always the executable's. Wine renames a process to its main
+        // thread's name, so a game running under Proton is not listed as `SkyrimSE.exe` even though
+        // that is what it is running -- index what the command line says it is as well, or the
+        // lookup below never finds it and the game reads as "not running" throughout.
+        const cmdPath = getProcessPath(proc);
+        if (cmdPath !== undefined) {
+          const cmdId = makeExeId(cmdPath.replace(/\\/g, "/"));
+          if (cmdId !== nameId) {
+            setdefault(prev, cmdId, []).push(proc);
+          }
+        }
         return prev;
       },
       {} as { [exeId: string]: IProcessInfo[] },
@@ -294,6 +363,9 @@ class ProcessMonitor {
     // ─── Step 4: Capture current state and Vortex PID ─────────────────────────
     const state = this.mStore.getState();
     const vortexPid = process.pid;
+    // When the process list comes from another pid namespace -- Vortex in a Flatpak reading the
+    // host's processes -- our own pid means nothing in it, so ancestry cannot be established.
+    const ancestryKnowable = this.mProcessProvider.foreignNamespace !== true;
 
     // ─── Step 5: Define child-process ancestry check ──────────────────────────
     // Recursively walks the parent chain to determine if a process descends from Vortex.
@@ -332,6 +404,7 @@ class ProcessMonitor {
       // Step 6b: Early exit - no process with this name is running
       if (exeRunning === undefined) {
         if (knownRunning !== undefined) {
+          log("debug", "no longer running", { exePath, candidates: 0 });
           this.mStore.dispatch(setToolStopped(exePath));
         }
         return;
@@ -344,7 +417,11 @@ class ProcessMonitor {
           // Step 6c-i: Process with cached PID still exists - but is it still "ours"?
           // For games (considerDetached=true): any process is valid, we're done
           // For tools (considerDetached=false): must still be a Vortex child process
-          if (considerDetached || isChildProcessOfVortex(knownProc, new Set())) {
+          if (
+            considerDetached ||
+            !ancestryKnowable ||
+            isChildProcessOfVortex(knownProc, new Set())
+          ) {
             return; // Still valid, no state change needed
           }
           // Step 6c-ii: Process exists but is no longer a child - fall through to re-match
@@ -353,24 +430,40 @@ class ProcessMonitor {
         // Step 6c-iii: Cached PID no longer exists (process exited) - fall through to find new match
       }
 
-      // Step 6d: Build candidate list - filter by child status if required
-      const candidates = considerDetached
-        ? exeRunning
-        : exeRunning.filter((proc) => isChildProcessOfVortex(proc, new Set()));
+      // Step 6d: Build candidate list - filter by child status if required.
+      // When the process list comes from another pid namespace -- Vortex in a Flatpak reading the
+      // host's processes -- our own pid means nothing in it, so ancestry cannot be established and
+      // insisting on it would reject every tool. Matching on the path alone is the same standard
+      // games are already held to.
+      const candidates =
+        considerDetached || !ancestryKnowable
+          ? exeRunning
+          : exeRunning.filter((proc) => isChildProcessOfVortex(proc, new Set()));
 
       // Step 6e: Enrich candidates with resolved paths (from proc.path or parsed from proc.cmd)
-      const exePathLower = exePath.toLowerCase();
       const candidatesWithPath = candidates.map((proc) => ({
         proc,
         path: getProcessPath(proc),
       }));
 
-      // Step 6f: Attempt exact path match (preferred - most reliable)
+      // Step 6f: Attempt path match (preferred - most reliable), allowing for a process that
+      // reports a Windows path because it runs under Wine or Proton.
       const pathMatch = candidatesWithPath.find(
-        (entry) => entry.path !== undefined && entry.path.toLowerCase() === exePathLower,
+        (entry) => entry.path !== undefined && sameExecutable(entry.path, exePath),
       );
 
       if (pathMatch !== undefined) {
+        if (knownRunning?.pid !== pathMatch.proc.pid) {
+          // Logged on transition only. Without this there is no way to tell a monitor that never
+          // matched from one that was never asked, which is exactly the ambiguity that hid the
+          // Wine path mismatch: the game was plainly running and Vortex reported nothing at all.
+          log("debug", "detected running", {
+            exePath,
+            pid: pathMatch.proc.pid,
+            reportedAs: pathMatch.proc.name,
+            reportedPath: pathMatch.path,
+          });
+        }
         this.mStore.dispatch(setToolPid(exePath, pathMatch.proc.pid, exclusive));
         return;
       }
@@ -391,6 +484,7 @@ class ProcessMonitor {
       // - All candidates had paths, but none matched our target path (different exe with same name)
       // - Candidates existed but weren't child processes (and considerDetached=false)
       if (knownRunning !== undefined) {
+        log("debug", "no longer running", { exePath, candidates: candidatesWithPath.length });
         this.mStore.dispatch(setToolStopped(exePath));
       }
     };
@@ -408,7 +502,14 @@ class ProcessMonitor {
       return;
     }
 
-    const gameExePath = path.join(gamePath, gameExe);
+    // Discovery providers may return either the traditional game-relative executable or an
+    // absolute executable path. `path.join(gamePath, absoluteExe)` does not preserve the latter;
+    // it appends it and produces `/game/path/game/path/Game.exe`, which then leaks into
+    // toolsRunning even though process matching happened to succeed by basename. Preserve the
+    // discovered absolute path exactly, as every tool path below already does.
+    const gameExePath = path.isAbsolute(gameExe)
+      ? path.normalize(gameExe)
+      : path.join(gamePath, gameExe);
     update(gameExePath, true, true);
 
     // ─── Step 8: Match each discovered tool ───────────────────────────────────

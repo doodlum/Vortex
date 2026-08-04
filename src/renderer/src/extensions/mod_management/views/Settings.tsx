@@ -56,6 +56,7 @@ import * as selectors from "../../../util/selectors";
 import { getSafe } from "../../../util/storeHelper";
 import { cleanFailedTransfer, testPathTransfer, transferPath } from "../../../util/transferPath";
 import { ciEqual, isChildPath, isPathValid, isReservedDirectory } from "../../../util/util";
+import { volumePath } from "../../../util/volumePath";
 import { currentGame, currentGameDiscovery } from "../../gamemode_management/selectors";
 import type { IDiscoveryResult } from "../../gamemode_management/types/IDiscoveryResult";
 import type { IGameStored } from "../../gamemode_management/types/IGameStored";
@@ -69,6 +70,7 @@ import type { IDeploymentMethod } from "../types/IDeploymentMethod";
 import { getSupportedActivators } from "../util/deploymentMethods";
 import { NoDeployment } from "../util/exceptions";
 import getInstallPath, { getInstallPathPattern } from "../util/getInstallPath";
+import firstLinkableStagingPath from "../util/linkableStagingPath";
 
 interface IBaseProps {
   activators: IDeploymentMethod[];
@@ -1040,23 +1042,32 @@ class Settings extends ComponentEx<IProps, IComponentState> {
   };
 
   private suggestPath = async () => {
-    const { modPaths, onShowError, suggestInstallPathDirectory } = this.props;
+    const { t, game, modPaths, onShowError, suggestInstallPathDirectory } = this.props;
     try {
-      // stat the volume root rather than the full mod path — the mod directory
-      // may not exist yet (e.g. first-time setup), but we only need the device id
-      const [modPathStats, userDataStats] = await Promise.all([
-        fs.statAsync(path.parse(modPaths[""]).root),
-        window.api.app.getPath("userData").then((userDataPath) => fs.statAsync(userDataPath)),
-      ]);
+      // Only ever offer a folder that hard-link deployment can actually work from, and establish that
+      // by trying it. Comparing volumes -- what this did before -- answers a different question:
+      // inside a Flatpak the game and Vortex's data directory are on one volume and still cannot be
+      // linked across, because the app's data directory is a separate bind mount. Suggesting such a
+      // path is worse than suggesting nothing, because deployment then reports success while moving
+      // no files at all.
+      const target = modPaths[""];
+      const candidate = firstLinkableStagingPath(game.id, suggestInstallPathDirectory, target);
 
-      let suggestion: string;
-      if (modPathStats.dev === userDataStats.dev) {
-        suggestion = path.join("{USERDATA}", "{game}", "mods");
-      } else {
-        const volume = winapi.GetVolumePathName(modPaths[""]);
-        suggestion = path.join(volume, suggestInstallPathDirectory, "{game}");
+      if (candidate === undefined) {
+        onShowError(
+          "No usable staging folder found",
+          t(
+            "None of the usual locations can hard-link into the game folder. That happens when the " +
+              "game sits on a filesystem without hard links, such as exFAT or FAT32 on an SD card. " +
+              "Choose a folder on the same drive as the game, or switch to a deployment method that " +
+              "copies files.",
+          ),
+          false,
+        );
+        return;
       }
-      this.changePath(suggestion);
+
+      this.changePath(candidate.pattern);
     } catch (err) {
       if (err instanceof UserCanceled) {
         return;

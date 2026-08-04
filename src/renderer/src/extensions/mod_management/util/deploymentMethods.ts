@@ -1,4 +1,5 @@
 import type { IState } from "../../../types/IState";
+import * as fs from "../../../util/fs";
 import { getSafe } from "../../../util/storeHelper";
 import { truthy } from "../../../util/util";
 import { getGame } from "../../gamemode_management/util/getGame";
@@ -39,6 +40,13 @@ export function getSupportedActivators(state: IState): IDeploymentMethod[] {
   }
   const modPaths = game.getModPaths(discovery.path);
   const modTypes = Object.keys(modPaths).filter((typeId) => truthy(modPaths[typeId]));
+  for (const typeId of modTypes) {
+    try {
+      fs.ensureDirSync(modPaths[typeId]);
+    } catch {
+      // Activator support checks below provide the path-specific write error.
+    }
+  }
   return activators.filter(
     (act) => allTypesSupported(act, state, gameId, modTypes).errors.length === 0,
   );

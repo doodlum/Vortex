@@ -11,7 +11,12 @@ import type { IExtensionApi } from "../types/IExtensionContext";
 import { GameEntryNotFound } from "../types/IGameStore";
 import * as fs from "./fs";
 import getVortexPath from "./getVortexPath";
-import { getProtonInfo, buildProtonEnvironment, buildProtonCommand } from "./linux/proton";
+import {
+  buildProtonCommand,
+  buildProtonEnvironment,
+  getCompatDataPath,
+  getProtonInfo,
+} from "./linux/proton";
 import { findLinuxSteamPath } from "./linux/steamPaths";
 import { log } from "./log";
 import opn from "./opn";
@@ -382,17 +387,64 @@ class Steam implements IGameStore {
     options: any,
     gameEntry: ISteamEntry,
   ): Promise<void> {
+    const steamPath = await this.mBaseFolder;
+    if (!gameEntry.usesProton || !gameEntry.protonPath || !gameEntry.compatDataPath) {
+      // The Steam game cache may have been populated before its first Proton launch created
+      // compatdata. Refresh this entry at execution time so a newly-created prefix is immediately
+      // available to companion tools without restarting Vortex.
+      const steamAppsPath = path.dirname(path.dirname(gameEntry.gamePath));
+      const refreshed = await getProtonInfo(steamPath, steamAppsPath, gameEntry.appid);
+      gameEntry = { ...gameEntry, ...refreshed };
+    }
+    const state = api.getState();
+    const profileId = state.settings.profiles.activeProfileId;
+    const selectedProton = getSafeCI(
+      state,
+      ["persistent", "profiles", profileId, "features", "proton-version"],
+      undefined,
+    );
+    if (
+      typeof selectedProton === "string" &&
+      selectedProton.length > 0 &&
+      (await fs.statAsync(path.join(selectedProton, "proton")).then(
+        () => true,
+        () => false,
+      ))
+    ) {
+      const steamAppsPath = path.dirname(path.dirname(gameEntry.gamePath));
+      gameEntry = {
+        ...gameEntry,
+        compatDataPath:
+          gameEntry.compatDataPath ?? getCompatDataPath(steamAppsPath, gameEntry.appid),
+        protonPath: selectedProton,
+        usesProton: true,
+      };
+    }
     if (!gameEntry.usesProton || !gameEntry.protonPath || !gameEntry.compatDataPath) {
       return api.runExecutable(exePath, args, options);
     }
 
-    const steamPath = await this.mBaseFolder;
     const { executable, args: protonArgs } = buildProtonCommand(
       gameEntry.protonPath,
       exePath,
       args,
     );
     const protonEnv = buildProtonEnvironment(gameEntry.compatDataPath, steamPath, options.env);
+
+    if (process.env.IS_FLATPAK === "true") {
+      const cwd = options.cwd || path.dirname(exePath);
+      const hostEnv = Object.entries(protonEnv).map(([key, value]) => `${key}=${value}`);
+      return api.runExecutable(
+        "flatpak-spawn",
+        ["--host", `--directory=${cwd}`, "env", ...hostEnv, executable, ...protonArgs],
+        {
+          ...options,
+          cwd: "/",
+          env: undefined,
+          shell: false,
+        },
+      );
+    }
 
     return api.runExecutable(executable, protonArgs, {
       ...options,

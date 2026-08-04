@@ -51,11 +51,14 @@
     {
       "from": "../../../locales",
       "to": "locales"
+    },
+    {
+      "from": "node_modules/@nexusmods/fomod-installer-native/prebuilds",
+      "to": "app.asar.unpacked/node_modules/@nexusmods/fomod-installer-native/prebuilds"
     }
   ],
   "files": [
     "**/*",
-    "!node_modules/@nexusmods/fomod-installer-native/prebuilds/**",
     "!node_modules/@nexusmods/fomod-installer-native/bin/**",
     "!node_modules/@nexusmods/fomod-installer-native/src-native/**",
     "!node_modules/@nexusmods/fomod-installer-native/*.{h,lib,dll}",
@@ -73,6 +76,7 @@
     "node_modules/react-select/scss",
     "node_modules/@nexusmods/fomod-installer-ipc/dist/*.exe",
     "assets/*.exe",
+    "assets/dotnetprobe",
     "assets/css/**",
     "**/*.node",
     "duckdb-extensions"

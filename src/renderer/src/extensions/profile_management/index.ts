@@ -432,8 +432,11 @@ function genOnProfileChange(
 
         if (current === undefined) {
           log("info", "switched to no profile");
-          confirmProfile(undefined, undefined);
-          return queue;
+          // Deselecting must obey the same transaction boundary as selecting a
+          // profile. Consumers use profile-will-change to persist profile-owned
+          // files; publishing profile-did-change before that queue settles lets
+          // profile removal delete the directory while those writes are active.
+          return queue.then(() => confirmProfile(undefined, undefined));
         }
 
         sanitizeProfile(store, profile);

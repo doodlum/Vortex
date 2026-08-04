@@ -50,7 +50,7 @@ vi.mock("../actions/session", () => ({
 }));
 
 import InstallManager from "../InstallManager";
-import { dealWithExternalChanges } from "./externalChanges";
+import { classifyExternalChange, dealWithExternalChanges } from "./externalChanges";
 
 function makeRefchange(source: string, filePath: string): IFileChange {
   return {
@@ -257,5 +257,39 @@ describe("dealWithExternalChanges", () => {
 
     // The next deployment cycle would pick up B.
     expect(installManager.consumeRecentChanges()).toEqual(new Set([modB]));
+  });
+});
+
+describe("classifyExternalChange", () => {
+  it("auto-resolves a deleted source when its owning mod was uninstalled", () => {
+    const change: IFileChange = {
+      filePath: "SKSE/Plugins/example.dll",
+      source: "removed-mod-installation-path",
+      changeType: "srcdeleted",
+    };
+
+    expect(
+      classifyExternalChange(change, {
+        isInstallingCollection: false,
+        recentChanges: new Set(),
+        installedSources: new Set(),
+      }),
+    ).toBe("autoResolved");
+  });
+
+  it("still surfaces a deleted source for a mod Vortex considers installed", () => {
+    const change: IFileChange = {
+      filePath: "SKSE/Plugins/example.dll",
+      source: "installed-mod",
+      changeType: "srcdeleted",
+    };
+
+    expect(
+      classifyExternalChange(change, {
+        isInstallingCollection: false,
+        recentChanges: new Set(),
+        installedSources: new Set(["installed-mod"]),
+      }),
+    ).toBe("rest");
   });
 });

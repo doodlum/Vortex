@@ -13,7 +13,9 @@ import type { IExtensionApi, IExtensionContext } from "../../types/IExtensionCon
 import type { IGame } from "../../types/IGame";
 import type { IState } from "../../types/IState";
 import * as fs from "../../util/fs";
+import { canHardlink } from "../../util/hardlinkSupport";
 import { installPathForGame } from "../../util/selectors";
+import { volumePath } from "../../util/volumePath";
 import type { IDiscoveryResult } from "../gamemode_management/types/IDiscoveryResult";
 import { getGame } from "../gamemode_management/util/getGame";
 import LinkingDeployment from "../mod_management/LinkingDeployment";
@@ -34,6 +36,25 @@ class DeploymentMethod extends LinkingDeployment {
   public priority: number = 5;
 
   private mInstallationFiles: Set<string>;
+
+  private linkIdentity(entry: {
+    filePath: string;
+    isDirectory?: boolean;
+    idStr?: string;
+    linkCount?: number;
+  }): PromiseLike<string | undefined> {
+    if (entry.isDirectory === false && entry.linkCount > 1 && entry.idStr !== undefined) {
+      return Promise.resolve(entry.idStr);
+    }
+
+    // The packaged Linux build of turbowalk can omit its optional `details` fields. Falling back to
+    // lstat keeps hardlink cleanup correct without depending on a particular walker binary.
+    return fs
+      .lstatAsync(entry.filePath)
+      .then((stats) =>
+        stats.isFile() && stats.nlink > 1 ? `${stats.dev}:${stats.ino}` : undefined,
+      );
+  }
 
   constructor(api: IExtensionApi) {
     super(
@@ -109,20 +130,19 @@ class DeploymentMethod extends LinkingDeployment {
     const installationPath = installPathForGame(state, gameId);
 
     try {
-      if (fs.statSync(installationPath).dev !== fs.statSync(modPaths[typeId]).dev) {
-        // hard links work only on the same drive
+      // Probe rather than compare device ids. The kernel refuses a hard link across two vfsmounts
+      // even within one filesystem -- the normal case inside a Flatpak, where the app's private data
+      // directory is bind-mounted separately from the host -- so the old `statSync(a).dev !==
+      // statSync(b).dev` test passed while every link() returned EXDEV: deployment reported "files
+      // were not correctly deployed ... probably locked by another application" having deployed
+      // nothing. A probe also catches filesystems with no hard links at all, such as an exFAT card.
+      if (!canHardlink(installationPath, modPaths[typeId])) {
+        // hard links work only within one volume
         return {
           description: (t) => t("Works only if mods are installed on the same drive as the game."),
           order: 5,
           solution: (t) => {
-            let displayPath = modPaths[typeId];
-            try {
-              displayPath = winapi.GetVolumePathName(modPaths[typeId]);
-            } catch {
-              log("warn", "Failed to resolve volume path", {
-                path: modPaths[typeId],
-              });
-            }
+            const displayPath = volumePath(modPaths[typeId]);
             return t(
               "Please go to Settings->Mods and set the mod staging folder to be on " +
                 "the same drive as the game ({{gameVolume}}).",
@@ -212,8 +232,15 @@ class DeploymentMethod extends LinkingDeployment {
     return super.finalize(gameId, dataPath, installationPath, progressCB);
   }
 
+  public prePurge(): Promise<void> {
+    // The inode set is shared between the target directories of one purge, but it must never be
+    // carried into a later purge. A deployment between two purge operations changes which staging
+    // files have links, so reusing the old set leaves newly deployed files behind.
+    this.mInstallationFiles = undefined;
+    return Promise.resolve();
+  }
+
   public postPurge(): PromiseBB<void> {
-    delete this.mInstallationFiles;
     this.mInstallationFiles = undefined;
     return PromiseBB.resolve();
   }
@@ -232,6 +259,7 @@ class DeploymentMethod extends LinkingDeployment {
       installEntryProm = PromiseBB.resolve(this.mInstallationFiles);
     } else {
       this.mInstallationFiles = new Set<string>();
+      let queue = PromiseBB.resolve();
       installEntryProm = turbowalk(
         installationPath,
         (entries) => {
@@ -240,11 +268,15 @@ class DeploymentMethod extends LinkingDeployment {
             // it is, see https://github.com/Nexus-Mods/Vortex/issues/3684
             return;
           }
-          entries.forEach((entry) => {
-            if (entry.linkCount > 1 && entry.idStr !== undefined) {
-              this.mInstallationFiles.add(entry.idStr);
-            }
-          });
+          queue = queue.then(() =>
+            PromiseBB.map(entries, (entry) =>
+              this.linkIdentity(entry).then((identity) => {
+                if (identity !== undefined) {
+                  this.mInstallationFiles?.add(identity);
+                }
+              }),
+            ).then(() => undefined),
+          );
         },
         {
           details: true,
@@ -254,6 +286,7 @@ class DeploymentMethod extends LinkingDeployment {
         .catch((err) =>
           ["ENOENT", "ENOTFOUND"].includes(err.code) ? PromiseBB.resolve() : PromiseBB.reject(err),
         )
+        .then(() => queue)
         .then(() => PromiseBB.resolve(this.mInstallationFiles));
     }
 
@@ -263,6 +296,8 @@ class DeploymentMethod extends LinkingDeployment {
       const total = inos.size;
       let purged: number = 0;
 
+      log("debug", "hardlink purge index ready", { dataPath, inodeCount: total });
+
       let queue = PromiseBB.resolve();
       if (inos.size === 0) {
         return PromiseBB.resolve();
@@ -271,23 +306,28 @@ class DeploymentMethod extends LinkingDeployment {
         dataPath,
         (entries) => {
           queue = queue.then(() =>
-            PromiseBB.map(entries, (entry) => {
-              if (entry.linkCount > 1 && entry.idStr !== undefined && inos.has(entry.idStr)) {
-                ++purged;
-                if (purged % 1000 === 0) {
-                  onProgress?.(purged, total);
+            PromiseBB.map(entries, (entry) =>
+              this.linkIdentity(entry).then((identity) => {
+                if (identity !== undefined && inos.has(identity)) {
+                  ++purged;
+                  if (purged % 1000 === 0) {
+                    onProgress?.(purged, total);
+                  }
+                  return fs
+                    .unlinkAsync(entry.filePath)
+                    .catch((err) => log("warn", "failed to remove", entry.filePath));
                 }
-                return fs
-                  .unlinkAsync(entry.filePath)
-                  .catch((err) => log("warn", "failed to remove", entry.filePath));
-              } else {
-                return PromiseBB.resolve();
-              }
-            }).then(() => undefined),
+                return undefined;
+              }),
+            ).then(() => undefined),
           );
         },
         { details: true, skipHidden: false },
-      ).then(() => queue);
+      )
+        .then(() => queue)
+        .then(() => {
+          log("debug", "hardlink purge complete", { dataPath, inodeCount: total, purged });
+        });
     });
   }
 

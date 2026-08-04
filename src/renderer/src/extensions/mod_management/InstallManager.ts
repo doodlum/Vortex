@@ -79,6 +79,7 @@ import type { IExtensionApi, ThunkStore } from "../../types/IExtensionContext";
 import type { IProfile, IState } from "../../types/IState";
 import { getBatchContext, type IBatchContext } from "../../util/BatchContext";
 import calculateFolderSize from "../../util/calculateFolderSize";
+import { resolveNativePath } from "../../util/casePath";
 import {
   generateCollectionSessionId,
   isOutstandingOptionalMember,
@@ -4258,10 +4259,35 @@ class InstallManager {
     return [].concat(invalidDestinationErrors);
   }
 
+  /**
+   * Installer instructions arrive with Windows path separators: the FOMOD installer emits them, and
+   * plenty of mods' own fomod scripts are written with them. On Windows `path.join` normalises a
+   * backslash away; on Linux it is a legal filename character, so `Data\skse\plugins\Foo.dll` is
+   * looked up literally, the hard link fails with ENOENT, and the install is reported as
+   *
+   *   The installer in "..." tried to install files that were not part of the archive.
+   *
+   * naming files that are plainly in the archive. Normalising once here covers every consumer of the
+   * instructions rather than each path join separately.
+   */
+  private nativeSeparators(instruction: IInstruction): IInstruction {
+    if (process.platform === "win32") {
+      return instruction;
+    }
+    const convert = (value: string | undefined) =>
+      typeof value === "string" ? value.replace(/\\/g, "/") : value;
+    const source = convert(instruction.source);
+    const destination = convert(instruction.destination);
+    if (source === instruction.source && destination === instruction.destination) {
+      return instruction;
+    }
+    return { ...instruction, source, destination };
+  }
+
   private transformInstructions(input: IInstruction[]): InstructionGroups {
     return input.reduce((prev, value) => {
       if (truthy(value) && prev[value.type] !== undefined) {
-        prev[value.type].push(value);
+        prev[value.type].push(this.nativeSeparators(value));
       }
       return prev;
     }, new InstructionGroups());
@@ -7488,7 +7514,29 @@ class InstallManager {
           } catch (err) {
             const code = getErrorCode(err);
             if (code === "ENOENT") {
-              // source file does not exist; skip
+              // The installer named a file the archive spells differently. Mods are authored on
+              // Windows, so an instruction can read `Data\skse\plugins\Foo.dll` for an archive that
+              // holds `data/skse/plugins/Foo.dll` -- one path there, two here. Skipping the file is
+              // what let an install produce the mod's directory tree with none of its files in it
+              // (the parent directories are created before this runs) and still report success:
+              // 110 of 274 mods in one staging folder ended up empty that way.
+              const resolved = resolveNativePath(job.src);
+              if (resolved !== job.src) {
+                try {
+                  await fs.linkAsync(resolved, job.dst);
+                  log("debug", "installer source resolved to the archive's own spelling", {
+                    requested: job.src,
+                    resolved,
+                  });
+                  return;
+                } catch (retryErr) {
+                  const retryCode = getErrorCode(retryErr);
+                  if (retryCode && ["EXDEV", "EPERM", "EACCES", "ENOTSUP"].includes(retryCode)) {
+                    await copyAsyncWrap(resolved, job.dst);
+                    return;
+                  }
+                }
+              }
               missingFiles.add(job.src);
               return;
             }

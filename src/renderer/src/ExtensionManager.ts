@@ -95,14 +95,17 @@ import {
 import { runElevated } from "./util/elevated";
 import { disableErrorReport, isOutdated, recordErrorSpan } from "./util/errorHandling";
 import * as fsVortex from "./util/fs";
+import GameStoreHelper from "./util/GameStoreHelper";
 import getVortexPath from "./util/getVortexPath";
 import type { i18n } from "./util/i18n";
 import { TString } from "./util/i18n";
 import lazyRequire from "./util/lazyRequire";
+import { isWindowsExecutable } from "./util/linux/proton";
 import { showError } from "./util/message";
 import { deregisterProtocolHandler, registerProtocolHandler } from "./util/protocolRegistration";
 import runElevatedCustomTool from "./util/runElevatedCustomTool";
 import { activeGameId } from "./util/selectors";
+import type { Steam } from "./util/Steam";
 import { getSafe } from "./util/storeHelper";
 import {
   filteredEnvironment,
@@ -2268,6 +2271,39 @@ class ExtensionManager {
     args: string[],
     options: IRunOptions,
   ): PromiseBB<void> => {
+    // Community extensions often launch companion Windows tools through the API directly,
+    // bypassing StarterInfo's Proton handling. On Linux, executing the .exe itself can hit
+    // Steam's binfmt integration, which launches the owning game instead of the requested tool.
+    // Resolve the Steam game from the executable path and explicitly reuse its Proton prefix.
+    if (process.platform !== "win32" && isWindowsExecutable(executable)) {
+      try {
+        const steamStore = GameStoreHelper.getGameStore("steam") as Steam;
+        return PromiseBB.resolve(steamStore.allGames()).then(
+          (games) => {
+            const normalizedExecutable = executable.toLowerCase();
+            const gameEntry = games.find((game) =>
+              normalizedExecutable.startsWith(game.gamePath.toLowerCase()),
+            );
+            if (gameEntry !== undefined) {
+              return steamStore.runToolWithProton(this.mApi, executable, args, options, gameEntry);
+            }
+            return this.runExecutableDirect(executable, args, options);
+          },
+          () => this.runExecutableDirect(executable, args, options),
+        );
+      } catch {
+        // Steam support may not be registered yet during application startup.
+      }
+    }
+
+    return this.runExecutableDirect(executable, args, options);
+  };
+
+  private runExecutableDirect = (
+    executable: string,
+    args: string[],
+    options: IRunOptions,
+  ): PromiseBB<void> => {
     if (!truthy(executable)) {
       return PromiseBB.reject(new ProcessCanceled("Executable not set"));
     }
@@ -3000,6 +3036,7 @@ class ExtensionManager {
       null_activator: () => require("./extensions/null_activator/index.ts"),
       onboarding_dashlet: () => require("./extensions/onboarding_dashlet/index.ts"),
       profile_management: () => require("./extensions/profile_management/index.ts"),
+      proton_management: () => require("./extensions/proton_management/index.ts"),
       // NOTE: intentionally placed after its dependencies (mod_management,
       // download_management, gamemode_management, profile_management,
       // nexus_integration) rather than alphabetically. The static map is

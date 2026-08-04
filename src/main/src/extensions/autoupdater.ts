@@ -43,6 +43,7 @@ const updateStatus: UpdateStatus = {
  * Handles checking for updates, downloading, and installing.
  */
 export function setupAutoUpdater(installType: string): void {
+  const isExternallyManaged = process.env.IS_FLATPAK === "true";
   let cancellationToken: CancellationToken | undefined = undefined;
   const currentVersion = semver.parse(app.getVersion());
   let updateChannel = "stable";
@@ -115,6 +116,7 @@ export function setupAutoUpdater(installType: string): void {
   log("info", "setupAutoUpdater", {
     installType,
     currentVersion: currentVersion?.version,
+    externallyManaged: isExternallyManaged,
   });
 
   // Configure autoUpdater
@@ -192,6 +194,16 @@ export function setupAutoUpdater(installType: string): void {
 
   // Check for updates
   const checkForUpdates = (channel: string, manual: boolean = false) => {
+    if (isExternallyManaged) {
+      log("info", "Update check delegated to package manager", {
+        packageManager: "flatpak",
+        manual,
+      });
+      updateStatus.available = false;
+      updateStatus.error = undefined;
+      return;
+    }
+
     if (!channel || channel === "none") {
       log("debug", "Updates disabled");
       return;
@@ -270,6 +282,13 @@ export function setupAutoUpdater(installType: string): void {
   });
 
   betterIpcMain.on("updater:download", (_event, channel: string, installAfterDownload: boolean) => {
+    if (isExternallyManaged) {
+      log("info", "Update download delegated to package manager", {
+        packageManager: "flatpak",
+      });
+      return;
+    }
+
     log("info", "Download update requested", {
       channel,
       installAfterDownload,
@@ -308,6 +327,13 @@ export function setupAutoUpdater(installType: string): void {
   });
 
   betterIpcMain.on("updater:restart-and-install", () => {
+    if (isExternallyManaged) {
+      log("info", "Update installation delegated to package manager", {
+        packageManager: "flatpak",
+      });
+      return;
+    }
+
     if (process.env.NODE_ENV !== "development") {
       log("info", "Restarting to install update");
       attemptInstall();

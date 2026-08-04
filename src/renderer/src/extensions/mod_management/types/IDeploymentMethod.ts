@@ -44,6 +44,8 @@ export interface IDeployedFile {
    * the relative path to the file
    */
   relPath: string;
+  /** Original relative path in staging when destination casing was resolved independently. */
+  sourceRelPath?: string;
   /**
    * the source of the file, which should be the name of the mod
    */

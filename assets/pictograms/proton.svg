@@ -1,0 +1,26 @@
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="liquid" x1="60" y1="78" x2="143" y2="163" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D8DBFF"/>
+      <stop offset="0.48" stop-color="#8E98F2"/>
+      <stop offset="1" stop-color="#5968D9"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="73" y1="35" x2="133" y2="144" gradientUnits="userSpaceOnUse">
+      <stop stop-color="white"/>
+      <stop offset="1" stop-color="#C5CBFF"/>
+    </linearGradient>
+    <filter id="shadow" x="34" y="28" width="145" height="154" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="6" dy="10" stdDeviation="5" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+  <path d="M20 119.5L99.4 67.2C99.8 66.9 100.2 66.9 100.6 67.2L180 119.5L100.6 171.8C100.2 172.1 99.8 172.1 99.4 171.8L20 119.5Z" style="fill: currentColor" opacity="0.95"/>
+  <g filter="url(#shadow)">
+    <path d="M77 31H123V43H117V75L151 132C158 144 149 159 135 159H65C51 159 42 144 49 132L83 75V43H77V31Z" fill="url(#glass)"/>
+    <path d="M68 121L88 87V43H112V87L132 121H68Z" fill="white" fill-opacity="0.55"/>
+    <path d="M58 133L68 116C88 124 112 105 142 133L148 143C151 149 146 155 139 155H61C54 155 49 149 52 143L58 133Z" fill="url(#liquid)"/>
+    <circle cx="91" cy="128" r="6" fill="white" fill-opacity="0.8"/>
+    <circle cx="116" cy="137" r="4" fill="white" fill-opacity="0.65"/>
+    <circle cx="104" cy="116" r="3" fill="white" fill-opacity="0.75"/>
+    <path d="M77 31H123V43H77V31Z" fill="#F4F5FF"/>
+  </g>
+</svg>

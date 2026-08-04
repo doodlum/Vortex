@@ -12,6 +12,7 @@ import type { IGame } from "../../../types/IGame";
 import { GameEntryNotFound } from "../../../types/IGameStore";
 import type { IGameStoreEntry } from "../../../types/IGameStoreEntry";
 import type { ITool } from "../../../types/ITool";
+import { resolveCasePath } from "../../../util/casePath";
 import { ProcessCanceled, SetupError } from "../../../util/CustomErrors";
 import extractExeIcon from "../../../util/exeIcon";
 import * as fs from "../../../util/fs";
@@ -26,6 +27,7 @@ import { truthy } from "../../../util/util";
 import { modPathsForGame } from "../../mod_management/selectors";
 import type { IDiscoveryResult } from "../types/IDiscoveryResult";
 import type { IToolStored } from "../types/IToolStored";
+import { isExpectedDiscoveryMiss } from "./discoveryErrors";
 import Progress from "./Progress";
 
 export type DiscoveredCB = (gameId: string, result: IDiscoveryResult) => void;
@@ -58,7 +60,7 @@ export function quickDiscoveryTools(
           return autoGenIcon(tool, toolPath, gameId).then(() => {
             onDiscoveredTool(gameId, {
               ...tool,
-              path: path.join(toolPath, tool.executable(toolPath)),
+              path: resolveCasePath(toolPath, tool.executable(toolPath)),
               hidden: false,
               parameters: tool.parameters || [],
               custom: false,
@@ -79,7 +81,7 @@ export function quickDiscoveryTools(
               return autoGenIcon(tool, resolvedPath, gameId).then(() => {
                 onDiscoveredTool(gameId, {
                   ...tool,
-                  path: path.join(resolvedPath, tool.executable(resolvedPath)),
+                  path: resolveCasePath(resolvedPath, tool.executable(resolvedPath)),
                   hidden: false,
                   parameters: tool.parameters || [],
                   custom: false,
@@ -250,7 +252,7 @@ function handleDiscoveredGame(
     return undefined;
   }
   log("info", "found game", { name: game.name, location: resolvedPath, store });
-  const exe = game.executable(resolvedPath);
+  const exe = resolveCasePath(resolvedPath, game.executable(resolvedPath));
   const disco: IDiscoveryResult = {
     path: resolvedPath,
     executable: exe !== game.executable() ? exe : undefined,
@@ -340,12 +342,18 @@ export function quickDiscovery(
             !(err instanceof ProcessCanceled) &&
             // probably an extension using registry for discovery but I don't like
             // ignoring these
-            !(err.name === "WinApiException")
+            !(err.name === "WinApiException") &&
+            !isExpectedDiscoveryMiss(err)
           ) {
             log("error", "failed to use game support plugin", {
               id: game.id,
               err: err.message,
               stack: err.stack,
+            });
+          } else if (isExpectedDiscoveryMiss(err)) {
+            log("debug", "game not discoverable on this platform", {
+              id: game.id,
+              reason: err.message,
             });
           }
           // don't escalate exception because a single game shouldn't break everything
@@ -454,7 +462,7 @@ function verifyToolDir(tool: ITool, testPath: string): Bluebird<void> {
     // is not something we want at this point because we don't even know yet if the user
     // wants to manage the game at all.
     (fileName: string) =>
-      fsExtra.stat(path.join(testPath, fileName)).catch((err) => {
+      fsExtra.stat(resolveCasePath(testPath, fileName)).catch((err) => {
         return Bluebird.reject(err);
       }),
   ).then(() => undefined);
@@ -501,6 +509,11 @@ export function discoverRelativeTools(
 ): Bluebird<void> {
   log("info", "discovering relative tools", gamePath);
   const start = Date.now();
+  // Game and tool extensions describe Windows installations. On Linux the game files still come
+  // from those Windows packages, so a declaration such as `modmanager.exe` must find the deployed
+  // `Modmanager.exe` even though the host filesystem is case-sensitive.
+  const normalizeToolPath: Normalize =
+    process.platform === "win32" ? normalize : (input: string) => normalize(input).toLowerCase();
   const discoveredTools: { [id: string]: IToolStored } = getSafe(
     discoveredGames[game.id],
     ["tools"],
@@ -520,7 +533,7 @@ export function discoverRelativeTools(
   const files: IFileEntry[] = relativeTools.reduce((prev: IFileEntry[], tool: ITool) => {
     for (const required of tool.requiredFiles) {
       prev.push({
-        fileName: normalize(required),
+        fileName: normalizeToolPath(required),
         gameId: game.id,
         application: tool,
       });
@@ -531,8 +544,8 @@ export function discoverRelativeTools(
   const matchList: Set<string> = new Set(files.map((entry) => path.basename(entry.fileName)));
 
   const onFileCB = (filePath) =>
-    onFile(filePath, files, normalize, discoveredGames, nop, onDiscoveredTool);
-  return walk(gamePath, matchList, onFileCB, undefined, normalize).then(() => {
+    onFile(filePath, files, normalizeToolPath, discoveredGames, nop, onDiscoveredTool);
+  return walk(gamePath, matchList, onFileCB, undefined, normalizeToolPath).then(() => {
     log("debug", "done discovering relative tools", {
       elapsed: Date.now() - start,
     });
@@ -563,7 +576,7 @@ function testApplicationDirValid(
     .then(() => {
       const game = application as IGame;
       if (game.queryModPath !== undefined) {
-        const exe = game.executable(testPath);
+        const exe = resolveCasePath(testPath, game.executable(testPath));
         const disco: IDiscoveryResult = {
           path: testPath,
           executable: exe !== game.executable() ? exe : undefined,
@@ -572,7 +585,7 @@ function testApplicationDirValid(
 
         return discoverRelativeTools(game, testPath, discoveredGames, onDiscoveredTool, normalize);
       } else {
-        const exePath = path.join(testPath, application.executable(testPath));
+        const exePath = resolveCasePath(testPath, application.executable(testPath));
         return autoGenIcon(application, exePath, gameId).then(() => {
           onDiscoveredTool(gameId, {
             ...application,

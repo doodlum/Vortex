@@ -6,7 +6,9 @@ import memoizeOne from "memoize-one";
 
 /* eslint-disable */
 import { PluginFormat } from "../util/PluginPersistor";
+import { FALLOUT_NV_NATIVE_PLUGINS } from "./falloutNVNativePlugins";
 import { patternMatchNativePlugins } from "./patternMatchNativePlugins";
+import { resolveCaseInsensitiveChild } from "./resolveCaseInsensitiveChild";
 
 type PluginTXTFormat = "original" | "fallout4";
 
@@ -147,7 +149,11 @@ const gameSupport = util.makeOverlayableDictionary<string, IGameSupport>(
     falloutnv: {
       appDataPath: "falloutnv",
       pluginTXTFormat: "original",
-      nativePlugins: ["falloutnv.esm"],
+      // The New Vegas launcher treats the installed official DLC as native
+      // masters. They are present in loadorder.txt but do not need to be
+      // written to plugins.txt, so omitting them here makes the missing-master
+      // check falsely report every mod that depends on the DLC.
+      nativePlugins: FALLOUT_NV_NATIVE_PLUGINS,
     },
     starfield: {
       appDataPath: "Starfield",
@@ -362,10 +368,15 @@ export function initGameSupport(api: types.IExtensionApi): Promise<void> {
 
 export function appDataPath(gameMode: string): string {
   const dataPath = gameSupport.get(gameMode, "appDataPath");
-
-  return process.env.LOCALAPPDATA !== undefined
-    ? path.join(process.env.LOCALAPPDATA, dataPath)
-    : path.resolve(util.getVortexPath("appData"), "..", "Local", dataPath);
+  const root =
+    process.env.LOCALAPPDATA !== undefined
+      ? process.env.LOCALAPPDATA
+      : path.resolve(util.getVortexPath("appData"), "..", "Local");
+  // Game extensions use Windows spellings while native Linux filesystems distinguish case.
+  // Select the one real directory instead of requiring a second lowercase symlink in the bridge.
+  // This keeps Vortex and Wine on the same plugins.txt/loadorder.txt directory for every Gamebryo
+  // game without creating aliases that can later diverge.
+  return resolveCaseInsensitiveChild(root, dataPath);
 }
 
 export function gameDataPath(gameMode: string): string {

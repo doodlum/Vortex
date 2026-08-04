@@ -71,6 +71,7 @@ import { setAutoDeployment } from "../settings_interface/actions/automation";
 import { setDeploymentNecessary } from "./actions/deployment";
 import { cacheModReference, removeMod, setModAttribute } from "./actions/mods";
 import { setDeploymentProblem } from "./actions/session";
+import { setInstallPath } from "./actions/settings";
 import { setTransferMods } from "./actions/transactions";
 import {
   onAddMod,
@@ -128,6 +129,7 @@ import { dealWithExternalChanges } from "./util/externalChanges";
 import { attributeExtractor, upgradeExtractor } from "./util/extractors";
 import { registerAttributeExtractor } from "./util/filterModInfo";
 import { findModByRef } from "./util/findModByRef";
+import firstLinkableStagingPath, { stagingPathWorks } from "./util/linkableStagingPath";
 import ModHistory from "./util/ModHistory";
 import renderModName from "./util/modName";
 import { getModSources, registerModSource } from "./util/modSource";
@@ -1897,6 +1899,54 @@ function checkDuplicateMods(api: IExtensionApi): Promise<ITestResult> {
   return Promise.resolve(result);
 }
 
+/**
+ * Point a game at a staging folder that hard links can work from, when the one in use cannot.
+ *
+ * The default -- `{USERDATA}/{GAME}/mods` -- is correct on Windows and on a plain Linux install, and
+ * silently useless in a Flatpak, where the app's data directory is a separate bind mount and the kernel
+ * refuses a link out of it. Nothing surfaces at that point: mods install, deployment reports success,
+ * and the game sees none of it.
+ *
+ * Correcting it automatically is only safe while the folder is still the untouched default *and* holds
+ * nothing. A folder with mods in it must not be swapped out from under the user -- that would orphan
+ * every staged mod -- so those cases get a warning with a one-click fix instead.
+ */
+function repairDefaultStagingFolder(api: IExtensionApi, gameMode: string, target: string): boolean {
+  const state = api.store.getState();
+  const configured = getSafe(state, ["settings", "mods", "installPath", gameMode], undefined);
+  if (configured !== undefined) {
+    return false; // the user chose this; never override it
+  }
+
+  const current = installPath(state);
+  let occupied: boolean;
+  try {
+    occupied = fs.readdirSync(current).length > 0;
+  } catch {
+    occupied = false;
+  }
+  if (occupied) {
+    return false;
+  }
+
+  const suggestDir = getSafe(
+    state,
+    ["settings", "mods", "suggestInstallPathDirectory"],
+    "Vortex Mods",
+  );
+  const candidate = firstLinkableStagingPath(gameMode, suggestDir, target);
+  if (candidate === undefined || candidate.resolved === current) {
+    return false;
+  }
+
+  log("info", "staging folder cannot hard link into the game; moving it to one that can", {
+    was: current,
+    now: candidate.resolved,
+  });
+  api.store.dispatch(setInstallPath(gameMode, candidate.pattern));
+  return true;
+}
+
 function checkStagingFolder(api: IExtensionApi): Promise<ITestResult> {
   let result: ITestResult;
   const state = api.store.getState();
@@ -1916,6 +1966,44 @@ function checkStagingFolder(api: IExtensionApi): Promise<ITestResult> {
     vortexPath: basePath,
     gamePath: discovery?.path,
   });
+  // The check that matters most on Linux, and the one with no visible symptom: can we hard link out of
+  // the staging folder into the game at all? Repair it silently when it is still an untouched, empty
+  // default; otherwise say so, because the alternative is a deployment that claims success and does
+  // nothing.
+  const game = getGame(gameMode);
+  const modPaths =
+    game !== undefined && discovery?.path !== undefined ? game.getModPaths(discovery.path) : {};
+  const deployTarget = modPaths[""];
+  if (deployTarget !== undefined && !stagingPathWorks(instPath, deployTarget)) {
+    if (repairDefaultStagingFolder(api, gameMode, deployTarget)) {
+      return Promise.resolve(result); // fixed; nothing to report
+    }
+    result = {
+      severity: "warning",
+      description: {
+        short: "Staging folder cannot deploy",
+        long:
+          "Mods cannot be hard-linked from your staging folder into the game folder, so deploying " +
+          "would copy every file instead of linking it -- or fail outright.<br/>" +
+          "This is usually because the staging folder is on a different drive than the game, or on a " +
+          "filesystem without hard links such as exFAT.<br/>" +
+          "Use Suggest in Settings &gt; Mods to move it somewhere that works.",
+      },
+      automaticFix: () =>
+        new Promise<void>((fixResolve) => {
+          api.events.emit("show-main-page", "application_settings");
+          api.store.dispatch(setSettingsPage("Mods"));
+          api.highlightControl("#install-path-form", 5000);
+          api.events.on("hide-modal", (modal) => {
+            if (modal === "settings") {
+              fixResolve();
+            }
+          });
+        }),
+    };
+    return Promise.resolve(result);
+  }
+
   if (isChildPath(instPath, basePath)) {
     result = {
       severity: "warning",

@@ -128,10 +128,22 @@ class StarterInfo implements IStarterInfo {
 
   public static run(info: IStarterInfo, api: IExtensionApi, onShowError: OnShowErrorFunc) {
     const game: IGame = getGame(info.gameId);
+    const state = api.getState();
+    const activeProfileId = state.settings.profiles.activeProfileId;
+    const profileProton = getSafe(
+      state,
+      ["persistent", "profiles", activeProfileId, "features", "proton-version"],
+      undefined,
+    );
+    const useProfileProton =
+      process.platform !== "win32" &&
+      isWindowsExecutable(info.exePath) &&
+      typeof profileProton === "string" &&
+      profileProton.length > 0;
     // Determine if game requires a specific launcher (Steam, Epic, etc.)
     // On Linux, Steam games run through Proton directly rather than via steam -applaunch
     const launcherPromise: PromiseBB<{ launcher: string; addInfo?: any }> =
-      game.requiresLauncher !== undefined && info.isGame
+      game.requiresLauncher !== undefined && info.isGame && !useProfileProton
         ? PromiseBB.resolve(game.requiresLauncher(path.dirname(info.exePath), info.store)).catch(
             (err) => {
               if (err instanceof UserCanceled) {

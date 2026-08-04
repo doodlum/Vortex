@@ -7,29 +7,31 @@
 
 import { readVersionInfo } from "./peVersion";
 
+// No platform guard: readVersionInfo parses the PE structures itself, so it works wherever
+// Node runs. The guards that used to sit at the top of every function here ("if
+// (process.platform !== \"win32\") return \"\"") were left over from the native Windows addon
+// this replaced, and they made every game's version undetectable on Linux -- Vortex could
+// discover Skyrim but never tell which build it was.
+
 export function getFileVersion(exeFile: string): string {
-  if (process.platform !== "win32") return "";
   const info = readVersionInfo(exeFile);
   if (info === undefined) return "";
   return info.fileVersion.join(".");
 }
 
 export function getProductVersion(exeFile: string): string {
-  if (process.platform !== "win32") return "";
   const info = readVersionInfo(exeFile);
   if (info === undefined) return "";
   return info.productVersion.join(".");
 }
 
 export function getFileVersionLocalized(exeFile: string): string {
-  if (process.platform !== "win32") return getFileVersion(exeFile);
   const info = readVersionInfo(exeFile);
   if (info === undefined) return "";
   return info.fileVersionString;
 }
 
 export function getProductVersionLocalized(exeFile: string): string {
-  if (process.platform !== "win32") return getProductVersion(exeFile);
   const info = readVersionInfo(exeFile);
   if (info === undefined) return "";
   return info.productVersionString;

@@ -1,6 +1,10 @@
 import {} from "module";
 // tslint:disable-next-line:no-var-requires
 const Module = require("module");
+import * as childProcess from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+
 import * as reduxAct from "redux-act";
 
 import * as api from "../api";
@@ -94,6 +98,31 @@ class ExtProxyHandlerReduxAct implements ProxyHandler<typeof reduxAct> {
 
 const handlerMapAPI: { [extId: string]: typeof api } = {};
 const handlerMapReactAct: { [extId: string]: typeof reduxAct } = {};
+let childProcessProxy: typeof childProcess | undefined;
+
+function extensionChildProcess(): typeof childProcess {
+  if (process.platform !== "linux") return childProcess;
+  if (childProcessProxy === undefined) {
+    childProcessProxy = new Proxy(childProcess, {
+      get(target, property, receiver) {
+        if (property !== "spawn") return Reflect.get(target, property, receiver);
+        return (command: string, args?: readonly string[], options?: childProcess.SpawnOptions) => {
+          if (typeof command === "string" && command.toLowerCase().endsWith(".exe")) {
+            const runner = process.env.VORTEX_WINDOWS_RUNNER ?? "/app/bin/vortex-windows-run";
+            return childProcess.spawn(runner, [command, ...(args ?? [])], options);
+          }
+          return childProcess.spawn(command, args, options);
+        };
+      },
+    }) as typeof childProcess;
+  }
+  return childProcessProxy;
+}
+
+function requireFromApplication(id: string): unknown {
+  const appModule = path.join(process.resourcesPath, "app.asar", "node_modules", id);
+  return webpackRequireHack(appModule);
+}
 
 /**
  * require wrapper to allow extensions to load modules from
@@ -102,7 +131,13 @@ const handlerMapReactAct: { [extId: string]: typeof reduxAct } = {};
  * @returns
  */
 function extensionRequire(orig, getExtensions: () => IRegisteredExtension[]) {
-  const extensionPaths = ExtensionManager.getExtensionPaths();
+  const extensionPaths = ExtensionManager.getExtensionPaths().map((entry) => {
+    try {
+      return { ...entry, path: fs.realpathSync(entry.path) };
+    } catch (err) {
+      return entry;
+    }
+  });
   return function (id) {
     if (id === "vortex-api" || id === "@nexusmods/vortex-api") {
       const ext = getExtensions().find((iter) => this.filename.startsWith(iter.path));
@@ -126,13 +161,29 @@ function extensionRequire(orig, getExtensions: () => IRegisteredExtension[]) {
         }
         return handlerMapReactAct[ext.name];
       }
+    } else if (id === "child_process" || id === "node:child_process") {
+      const ext = getExtensions().find((iter) => this.filename.startsWith(iter.path));
+      if (ext !== undefined) return extensionChildProcess();
     }
-    if (extensionPaths.find((iter) => this.filename.startsWith(iter.path)) !== undefined) {
+    let moduleFilename = this.filename;
+    try {
+      moduleFilename = fs.realpathSync(moduleFilename);
+    } catch (err) {
+      // Use the original filename if it disappeared while being loaded.
+    }
+    if (extensionPaths.find((iter) => moduleFilename.startsWith(iter.path)) !== undefined) {
       let res;
       try {
         res = webpackRequireHack(id);
       } catch (err) {
-        // nop, leave res undefined so orig gets tried
+        // External extensions live outside app.asar, so Node will not normally
+        // search Vortex's bundled dependencies. Resolve from the application
+        // package explicitly before falling back to the extension itself.
+        try {
+          res = requireFromApplication(id);
+        } catch (appErr) {
+          // Leave undefined so the extension's own dependencies are tried.
+        }
       }
       if (res === undefined) {
         res = orig.apply(this, arguments);

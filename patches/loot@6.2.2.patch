@@ -1,0 +1,154 @@
+diff --git a/async.js b/async.js
+index 975fd21f3591aaac1a54b53cd991535d342540e0..28faab84c3f5cfd4c8677b2795c520f6f825f16d 100644
+--- a/async.js
++++ b/async.js
+@@ -1,4 +1,13 @@
+ const net = require('net');
++const os = require('os');
++const path = require('path');
++
++// Must match index.js: a named pipe on Windows, an absolute socket path elsewhere.
++function ipcPath(id) {
++  return process.platform === 'win32'
++    ? `\\\\?\\pipe\\loot-ipc-${id}`
++    : path.join(os.tmpdir(), `loot-ipc-${id}`);
++}
+ 
+ const { Loot, SetErrorLanguageEN, SetLogLevel } = require('./build/Release/node-loot');
+ 
+@@ -11,7 +20,7 @@ const CHUNK_SIZE = 32 * 1024;
+ 
+ let currentLogLevel = 2; // default: info (matches previous hardcoded filter)
+ 
+-const client = net.connect(`\\\\?\\pipe\\loot-ipc-${process.argv[2]}`, (arg) => {
++const client = net.connect(ipcPath(process.argv[2]), (arg) => {
+   let instance;
+   let dataBuffer = '';
+ 
+diff --git a/binding.gyp b/binding.gyp
+index f73f16dd7cad7db09d9b02d11d0a7124a37f4fa5..bf3b5dace8c9f4f5f26fd6afe9fc765923b35ecb 100644
+--- a/binding.gyp
++++ b/binding.gyp
+@@ -40,6 +40,23 @@
+                 }
+             },
+             "conditions": [
++              ["OS!='win'", {
++                # `-l../loot_api/libloot` is not something ld understands: it looks for
++                # `lib../loot_api/libloot.so` and fails, so the addon never links. Point it at the
++                # real library, and put $ORIGIN first in the rpath so a packaged app finds the
++                # libloot copied next to the addon instead of depending on this directory surviving.
++                # $$ becomes $ in the generated Makefile; the quotes stop the shell expanding it.
++                "libraries!": [
++                  "-l../loot_api/libloot"
++                ],
++                "libraries": [
++                  "-L<(module_root_dir)/loot_api",
++                  "-lloot",
++                  "-Wl,-rpath,'$$ORIGIN'",
++                  "-Wl,-rpath,<(module_root_dir)/loot_api"
++                ],
++                "cflags_cc": [ "-std=c++20" ]
++              }],
+               ["OS=='win'", {
+                 "defines!": [
+                   "_HAS_EXCEPTIONS=0"
+diff --git a/index.js b/index.js
+index 7c80af054c63104682671ea0f9c44a1398aec23c..6f2c97975e175a9753cfb4653558c428f9a7ed39 100644
+--- a/index.js
++++ b/index.js
+@@ -1,9 +1,23 @@
+ net = require('net');
+ const path = require('path');
++const os = require('os');
+ 
+ const { Loot, IsCompatible, SetLogLevel } = require('./build/Release/node-loot');
+ 
+ const CHUNK_SIZE = 32 * 1024;
++// The IPC endpoint. On Windows this is a named pipe. The `\\?\pipe\` prefix means nothing on other
++// platforms, where net.Server.listen() reads it as a *relative* file name and creates a Unix socket
++// by that literal name in the working directory: a stray socket wherever Vortex was launched from,
++// and an outright failure when that directory is read-only -- inside a Flatpak the renderer starts
++// with cwd `/`, so listen() returns EROFS and LOOT never comes up. An absolute path in the temp
++// directory works everywhere, and both ends agree on it because the worker is forked with the same
++// environment.
++function ipcPath(id) {
++  return process.platform === 'win32'
++    ? `\\\\?\\pipe\\loot-ipc-${id}`
++    : path.join(os.tmpdir(), `loot-ipc-${id}`);
++}
++
+ 
+ const LogLevel = {
+   trace: 0,
+@@ -118,7 +132,7 @@ class LootAsync {
+     try {
+       // this seems to fail for some users with EINVAL. why?
+       // May be a wine-only problem but that's not confirmed
+-      this.ipc.listen(`\\\\?\\pipe\\loot-ipc-${this.id}`, () => {
++      this.ipc.listen(ipcPath(this.id), () => {
+         this.ipc.on('connection', socket => {
+           this.socket = socket;
+           socket
+diff --git a/src/lootwrapper.cpp b/src/lootwrapper.cpp
+index 89786a9c4f13599cf2a33a4cdcae3c1c0a070872..9b75fc7b1d1f64c598e3660d21932bb7aa659d60 100644
+--- a/src/lootwrapper.cpp
++++ b/src/lootwrapper.cpp
+@@ -16,6 +16,15 @@
+ #include "util.h"
+ #include "napi_helpers.h"
+ 
++// node-loot was written for Windows, where paths coming over NAPI are wide strings. libloot's
++// API takes std::filesystem::path, which constructs from either, so on other platforms use the
++// narrow string that convertArg actually provides -- fromNAPI<std::wstring> is Windows-only.
++#ifdef _WIN32
++using napi_path_string = std::wstring;
++#else
++using napi_path_string = std::string;
++#endif
++
+ template<>
+ Napi::Value toNAPI<loot::Tag>(const Napi::Env &env, const loot::Tag &input) {
+   Napi::Object res = Napi::Object::New(env);
+@@ -136,7 +145,7 @@ Loot::Loot(const Napi::CallbackInfo &info)
+   , m_LogCallback(Napi::ThreadSafeFunction::New(info.Env(), info[4].As<Napi::Function>(), "logcb", 0, 1))
+ {
+   std::string game, language;
+-  std::wstring gamePath, gameLocalPath;
++  napi_path_string gamePath, gameLocalPath;
+   unpackArgs(info, game, gamePath, gameLocalPath, language);
+ 
+   m_Language = language;
+@@ -177,7 +186,7 @@ Napi::Value Loot::loadLists(const Napi::CallbackInfo &info) {
+    * loadMasterlist, loadMasterlistWithPrelude and loadUserlist.
+    * We're going to consolidate both calls in this function for now.
+   */
+-  std::wstring masterlistPath, userlistPath, preludePath;
++  napi_path_string masterlistPath, userlistPath, preludePath;
+   unpackArgs(info, masterlistPath, userlistPath, preludePath);
+ 
+   try {
+diff --git a/src/napi_helpers.h b/src/napi_helpers.h
+index a1d168d00f3001b06b55c01b6fde8bffb032869c..e5bb8c5bb4c3a48f73749171c973eb9dba3e97cc 100644
+--- a/src/napi_helpers.h
++++ b/src/napi_helpers.h
+@@ -91,6 +91,11 @@ void convertArg<std::string>(Tag<std::string>, std::string &out, const Napi::Cal
+   out = fromNAPI<std::string>(info[idx]);
+ }
+ 
++// Guarded to match fromNAPI<std::wstring> above, which is Windows-only. Without this the
++// non-Windows build compiles a call to a specialisation that is never defined, and the addon
++// loads but dies on first use with:
++//   undefined symbol: _Z8fromNAPIINSt7__cxx1112basic_stringIwSt11char_traitsIwESaIwEEEET_RKN4Napi5ValueE
++#ifdef _WIN32
+ template<>
+ void convertArg<std::wstring>(Tag<std::wstring>, std::wstring &out, const Napi::CallbackInfo &info, int idx) {
+   if (!info[idx].IsString()) {
+@@ -98,6 +103,7 @@ void convertArg<std::wstring>(Tag<std::wstring>, std::wstring &out, const Napi::
+   }
+   out = fromNAPI<std::wstring>(info[idx]);
+ }
++#endif
+ 
+ template<>
+ void convertArg<bool>(Tag<bool>, bool &out, const Napi::CallbackInfo &info, int idx) {

@@ -18,6 +18,7 @@ import { gameDataPath, gameSupported, nativePlugins, pluginPath } from "./util/g
 import { missingGroupFixes } from "./util/groups";
 import { invalidPluginsFromError } from "./util/invalidPlugins";
 import { downloadMasterlist, downloadPrelude } from "./util/masterlist";
+import { toLootName } from "./util/toLootName";
 import toPluginId from "./util/toPluginId";
 
 const MAX_RESTARTS = 3;
@@ -138,9 +139,9 @@ class LootInterface {
         "Failed to update masterlist",
         {
           message: t(
-            "This might be a temporary network error. " +
-              'If it persists, please delete "{{masterlistPath}}" to force Vortex to ' +
-              "download a new copy.",
+            "Vortex could not reach the LOOT list service after three attempts. " +
+              "Your existing masterlist is preserved and will remain available for sorting. " +
+              "Vortex will try the update again later.",
             { replace: { masterlistPath: masterlistRepoPath } },
           ),
           error: err,
@@ -304,7 +305,9 @@ class LootInterface {
       const timeBefore = Date.now();
       store.dispatch(actions.startActivity("plugins", "sorting"));
       this.mSortPromise = this.readLists(gameMode, loot)
-        .then(() => loot.sortPluginsAsync(pluginNames))
+        // Real on-disk names: libloot matches these against the plugins it loaded, which were
+        // loaded under the same names.
+        .then(() => loot.sortPluginsAsync(pluginNames.map((id) => toLootName(id, pluginList))))
         .catch((err) =>
           err.message.toLowerCase() === "already closed"
             ? Promise.resolve([])
@@ -578,7 +581,7 @@ class LootInterface {
     }
     try {
       await loot.loadPluginsAsync(
-        deployed.filter((id) => !invalid.has(id)).map((name) => toPluginId(name)),
+        deployed.filter((id) => !invalid.has(id)).map((id) => toLootName(id, pluginList)),
         false,
       );
       pluginsLoaded = true;
@@ -620,12 +623,15 @@ class LootInterface {
           return;
         }
         try {
-          const meta: PluginMetadata = await loot.getPluginMetadataAsync(pluginName);
+          // The same name the load used, so libloot finds the plugin it loaded regardless of
+          // whether it compares plugin names case-sensitively.
+          const lootName = toLootName(pluginName, pluginList);
+          const meta: PluginMetadata = await loot.getPluginMetadataAsync(lootName);
           let info;
           try {
             const id = toPluginId(pluginName);
             if (pluginList[id] !== undefined && pluginList[id].deployed) {
-              info = await loot.getPluginAsync(pluginName);
+              info = await loot.getPluginAsync(lootName);
             }
           } catch (err) {
             const gameMode = selectors.activeGameId(this.mExtensionApi.store.getState());

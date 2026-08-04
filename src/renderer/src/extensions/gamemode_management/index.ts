@@ -26,6 +26,7 @@ import type { IGameStore } from "../../types/IGameStore";
 import type { NotificationDismiss } from "../../types/INotification";
 import type { IProfile, IRunningTool, IState } from "../../types/IState";
 import type { IEditChoice, ITableAttribute } from "../../types/ITableAttribute";
+import { resolveCasePath } from "../../util/casePath";
 import { DataInvalid, ProcessCanceled, SetupError, UserCanceled } from "../../util/CustomErrors";
 import * as fs from "../../util/fs";
 import GameStoreHelper from "../../util/GameStoreHelper";
@@ -183,7 +184,7 @@ function refreshGameInfo(store: Redux.Store<IState>, gameId: string): PromiseBB<
 
 function verifyGamePath(game: IGame, gamePath: string): PromiseBB<void> {
   return PromiseBB.map(game.requiredFiles || [], (file) =>
-    PromiseBB.resolve(fsExtra.stat(path.join(gamePath, file))),
+    PromiseBB.resolve(fsExtra.stat(resolveCasePath(gamePath, file))),
   )
     .then(() => undefined)
     .catch((err) => {
@@ -491,7 +492,7 @@ function removeDisappearedGames(
       return PromiseBB.resolve();
     }
     return PromiseBB.map(requiredFiles, (file) =>
-      fsExtra.stat(path.join(discovered[gameId].path, file)),
+      fsExtra.stat(resolveCasePath(discovered[gameId].path, file)),
     )
       .then(() => undefined)
       .catch((err) => {
@@ -1194,11 +1195,31 @@ function init(context: IExtensionContext): boolean {
     interface IRunningMap {
       [exePath: string]: IRunningTool;
     }
+
+    /**
+     * The monitor runs while a game is managed, not only while Vortex has something recorded as
+     * running.
+     *
+     * It used to start only once `toolsRunning` was non-empty, which made it purely a confirmation
+     * mechanism: something had to launch a process through Vortex first. Its game matching is
+     * deliberately written to accept a process that is *not* one of Vortex's children -- that is what
+     * `considerDetached` is for, so that a game still running when Vortex is reopened is recognised --
+     * but that code could never run, because nothing had seeded the state.
+     *
+     * On Linux that is the normal case rather than an edge case: a game is handed to Steam, which
+     * launches it (and, for Skyrim, the script extender) outside Vortex's process tree entirely. The
+     * launch therefore left no trace, the Play button never showed a running game, and nothing that
+     * waits for the game to exit ever fired.
+     *
+     * Cost of polling while idle is one process list every 2s focused, 5s unfocused, which is the
+     * cadence already accepted while a tool runs.
+     */
+    const gameIsManaged = () => activeGameId(context.api.store.getState()) !== undefined;
+
     context.api.onStateChange(
       ["session", "base", "toolsRunning"],
       (prev: IRunningMap, current: IRunningMap) => {
-        const exePaths = Object.keys(current);
-        if (exePaths.length > 0) {
+        if (Object.keys(current).length > 0 || gameIsManaged()) {
           // no effect if it's already running
           processMonitor.start();
         } else {
@@ -1206,6 +1227,16 @@ function init(context: IExtensionContext): boolean {
         }
       },
     );
+
+    context.api.events.on("gamemode-activated", () => {
+      processMonitor.start();
+    });
+
+    context.api.onStateChange(["settings", "gameMode", "next"], () => {
+      if (!gameIsManaged()) {
+        processMonitor.end();
+      }
+    });
 
     {
       const profile: IProfile = activeProfile(store.getState());

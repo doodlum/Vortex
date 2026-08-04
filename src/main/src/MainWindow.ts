@@ -400,7 +400,10 @@ class MainWindow {
       minHeight: MIN_HEIGHT,
       x: windowMetrics?.position?.x ?? undefined,
       y: windowMetrics?.position?.y ?? undefined,
-      backgroundColor: "#fff",
+      // Chromium paints this on every full repaint before content lands -- most visibly
+      // when restoring from minimised. White flashes hard against Vortex's dark theme;
+      // under Wine the repaint is slow enough to read as a white border.
+      backgroundColor: "#111",
       autoHideMenuBar: windowMetrics?.customTitlebar ?? true,
       frame: !(windowMetrics?.customTitlebar ?? true),
       show: false,

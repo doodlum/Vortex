@@ -12,6 +12,7 @@ import type { IExtensionApi } from "../../types/IExtensionContext";
 import type { DirectoryCleaningMode, IGame } from "../../types/IGame";
 import type { IState } from "../../types/IState";
 import { getGame, UserCanceled } from "../../util/api";
+import { CaseInsensitiveWritePath, nativeRelPath } from "../../util/casePath";
 import * as fs from "../../util/fs";
 import type { Normalize } from "../../util/getNormalizeFunc";
 import { activeGameId } from "../../util/selectors";
@@ -83,6 +84,8 @@ abstract class LinkingActivator implements IDeploymentMethod {
   private mQueue: Promise<void> = Promise.resolve();
   private mContext: IDeploymentContext;
   private mDirCache: Set<string>;
+  private mDirQueue: Promise<void> = Promise.resolve();
+  private mWritePath: CaseInsensitiveWritePath;
 
   constructor(
     id: string,
@@ -130,9 +133,12 @@ abstract class LinkingActivator implements IDeploymentMethod {
 
     const queue = this.mQueue;
     this.mQueue = this.mQueue.then(() => queueProm);
-    this.mNormalize = normalize;
 
     return queue.then(() => {
+      // One activator instance serves every mod type. These values belong to this queued deployment
+      // context and must not be overwritten by a later prepare() call while the current one runs.
+      this.mNormalize = normalize;
+      this.mWritePath = new CaseInsensitiveWritePath(dataPath);
       this.mContext = {
         newDeployment: {},
         previousDeployment: {},
@@ -171,8 +177,12 @@ abstract class LinkingActivator implements IDeploymentMethod {
     let contentChanged: string[];
 
     let errorCount: number = 0;
+    // Tracked separately: EXDEV means the staging folder and the deployment target are on
+    // different mounts, which no amount of retrying or closing other applications will fix.
+    let crossDeviceCount: number = 0;
 
     this.mDirCache = new Set<string>();
+    this.mDirQueue = Promise.resolve();
 
     // unlink all files that were removed or changed
     ({ added, removed, sourceChanged, contentChanged } = this.diffActivation(
@@ -198,7 +208,12 @@ abstract class LinkingActivator implements IDeploymentMethod {
     };
 
     const game: IGame = getGame(gameId);
-    const directoryCleaning = game.directoryCleaning || "tag";
+    // Dotfiles used as directory ownership markers leak Vortex internals into
+    // native Linux game trees.  On POSIX, remove empty directories directly;
+    // this is safe because postLinkPurge never removes a directory containing
+    // an unmanaged file.  Keep the legacy tag mode on Windows.
+    const directoryCleaning =
+      game.directoryCleaning || (process.platform === "win32" ? "tag" : "all");
     const dirTags = directoryCleaning === "tag";
 
     return (
@@ -260,6 +275,9 @@ abstract class LinkingActivator implements IDeploymentMethod {
                     source: context.newDeployment[key].source,
                     error: getErrorMessageOrDefault(err),
                   });
+                  if (getErrorCode(err) === "EXDEV") {
+                    crossDeviceCount += 1;
+                  }
                   if (getErrorCode(err) !== "ENOENT") {
                     // if the source file doesn't exist it must have been deleted
                     // in the mean time. That's not really our problem.
@@ -282,6 +300,9 @@ abstract class LinkingActivator implements IDeploymentMethod {
                     source: context.newDeployment[key].source,
                     error: getErrorMessageOrDefault(err),
                   });
+                  if (getErrorCode(err) === "EXDEV") {
+                    crossDeviceCount += 1;
+                  }
                   if (getErrorCode(err) !== "ENOENT") {
                     ++errorCount;
                   }
@@ -292,17 +313,43 @@ abstract class LinkingActivator implements IDeploymentMethod {
         )
         .then(() => {
           if (errorCount > 0) {
+            // "locked by another application" is the usual cause but is flatly wrong for EXDEV: there the
+            // staging folder is on a different mount from the game, and hard links cannot cross that
+            // boundary however many times the user retries.
+            const message =
+              crossDeviceCount > 0
+                ? this.mApi.translate(
+                    "{{count}} files were not deployed because the mod staging folder and the game " +
+                      "are on different drives or mount points, and this deployment method cannot link " +
+                      'across them ("cross-device link not permitted").\n' +
+                      "Move the staging folder onto the same drive as the game (Settings->Mods), or " +
+                      "choose a different deployment method.\n\nStaging folder: {{staging}}\nGame: {{game}}",
+                    {
+                      replace: {
+                        count: crossDeviceCount,
+                        staging: installationPath,
+                        game: dataPath,
+                      },
+                    },
+                  )
+                : this.mApi.translate(
+                    "{{count}} files were not correctly deployed (see log for details).\n" +
+                      "The most likely reason is that files were locked by external applications " +
+                      "so please ensure no other application has a mod file open, then repeat " +
+                      "deployment.",
+                    { replace: { count: errorCount } },
+                  );
+            log("error", "deployment failed", {
+              errorCount,
+              crossDeviceCount,
+              installationPath,
+              dataPath,
+            });
             this.mApi.store.dispatch(
               addNotification({
                 type: "error",
                 title: this.mApi.translate("Deployment failed"),
-                message: this.mApi.translate(
-                  "{{count}} files were not correctly deployed (see log for details).\n" +
-                    "The most likely reason is that files were locked by external applications " +
-                    "so please ensure no other application has a mod file open, then repeat " +
-                    "deployment.",
-                  { replace: { count: errorCount } },
-                ),
+                message,
               }),
             );
           }
@@ -311,22 +358,27 @@ abstract class LinkingActivator implements IDeploymentMethod {
           const { cleanupOnDeploy } = state.settings.mods;
           const gameRequiresCleanup =
             game.requiresCleanup === undefined ? game.mergeMods !== true : game.requiresCleanup;
-          if (removed.length > 0 && (gameRequiresCleanup || cleanupOnDeploy)) {
-            this.postLinkPurge(dataPath, false, false, directoryCleaning).catch((err) => {
-              if (err instanceof UserCanceled) {
-                return null;
-              }
-              this.mApi.showErrorNotification("Failed to clean up", err, {
-                message: dataPath,
-              });
-            });
-          }
+          const cleanup =
+            removed.length > 0 && (gameRequiresCleanup || cleanupOnDeploy)
+              ? this.postLinkPurge(dataPath, false, false, directoryCleaning).catch((err) => {
+                  if (!(err instanceof UserCanceled)) {
+                    this.mApi.showErrorNotification("Failed to clean up", err, {
+                      message: dataPath,
+                    });
+                  }
+                })
+              : Promise.resolve();
 
-          this.mContext = undefined;
-          context.onComplete();
-          return Object.keys(context.previousDeployment).map(
-            (key) => context.previousDeployment[key],
-          );
+          // Cleanup can remove empty directories. Keep it inside this deployment's queue so the
+          // next mod target cannot create files in a directory that an older cleanup is about to
+          // remove.
+          return cleanup.then(() => {
+            this.mContext = undefined;
+            context.onComplete();
+            return Object.keys(context.previousDeployment).map(
+              (key) => context.previousDeployment[key],
+            );
+          });
         })
         .catch((err) => {
           if (this.mContext !== undefined) {
@@ -376,14 +428,23 @@ abstract class LinkingActivator implements IDeploymentMethod {
                   const relPath: string = path.relative(sourcePath, entry.filePath);
                   const relPathWithSource = path.join(sourceName, relPath);
                   const relPathWithSourceNorm = this.mNormalize(relPathWithSource);
-                  const relPathNorm = this.mNormalize(path.join(deployPath, relPath));
+                  const requestedOutput = path.join(deployPath, relPath);
+                  const resolvedOutput = this.mWritePath.resolve(requestedOutput);
+                  const deployPartCount = nativeRelPath(deployPath)
+                    .split(path.sep)
+                    .filter(Boolean).length;
+                  const resolvedParts = resolvedOutput.split(path.sep);
+                  const resolvedTarget = resolvedParts.slice(0, deployPartCount).join(path.sep);
+                  const resolvedRelPath = resolvedParts.slice(deployPartCount).join(path.sep);
+                  const relPathNorm = this.mNormalize(resolvedOutput);
                   if (!blackList.has(relPathWithSourceNorm)) {
                     // mods are activated in order of ascending priority so
                     // overwriting is fine here
                     this.mContext.newDeployment[relPathNorm] = {
-                      relPath,
+                      relPath: resolvedRelPath,
+                      sourceRelPath: relPath,
                       source: sourceName,
-                      target: deployPath,
+                      target: resolvedTarget,
                       time: entry.mtime * 1000,
                     };
                   }
@@ -446,7 +507,8 @@ abstract class LinkingActivator implements IDeploymentMethod {
       gameId = activeGameId(this.mApi.store.getState());
     }
     const game = getGame(gameId);
-    const directoryCleaning = game.directoryCleaning || "tag";
+    const directoryCleaning =
+      game.directoryCleaning || (process.platform === "win32" ? "tag" : "all");
 
     // stat to ensure the target directory exists
     return Promise.resolve(
@@ -499,7 +561,11 @@ abstract class LinkingActivator implements IDeploymentMethod {
             ? [dataPath, fileEntry.target, fileEntry.relPath]
             : [dataPath, fileEntry.relPath]
         ).join(path.sep);
-        const fileModPath = [installPath, fileEntry.source, fileEntry.relPath].join(path.sep);
+        const fileModPath = [
+          installPath,
+          fileEntry.source,
+          fileEntry.sourceRelPath ?? fileEntry.relPath,
+        ].join(path.sep);
         let sourceDeleted: boolean = false;
         let destDeleted: boolean = false;
         let sourceTime: Date;
@@ -651,30 +717,30 @@ abstract class LinkingActivator implements IDeploymentMethod {
 
   protected ensureDir(dirPath: string, dirTags?: boolean): Promise<boolean> {
     let didCreate = false;
-    const onDirCreated = (createdPath: string) => {
-      didCreate = true;
-      if (dirTags !== false) {
+    const task = this.mDirQueue.then(() => {
+      const onDirCreated = (createdPath: string) => {
+        didCreate = true;
+        if (dirTags === false) {
+          return Promise.resolve();
+        }
         log("debug", "created directory", createdPath);
         return fs.writeFileAsync(
           path.join(createdPath, LinkingActivator.NEW_TAG_NAME),
           "This directory was created by Vortex deployment and will be removed " +
             "during purging if it's empty",
         );
-      } else {
-        return Promise.resolve();
-      }
-    };
-
-    return Promise.resolve(
-      this.mDirCache === undefined || !this.mDirCache.has(dirPath)
-        ? fs.ensureDirAsync(dirPath, onDirCreated).then(() => {
-            if (this.mDirCache === undefined) {
-              this.mDirCache = new Set<string>();
-            }
-            this.mDirCache.add(dirPath);
-          })
-        : Promise.resolve(),
-    ).then(() => didCreate);
+      };
+      return fs.ensureDirAsync(dirPath, onDirCreated).then(() => {
+        if (this.mDirCache === undefined) {
+          this.mDirCache = new Set<string>();
+        }
+        this.mDirCache.add(dirPath);
+      });
+    });
+    // Directory creation is serialized because concurrent recursive mkdir operations for differently
+    // cased sibling paths can observe a half-created parent on case-sensitive filesystems.
+    this.mDirQueue = task.catch(() => undefined);
+    return task.then(() => didCreate);
   }
 
   private deduplicate(input: IFileChange[]): IFileChange[] {
@@ -719,7 +785,8 @@ abstract class LinkingActivator implements IDeploymentMethod {
     const sourcePath = path.join(
       installationPath,
       this.mContext.previousDeployment[key].source,
-      this.mContext.previousDeployment[key].relPath,
+      this.mContext.previousDeployment[key].sourceRelPath ??
+        this.mContext.previousDeployment[key].relPath,
     );
     return Promise.resolve(this.unlinkFile(outputPath, sourcePath))
       .catch((err: unknown) =>
@@ -764,15 +831,17 @@ abstract class LinkingActivator implements IDeploymentMethod {
     const fullPath = [
       installPathStr,
       this.mContext.newDeployment[key].source,
-      this.mContext.newDeployment[key].relPath,
+      this.mContext.newDeployment[key].sourceRelPath ?? this.mContext.newDeployment[key].relPath,
     ].join(path.sep);
+    // Destination casing was resolved while building activation and is stored in the manifest;
+    // sourceRelPath independently preserves the spelling used inside staging.
     const fullOutputPath = [
       dataPath,
-      this.mContext.newDeployment[key].target || null,
-      this.mContext.newDeployment[key].relPath,
-    ]
-      .filter((i) => i !== null)
-      .join(path.sep);
+      ...[
+        this.mContext.newDeployment[key].target || null,
+        this.mContext.newDeployment[key].relPath,
+      ].filter((i) => i !== null),
+    ].join(path.sep);
 
     const backupProm: Promise<void> = replace
       ? Promise.resolve()
@@ -791,8 +860,37 @@ abstract class LinkingActivator implements IDeploymentMethod {
               : Promise.reject(err),
           );
 
+    const link = () => Promise.resolve(this.linkFile(fullOutputPath, fullPath, dirTags));
     return backupProm
-      .then(() => this.linkFile(fullOutputPath, fullPath, dirTags))
+      .then(link)
+      .catch((err: unknown) => {
+        if (getErrorCode(err) !== "ENOENT") {
+          return Promise.reject(err);
+        }
+
+        const outputDir = path.dirname(fullOutputPath);
+        let created = false;
+        return fs
+          .statAsync(outputDir)
+          .then(() => undefined)
+          .catch((statErr: unknown) => {
+            if (getErrorCode(statErr) !== "ENOENT") {
+              return Promise.reject(statErr);
+            }
+            created = true;
+            return fs.ensureDirAsync(outputDir);
+          })
+          .then(() =>
+            created && dirTags
+              ? fs.writeFileAsync(
+                  path.join(outputDir, LinkingActivator.NEW_TAG_NAME),
+                  "This directory was created by Vortex deployment and will be removed " +
+                    "during purging if it's empty",
+                )
+              : Promise.resolve(),
+          )
+          .then(link);
+      })
       .then(() => {
         this.mContext.previousDeployment[key] = this.mContext.newDeployment[key];
         return this.mContext.newDeployment[key];
@@ -904,30 +1002,38 @@ abstract class LinkingActivator implements IDeploymentMethod {
         }
       })
       .then(() => queue)
-      .then(() =>
-        empty && doRemove
-          ? fs
-              .statAsync(path.join(baseDir, LinkingActivator.NEW_TAG_NAME))
-              .then(() => fs.unlinkAsync(path.join(baseDir, LinkingActivator.NEW_TAG_NAME)))
-              .catch(() => fs.unlinkAsync(path.join(baseDir, LinkingActivator.OLD_TAG_NAME)))
-              .catch((err: unknown) => {
-                const code = getErrorCode(err);
-                if (code === "ENOENT") {
-                  return Promise.resolve();
-                }
-                throw err;
-              })
-              .then(() =>
-                fs.rmdirAsync(baseDir).catch((err) => {
-                  log("error", "failed to remove directory, it was supposed to be empty", {
-                    error: getErrorMessageOrDefault(err),
-                    path: baseDir,
-                  });
-                }),
-              )
+      .then(() => {
+        if (!empty || !doRemove) {
+          return false;
+        }
+
+        // Keep the marker on non-empty directories. They may contain unmanaged files today but
+        // become empty during a later purge; without the marker Vortex can no longer identify the
+        // directory as one it created and it will be left behind permanently.
+        return fs
+          .statAsync(path.join(baseDir, LinkingActivator.NEW_TAG_NAME))
+          .then(() => fs.unlinkAsync(path.join(baseDir, LinkingActivator.NEW_TAG_NAME)))
+          .catch(() => fs.unlinkAsync(path.join(baseDir, LinkingActivator.OLD_TAG_NAME)))
+          .catch((err: unknown) => {
+            const code = getErrorCode(err);
+            if (code === "ENOENT") {
+              return Promise.resolve();
+            }
+            throw err;
+          })
+          .then(() =>
+            fs
+              .rmdirAsync(baseDir)
               .then(() => true)
-          : Promise.resolve(false),
-      );
+              .catch((err) => {
+                log("error", "failed to remove directory, it was supposed to be empty", {
+                  error: getErrorMessageOrDefault(err),
+                  path: baseDir,
+                });
+                return false;
+              }),
+          );
+      });
   }
 
   private restoreBackup(backupPath: string): Promise<void> {

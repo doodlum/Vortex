@@ -131,6 +131,16 @@ describe("FlagsProvider", () => {
 });
 
 describe("useFlag", () => {
+  it("returns undefined outside a provider", () => {
+    let captured: ReturnType<typeof useFlag<"vortex-test-flag">> = { name: "vortex-test-flag" };
+    function Spy() {
+      captured = useFlag("vortex-test-flag");
+      return null;
+    }
+    render(<Spy />);
+    expect(captured).toBeUndefined();
+  });
+
   it("returns undefined before first push", () => {
     let captured: ReturnType<typeof useFlag<"vortex-test-flag">> = { name: "vortex-test-flag" };
     function Spy() {

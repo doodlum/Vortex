@@ -26,7 +26,13 @@ const themeMap = {
   primary: "text-primary-moderate",
 } as const satisfies Record<ITheme, string>;
 
-export type IPictogramName = "game" | "health-check" | "preferences" | "settings" | "tools";
+export type IPictogramName =
+  | "game"
+  | "health-check"
+  | "preferences"
+  | "proton"
+  | "settings"
+  | "tools";
 
 export const Pictogram = ({
   className,

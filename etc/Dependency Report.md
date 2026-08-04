@@ -50,6 +50,7 @@ This is a list of all modules leaked by Vortex to extensions. Any module listed 
 | draggabilly | 2.4.1 |
 | drivelist | 10.0.2 |
 | electron-context-menu | 3.6.1 |
+| electron-extension-installer | 2.0.1 |
 | electron-redux | 1.4.9-sync |
 | electron-updater | 4.6.5 |
 | encoding-down | 6.3.0 |
@@ -105,6 +106,7 @@ This is a list of all modules leaked by Vortex to extensions. Any module listed 
 | redux | 4.2.1 |
 | redux-act | 1.8.0 |
 | redux-batched-actions | 0.5.0 |
+| redux-freeze | 0.1.7 |
 | redux-thunk | 2.4.2 |
 | relaxed-json | 1.0.3 |
 | reselect | 4.1.8 |

@@ -14,7 +14,6 @@ import {
   InsufficientDiskSpace,
   NotFound,
   ProcessCanceled,
-  UnsupportedOperatingSystem,
   UserCanceled,
 } from "./CustomErrors";
 import * as fs from "./fs";
@@ -22,6 +21,7 @@ import type { Normalize } from "./getNormalizeFunc";
 import getNormalizeFunc from "./getNormalizeFunc";
 import { log } from "./log";
 import { isChildPath } from "./util";
+import { volumePath } from "./volumePath";
 
 const MIN_DISK_SPACE_OFFSET = 512 * 1024 * 1024;
 
@@ -36,21 +36,29 @@ const MIN_DISK_SPACE_OFFSET = 512 * 1024 * 1024;
  * @param destination The proposed destination folder.
  */
 export function testPathTransfer(source: string, destination: string): PromiseBB<void> {
-  if (process.platform !== "win32") {
-    return PromiseBB.reject(new UnsupportedOperatingSystem());
-  }
-
+  // This function only decides whether the destination has room, and the free-space check below is
+  // already cross-platform (nodeFs.statfsSync). The blanket `process.platform !== "win32"` rejection
+  // that used to be here therefore disabled a working check -- and because callers translate
+  // UnsupportedOperatingSystem into "This functionality is currently unavailable for your operating
+  // system", it made *changing the mod staging or download folder impossible on Linux*. That matters
+  // more than it sounds: under Flatpak the default staging folder is inside the app's private mount,
+  // where hard links to the game cannot work, and this was the supported way to move it out.
   let destinationRoot: string;
-  try {
-    destinationRoot = winapi.GetVolumePathName(destination);
-  } catch (err) {
-    if (isErrorWithSystemCode(err)) {
-      if (err.systemCode === 2) {
-        return PromiseBB.reject(new NotFound(destination));
+  if (process.platform === "win32") {
+    try {
+      destinationRoot = winapi.GetVolumePathName(destination);
+    } catch (err) {
+      if (isErrorWithSystemCode(err)) {
+        if (err.systemCode === 2) {
+          return PromiseBB.reject(new NotFound(destination));
+        }
       }
-    }
 
-    return PromiseBB.reject(err);
+      return PromiseBB.reject(err);
+    }
+  } else {
+    // The mount point the destination is on, or would be created on.
+    destinationRoot = volumePath(destination);
   }
 
   const isOnSameVolume = (): PromiseBB<boolean> => {

@@ -1,3 +1,5 @@
+import type { Dirent } from "fs";
+import * as fsPromises from "fs/promises";
 import * as path from "path";
 
 import { parse } from "simple-vdf";
@@ -9,6 +11,140 @@ export interface IProtonInfo {
   usesProton: boolean;
   compatDataPath?: string;
   protonPath?: string;
+}
+
+export interface IInstalledProton {
+  id: string;
+  name: string;
+  path: string;
+  source: "steam" | "custom";
+}
+
+export interface IPrefixInventory {
+  components: string[];
+  compatDataPath: string;
+  prefixPath: string;
+  winetricks: string[];
+}
+
+const RUNTIME_SIGNATURES: Array<{ pattern: RegExp; verb: string }> = [
+  { pattern: /(?:VCRUNTIME|MSVCP)140(?:_\d)?\.DLL/i, verb: "vcrun2022" },
+  { pattern: /MSVCR120\.DLL/i, verb: "vcrun2013" },
+  { pattern: /MSVCR110\.DLL/i, verb: "vcrun2012" },
+  { pattern: /MSVCR100\.DLL/i, verb: "vcrun2010" },
+  { pattern: /D3DCOMPILER_47\.DLL/i, verb: "d3dcompiler_47" },
+  { pattern: /D3DCOMPILER_43\.DLL/i, verb: "d3dcompiler_43" },
+  { pattern: /D3DX9_\d+\.DLL/i, verb: "d3dx9" },
+  { pattern: /XINPUT1_[1-4]\.DLL/i, verb: "xinput" },
+  { pattern: /XAUDIO2_[0-9]\.DLL/i, verb: "xact" },
+];
+
+const RUNTIME_COMPONENT_FILES: Record<string, string[]> = {
+  d3dcompiler_43: ["d3dcompiler_43.dll"],
+  d3dcompiler_47: ["d3dcompiler_47.dll"],
+  d3dx9: ["d3dx9_43.dll"],
+  vcrun2010: ["msvcr100.dll"],
+  vcrun2012: ["msvcr110.dll"],
+  vcrun2013: ["msvcr120.dll"],
+  vcrun2022: ["vcruntime140.dll", "msvcp140.dll"],
+  xact: ["xaudio2_7.dll"],
+  xinput: ["xinput1_3.dll"],
+};
+
+async function executableFiles(rootPath: string, depth = 2): Promise<string[]> {
+  if (depth < 0) return [];
+  let entries: Dirent[];
+  try {
+    entries = await fsPromises.readdir(rootPath, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const nested = await Promise.all(
+    entries.map((entry) => {
+      const fullPath = path.join(rootPath, entry.name);
+      if (entry.isDirectory()) return executableFiles(fullPath, depth - 1);
+      return Promise.resolve(entry.isFile() && /\.exe$/i.test(entry.name) ? [fullPath] : []);
+    }),
+  );
+  return nested.flat();
+}
+
+/** Infer redistributable requirements from PE import names, independent of game extensions. */
+export async function detectRuntimeDependencies(gamePath: string): Promise<string[]> {
+  const verbs = new Set<string>();
+  for (const filePath of await executableFiles(gamePath)) {
+    let handle: fsPromises.FileHandle | undefined;
+    try {
+      handle = await fsPromises.open(filePath, "r");
+      const buffer = Buffer.alloc(8 * 1024 * 1024);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      const imports = buffer.subarray(0, bytesRead).toString("latin1").replaceAll("\0", "");
+      for (const signature of RUNTIME_SIGNATURES) {
+        if (signature.pattern.test(imports)) verbs.add(signature.verb);
+      }
+    } catch {
+      // Unreadable optional executables do not prevent scanning the rest of the game.
+    } finally {
+      await handle?.close();
+    }
+  }
+  return [...verbs].sort();
+}
+
+/** Inspect the prefix using winetricks' own installation record. */
+export async function inspectPrefix(compatDataPath: string): Promise<IPrefixInventory> {
+  const prefixPath = getWinePrefixPath(compatDataPath);
+  const logPath = path.join(prefixPath, "winetricks.log");
+  let winetricks: string[] = [];
+  try {
+    const contents = await fs.readFileAsync(logPath, "utf8");
+    winetricks = contents
+      .toString()
+      .split(/\r?\n/)
+      .map((entry) => entry.trim())
+      .filter((entry, index, all) => entry.length > 0 && all.indexOf(entry) === index);
+  } catch {
+    // A clean Proton prefix normally has no winetricks log.
+  }
+  const components = new Set(winetricks);
+  for (const [verb, files] of Object.entries(RUNTIME_COMPONENT_FILES)) {
+    const installed = await Promise.all(
+      files.map((file) =>
+        Promise.all([
+          pathExists(path.join(prefixPath, "drive_c", "windows", "system32", file)),
+          pathExists(path.join(prefixPath, "drive_c", "windows", "syswow64", file)),
+        ]).then((architectures) => architectures.some(Boolean)),
+      ),
+    );
+    if (installed.every(Boolean)) components.add(verb);
+  }
+  return { compatDataPath, components: [...components].sort(), prefixPath, winetricks };
+}
+
+/** Discover installed official and custom Proton distributions from Steam itself. */
+export async function listInstalledProton(steamPath: string): Promise<IInstalledProton[]> {
+  const roots: Array<{ path: string; source: IInstalledProton["source"] }> = [
+    { path: path.join(steamPath, "steamapps", "common"), source: "steam" },
+    { path: path.join(steamPath, "compatibilitytools.d"), source: "custom" },
+  ];
+  const result: IInstalledProton[] = [];
+
+  for (const root of roots) {
+    try {
+      const entries = await fs.readdirAsync(root.path);
+      for (const name of entries) {
+        const installPath = path.join(root.path, name);
+        if ((await pathExists(path.join(installPath, "proton"))) === false) {
+          continue;
+        }
+        result.push({ id: installPath, name, path: installPath, source: root.source });
+      }
+    } catch {
+      // An absent custom-tools directory is normal.
+    }
+  }
+
+  return result.sort((lhs, rhs) => lhs.name.localeCompare(rhs.name, undefined, { numeric: true }));
 }
 
 /**
