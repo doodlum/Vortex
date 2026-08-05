@@ -387,7 +387,6 @@ export function startDownload(
   return url.type === "mod"
     ? startDownloadMod(
         api,
-        nexus,
         nxmurl,
         url,
         redownload,
@@ -742,7 +741,6 @@ export function getCollectionInfo(
 
 function startDownloadMod(
   api: IExtensionApi,
-  nexus: Nexus,
   urlStr: string,
   url: NXMUrl,
   redownload?: RedownloadMode,
@@ -757,38 +755,36 @@ function startDownloadMod(
   const gameId = convertNXMIdReverse(games, url.gameId);
   const pageId = nexusGameId(gameById(state, gameId), url.gameId);
 
-  let nexusFileInfo: IFileInfo;
-  return getInfoGraphQL(nexus, pageId, url.modId, url.fileId)
-    .then(({ modInfo, fileInfo }) => {
-      nexusFileInfo = fileInfo;
-      return new BluebirdPromise<string>((resolve, reject) => {
-        api.events.emit(
-          "start-download",
-          [urlStr],
-          {
-            game: gameId,
-            source: "nexus",
-            name: fileInfo.name,
-            referenceTag,
-            nexus: {
-              ids: { gameId: pageId, modId: url.modId, fileId: url.fileId },
-              modInfo,
-              fileInfo,
-            },
-          },
-          fileName ?? nexusFileInfo.name,
-          (err, downloadId) => (truthy(err) ? reject(contextify(err)) : resolve(downloadId)),
-          redownload,
-          { allowInstall },
-        );
-      });
-    })
+  // An nxm link already contains everything required to resolve and start the transfer. Metadata
+  // enrichment is handled by the download-change listener after the Redux record is created, so
+  // blocking here on GraphQL makes browser downloads appear to do nothing whenever that API is
+  // slow. Queue immediately and let the normal asynchronous enrichment path fill in names/details.
+  const displayName = fileName ?? `Nexus mod ${url.modId}, file ${url.fileId}`;
+  return new BluebirdPromise<string>((resolve, reject) => {
+    api.events.emit(
+      "start-download",
+      [urlStr],
+      {
+        game: gameId,
+        source: "nexus",
+        name: displayName,
+        referenceTag,
+        nexus: {
+          ids: { gameId: pageId, modId: url.modId, fileId: url.fileId },
+        },
+      },
+      fileName,
+      (err, downloadId) => (truthy(err) ? reject(contextify(err)) : resolve(downloadId)),
+      redownload,
+      { allowInstall },
+    );
+  })
     .tap(() => {
       api.sendNotification({
         id: url.fileId.toString(),
         type: "global",
         title: "Downloading from Nexus",
-        message: nexusFileInfo.name,
+        message: displayName,
         displayMS: 4000,
         noToast: true,
       });
@@ -806,7 +802,7 @@ function startDownloadMod(
           type: "success",
           title: "Download finished",
           group: "download-finished",
-          message: nexusFileInfo.name,
+          message: displayName,
           actions: [
             {
               title: "Install All",
@@ -817,7 +813,7 @@ function startDownloadMod(
                   undefined,
                   (err: any, id: string) => {
                     if (err) {
-                      processInstallError(api, err, downloadId, fileName ?? nexusFileInfo.name);
+                      processInstallError(api, err, downloadId, displayName);
                     }
                   },
                 );
