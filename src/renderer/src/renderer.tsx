@@ -214,7 +214,6 @@ const middleware = [
 // final writes are lost and affected mods reload missing fields (GH#23363).
 window.addEventListener("beforeunload", () => {
   flushPendingDiffsSync();
-  FlagService.destroyIfInitialized();
 });
 
 function sanityCheckCB(err: StateError) {
