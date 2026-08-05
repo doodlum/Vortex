@@ -65,8 +65,6 @@ interface IProtonPageProps {
   active?: boolean;
 }
 
-type CacheView = "split" | "rows" | "compact";
-
 interface IPageData {
   appId?: string;
   compatDataPath?: string;
@@ -123,7 +121,6 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
   const [dependencyStatus, setDependencyStatus] = useState<string>();
   const [pageError, setPageError] = useState<string>();
   const [setupStatus, setSetupStatus] = useState<IProtonSetupStatus>(protonSetupStatus);
-  const [cacheView, setCacheView] = useState<CacheView>("split");
   const selected = profile?.features?.["proton-version"] ?? "";
   const automatic = profile?.features?.["proton-auto-dependencies"] !== false;
   const pageFeedback = profile?.features?.["proton-page-feedback"] as string | undefined;
@@ -232,7 +229,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
   useEffect(() => subscribeProtonSetupStatus(setSetupStatus), []);
 
   const options = useMemo(
-    () => [{ label: t("Latest stable (recommended)"), value: "" }, ...data.tools],
+    () => [{ label: t("Latest stable"), value: "" }, ...data.tools],
     [data.tools, t],
   );
 
@@ -462,19 +459,6 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
         title={t("Proton")}
       >
         <div className="flex shrink-0 items-center gap-x-2">
-          <div className="flex items-center gap-x-1 rounded-md border border-stroke-weak p-1">
-            {(["split", "rows", "compact"] as CacheView[]).map((view) => (
-              <Button
-                appearance={cacheView === view ? "strong" : "subdued"}
-                brand={cacheView === view ? "primary" : "neutral"}
-                key={view}
-                size="xs"
-                onClick={() => setCacheView(view)}
-              >
-                {t(view === "split" ? "Split" : view === "rows" ? "Rows" : "Compact")}
-              </Button>
-            ))}
-          </div>
           <LastUpdated timestamp={lastUpdated} />
           <Button
             appearance="subdued"
@@ -535,9 +519,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
             onChange={(value) => void changeVersion(value)}
           />
           <Typography appearance="subdued" className="mt-2" typographyType="body-sm">
-            {t(
-              "Latest stable is recommended. A specific version remains selected for this profile until you change it here.",
-            )}
+            {t("A specific version remains selected for this profile until you change it here.")}
           </Typography>
           <div className="mt-6 flex items-center justify-between gap-4 border-t border-stroke-weak pt-4">
             <div>
@@ -661,115 +643,50 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
           </div>
           {cacheRedirectEnabled && data.privateShaderCache !== undefined && (
             <div className="mt-4 border-t border-stroke-weak pt-4">
-              {cacheView === "split" && (
-                <div>
-                  <div className="flex h-4 overflow-hidden rounded-full bg-surface-mid">
-                    <div className="bg-info" style={{ width: `${100 - cacheChangedPercent}%` }} />
-                    <div className="bg-warning" style={{ width: `${cacheChangedPercent}%` }} />
+              <div className="rounded-md bg-surface-mid p-4">
+                <div className="mb-3 flex items-end justify-between gap-4">
+                  <div>
+                    <Typography appearance="subdued" typographyType="body-sm">
+                      {t("Private cache")}
+                    </Typography>
+                    <Typography as="div" typographyType="heading-sm">
+                      {formatBytes(
+                        data.privateShaderCache.copiedBytes + data.privateShaderCache.changedBytes,
+                      )}
+                    </Typography>
                   </div>
-                  <div className="mt-3 flex flex-wrap gap-x-6 gap-y-2">
-                    <div className="flex items-center gap-2">
-                      <span className="bg-info h-3 w-3 rounded-sm" />
-                      <Typography typographyType="body-sm">
-                        {t("Steam copy · {{size}} · {{count}} files", {
-                          size: formatBytes(data.privateShaderCache.copiedBytes),
-                          count: data.privateShaderCache.copiedFiles,
-                        })}
-                      </Typography>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="bg-warning h-3 w-3 rounded-sm" />
-                      <Typography typographyType="body-sm">
-                        {t("Added/changed · {{size}} · {{count}} files", {
-                          size: formatBytes(data.privateShaderCache.changedBytes),
-                          count: data.privateShaderCache.changedFiles,
-                        })}
-                      </Typography>
-                    </div>
-                  </div>
-                  <Typography appearance="subdued" className="mt-2" typographyType="body-sm">
-                    {t("Blue is the clean Steam copy and is meant to be here.")}
+                  <Typography appearance="subdued" typographyType="body-sm">
+                    {data.privateShaderCache.copiedFiles + data.privateShaderCache.changedFiles}{" "}
+                    {t("files")}
                   </Typography>
                 </div>
-              )}
-              {cacheView === "rows" && (
-                <div className="space-y-4">
-                  <div>
-                    <div className="mb-1 flex items-center justify-between gap-4">
-                      <Typography typographyType="body-sm">{t("Copied from Steam")}</Typography>
-                      <Typography appearance="subdued" typographyType="body-sm">
-                        {formatBytes(data.privateShaderCache.copiedBytes)} ·{" "}
-                        {data.privateShaderCache.copiedFiles} {t("files")}
-                      </Typography>
-                    </div>
-                    <div className="h-2 overflow-hidden rounded-full bg-surface-mid">
-                      <div
-                        className="bg-info h-full rounded-full"
-                        style={{ width: `${100 - cacheChangedPercent}%` }}
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <div className="mb-1 flex items-center justify-between gap-4">
-                      <Typography typographyType="body-sm">{t("Added or changed")}</Typography>
-                      <Typography appearance="subdued" typographyType="body-sm">
-                        {formatBytes(data.privateShaderCache.changedBytes)} ·{" "}
-                        {data.privateShaderCache.changedFiles} {t("files")}
-                      </Typography>
-                    </div>
-                    <div className="h-2 overflow-hidden rounded-full bg-surface-mid">
-                      <div
-                        className="bg-warning h-full rounded-full"
-                        style={{ width: `${cacheChangedPercent}%` }}
-                      />
-                    </div>
-                  </div>
+                <div className="flex h-2 overflow-hidden rounded-sm bg-surface-high">
+                  <div
+                    className="bg-neutral-subdued"
+                    style={{ width: `${100 - cacheChangedPercent}%` }}
+                  />
+                  <div className="bg-white" style={{ width: `${cacheChangedPercent}%` }} />
                 </div>
-              )}
-              {cacheView === "compact" && (
-                <div className="rounded-md bg-surface-mid p-4">
-                  <div className="mb-3 flex items-end justify-between gap-4">
-                    <div>
-                      <Typography appearance="subdued" typographyType="body-sm">
-                        {t("Private cache")}
-                      </Typography>
-                      <Typography as="div" typographyType="heading-sm">
-                        {formatBytes(
-                          data.privateShaderCache.copiedBytes +
-                            data.privateShaderCache.changedBytes,
-                        )}
-                      </Typography>
-                    </div>
-                    <Typography appearance="subdued" typographyType="body-sm">
-                      {data.privateShaderCache.copiedFiles + data.privateShaderCache.changedFiles}{" "}
-                      {t("files")}
-                    </Typography>
-                  </div>
-                  <div className="flex h-2 overflow-hidden rounded-sm bg-surface-high">
-                    <div className="bg-info" style={{ width: `${100 - cacheChangedPercent}%` }} />
-                    <div className="bg-warning" style={{ width: `${cacheChangedPercent}%` }} />
-                  </div>
-                  <div className="mt-2 flex justify-between gap-4">
-                    <Typography appearance="subdued" typographyType="body-sm">
-                      {t("Steam {{percent}}%", { percent: 100 - cacheChangedPercent })}
-                    </Typography>
-                    <Typography appearance="subdued" typographyType="body-sm">
-                      {t("Changed {{percent}}%", { percent: cacheChangedPercent })}
-                    </Typography>
-                  </div>
+                <div className="mt-2 flex justify-between gap-4">
+                  <Typography appearance="subdued" typographyType="body-sm">
+                    {t("Steam {{percent}}%", { percent: 100 - cacheChangedPercent })}
+                  </Typography>
+                  <Typography appearance="subdued" typographyType="body-sm">
+                    {t("Changed {{percent}}%", { percent: cacheChangedPercent })}
+                  </Typography>
                 </div>
-              )}
-              <div className="mt-3 flex items-center justify-between gap-4">
-                <Typography appearance="subdued" typographyType="body-sm">
-                  {privateCacheMatchesSteam
-                    ? t("Private cache matches Steam.")
-                    : data.privateShaderCache.missingFiles > 0
+              </div>
+              {!privateCacheMatchesSteam && (
+                <div className="mt-3 flex items-center justify-between gap-4">
+                  <Typography appearance="subdued" typographyType="body-sm">
+                    {data.privateShaderCache.missingFiles > 0
                       ? t("{{count}} Steam files are missing from the copy.", {
                           count: data.privateShaderCache.missingFiles,
                         })
                       : t("Reset removes only private changes.")}
-                </Typography>
-              </div>
+                  </Typography>
+                </div>
+              )}
             </div>
           )}
         </section>
