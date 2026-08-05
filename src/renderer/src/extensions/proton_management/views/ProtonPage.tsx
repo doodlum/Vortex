@@ -12,6 +12,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useDispatch, useSelector } from "react-redux";
 
+import ProgressBar from "@/controls/ProgressBar";
 import type { IExtensionApi } from "@/types/IExtensionContext";
 import { Button } from "@/ui/components/button/Button";
 import { Switch } from "@/ui/components/form/switch/Switch";
@@ -103,6 +104,8 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
   const [cacheRedirectEnabled, setCacheRedirectEnabled] = useState<boolean>();
   const [steamLaunchOptions, setSteamLaunchOptionsState] = useState("");
   const [steamSettingsAvailable, setSteamSettingsAvailable] = useState(true);
+  const [dependencyProgress, setDependencyProgress] = useState<number>();
+  const [dependencyStatus, setDependencyStatus] = useState<string>();
   const selected = profile?.features?.["proton-version"] ?? "";
   const automatic = profile?.features?.["proton-auto-dependencies"] !== false;
   const pageFeedback = profile?.features?.["proton-page-feedback"] as string | undefined;
@@ -226,12 +229,20 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
     );
     if (result.action !== "Install") return;
     setLoading(true);
+    setDependencyProgress(0);
+    setDependencyStatus("Preparing dependency installation");
     try {
-      await installDependencies(api, data.appId, missing);
+      await installDependencies(api, data.appId, missing, (progress, message) => {
+        setDependencyProgress(progress);
+        setDependencyStatus(message);
+      });
+      setDependencyStatus("Verifying installed components");
       await refresh();
     } catch (err) {
       api.showErrorNotification("Failed to install Windows dependencies", err);
     } finally {
+      setDependencyProgress(undefined);
+      setDependencyStatus(undefined);
       setLoading(false);
     }
   }, [api, data.appId, missing, refresh]);
@@ -422,6 +433,11 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
                   "Vortex checks installed mods for Windows components they need, such as Visual C++ or .NET runtimes.",
                 )}
               </Typography>
+              <Typography appearance="subdued" className="mt-2" typographyType="body-sm">
+                {t(
+                  "Vortex manages Protontricks for you. It installs or updates the helper, applies only the components detected from your mods, and verifies the game prefix afterward.",
+                )}
+              </Typography>
             </div>
             <Button
               disabled={missing.length === 0 || data.appId === undefined}
@@ -433,6 +449,12 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
                 : t("Install requirements ({{count}})", { count: missing.length })}
             </Button>
           </div>
+          {dependencyProgress !== undefined && (
+            <div className="mt-4">
+              <Typography typographyType="body-sm">{t(dependencyStatus ?? "Working")}</Typography>
+              <ProgressBar max={100} min={0} now={dependencyProgress} />
+            </div>
+          )}
           {missing.length > 0 && (
             <div className="mt-6">
               <Typography appearance="subdued">{t("Still needed by your mods")}</Typography>

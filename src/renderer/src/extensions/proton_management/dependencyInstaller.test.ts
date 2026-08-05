@@ -20,7 +20,7 @@ describe("Proton dependency installer", () => {
     await installDependencies(api, "2050650", ["vcrun2022", "xinput"]);
 
     expect(runExecutable).toHaveBeenNthCalledWith(
-      2,
+      3,
       "flatpak-spawn",
       [
         "--host",
@@ -53,6 +53,14 @@ describe("Proton dependency installer", () => {
       "--noninteractive",
       "-y",
       "flathub",
+      "com.github.Matoking.protontricks",
+    ]);
+    expect(runExecutable.mock.calls[2][1]).toEqual([
+      "--host",
+      "flatpak",
+      "update",
+      "--noninteractive",
+      "-y",
       "com.github.Matoking.protontricks",
     ]);
   });

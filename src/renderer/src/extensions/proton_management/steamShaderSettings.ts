@@ -141,6 +141,14 @@ export async function setSteamLaunchOptions(appId: string, launchOptions: string
   })()`);
 }
 
+export async function setSteamCompatTool(appId: string, toolName: string): Promise<void> {
+  if (!/^\d+$/.test(appId)) throw new Error("Invalid Steam AppID");
+  if (!/^proton_\d+$/.test(toolName)) throw new Error("Invalid stable Proton name");
+  await evaluateSteam<void>(
+    `SteamClient.Apps.SpecifyCompatTool(${JSON.stringify(Number(appId))}, ${JSON.stringify(toolName)})`,
+  );
+}
+
 export function shaderCacheInvocation(appId: string, wrapperPath: string): string {
   if (!/^\d+$/.test(appId)) throw new Error("Invalid Steam AppID");
   const quoted = `'${wrapperPath.replace(/'/g, `'\\''`)}'`;

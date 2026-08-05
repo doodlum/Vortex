@@ -55,6 +55,7 @@ const PlayButton: FC<React.PropsWithChildren<PlayButtonProps>> = ({
           brand="neutral"
           className="w-full transition-all"
           disabled={disabled}
+          isLoading={isPrimaryRunning}
           leftIconPath={mdiPlay}
           onClick={onClick}
         >

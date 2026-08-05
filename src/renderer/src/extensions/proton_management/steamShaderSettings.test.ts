@@ -5,6 +5,7 @@ import {
   disableShaderCacheRedirect,
   enableShaderCacheRedirect,
   getSteamLaunchOptions,
+  setSteamCompatTool,
   setSteamLaunchOptions,
 } from "./steamShaderSettings";
 
@@ -88,5 +89,21 @@ describe("Steam shader-cache launch integration", () => {
     expect(FakeWebSocket.expressions[0]).toContain("GetAppDetails(22380)");
     expect(FakeWebSocket.expressions[1]).toContain("SetAppLaunchOptions(22380");
     expect(FakeWebSocket.expressions[1]).toContain("wrapper %command%");
+  });
+
+  it("selects an official stable Proton through Steam", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => [{ title: "SharedJSContext", webSocketDebuggerUrl: "ws://steam" }],
+      }),
+    );
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    await setSteamCompatTool("489830", "proton_11");
+    expect(FakeWebSocket.expressions[0]).toContain(
+      'SteamClient.Apps.SpecifyCompatTool(489830, "proton_11")',
+    );
   });
 });

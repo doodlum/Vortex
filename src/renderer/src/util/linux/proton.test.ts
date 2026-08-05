@@ -4,7 +4,12 @@ import * as path from "path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { detectRuntimeDependencies, inspectPrefix, listInstalledProton } from "./proton";
+import {
+  detectRuntimeDependencies,
+  findLatestStableProtonName,
+  inspectPrefix,
+  listInstalledProton,
+} from "./proton";
 
 const temporaryPaths: string[] = [];
 
@@ -36,6 +41,22 @@ describe("Proton management", () => {
       ["GE-Proton11-3", "custom"],
       ["Proton 11.0", "steam"],
     ]);
+  });
+
+  it("defaults to the newest installed official stable Proton", async () => {
+    const steamPath = await temporaryDirectory();
+    const common = path.join(steamPath, "steamapps", "common");
+    await Promise.all(
+      [
+        "Proton 9.0 (Beta)",
+        "Proton - Experimental",
+        "Proton Hotfix",
+        "Proton 9.0",
+        "Proton 11.0",
+      ].map((name) => fs.mkdir(path.join(common, name), { recursive: true })),
+    );
+
+    await expect(findLatestStableProtonName(steamPath)).resolves.toBe("proton_11");
   });
 
   it("reads unique installed winetricks components from the selected prefix", async () => {

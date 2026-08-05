@@ -1,6 +1,15 @@
+import * as fs from "fs/promises";
+import * as path from "path";
+
 import type { IExtensionContext } from "@/types/IExtensionContext";
 import GameStoreHelper from "@/util/GameStoreHelper";
-import { getCompatDataPath, inspectPrefix, isWindowsExecutable } from "@/util/linux/proton";
+import {
+  findLatestStableProtonName,
+  getCompatDataPath,
+  getConfiguredProtonName,
+  inspectPrefix,
+  isWindowsExecutable,
+} from "@/util/linux/proton";
 import type { ISteamEntry, Steam } from "@/util/Steam";
 
 import { activeGameId, activeProfile } from "../profile_management/selectors";
@@ -12,6 +21,7 @@ import {
   ensureGameLaunchWrapper,
   GAME_LAUNCH_WRAPPER,
   getSteamLaunchOptions,
+  setSteamCompatTool,
   setSteamLaunchOptions,
   SHADER_CACHE_WRAPPER,
 } from "./steamShaderSettings";
@@ -19,6 +29,22 @@ import { ProtonPage } from "./views/ProtonPage";
 
 let reconciliation: Promise<void> | undefined;
 let cacheReconciliation: Promise<void> | undefined;
+
+async function prefixDependencyVersion(compatDataPath: string): Promise<string> {
+  return fs.readFile(path.join(compatDataPath, "version"), "utf8").then((value) => value.trim());
+}
+
+async function installedDependencyVersion(compatDataPath: string): Promise<string | undefined> {
+  try {
+    const value = await fs.readFile(
+      path.join(compatDataPath, ".vortex-dependencies-version"),
+      "utf8",
+    );
+    return value.trim();
+  } catch {
+    return undefined;
+  }
+}
 
 async function ensureActiveProfileDependencies(context: IExtensionContext): Promise<void> {
   const profile = activeProfile(context.api.getState());
@@ -34,9 +60,18 @@ async function ensureActiveProfileDependencies(context: IExtensionContext): Prom
   const steamAppsPath = path.dirname(path.dirname(entry.gamePath));
   const compatDataPath = entry.compatDataPath ?? getCompatDataPath(steamAppsPath, entry.appid);
   const required = detectModRuntimeDependencies(context.api.getState(), profile);
-  const [verbs, inventory] = await Promise.all([required, inspectPrefix(compatDataPath)]);
-  const missing = verbs.filter((verb) => !inventory.components.includes(verb));
+  const [verbs, inventory, protonVersion, dependencyVersion] = await Promise.all([
+    required,
+    inspectPrefix(compatDataPath),
+    prefixDependencyVersion(compatDataPath),
+    installedDependencyVersion(compatDataPath),
+  ]);
+  const prefixChanged = dependencyVersion !== protonVersion;
+  const missing = prefixChanged
+    ? verbs
+    : verbs.filter((verb) => !inventory.components.includes(verb));
   if (missing.length > 0) await installDependencies(context.api, entry.appid, missing);
+  await fs.writeFile(path.join(compatDataPath, ".vortex-dependencies-version"), protonVersion);
 }
 
 async function ensureActiveProfileCacheIsolation(context: IExtensionContext): Promise<void> {
@@ -50,6 +85,12 @@ async function ensureActiveProfileCacheIsolation(context: IExtensionContext): Pr
     discovery.path.toLowerCase().startsWith(game.gamePath.toLowerCase()),
   );
   if (entry === undefined) return;
+  const steamAppsPath = path.dirname(path.dirname(entry.gamePath));
+  const steamPath = path.dirname(steamAppsPath);
+  if ((await getConfiguredProtonName(steamPath, entry.appid)) === undefined) {
+    const latestStable = await findLatestStableProtonName(steamPath);
+    if (latestStable !== undefined) await setSteamCompatTool(entry.appid, latestStable);
+  }
   const current = await getSteamLaunchOptions(entry.appid);
   let next =
     profile.features?.["proton-shader-cache-isolation"] === false
@@ -125,4 +166,3 @@ function init(context: IExtensionContext): boolean {
 }
 
 export default init;
-import * as path from "path";

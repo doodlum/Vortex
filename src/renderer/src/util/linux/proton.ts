@@ -313,17 +313,32 @@ export async function findLatestProton(steamPath: string): Promise<string | unde
   try {
     const entries = await fs.readdirAsync(commonPath);
     const protonDirs = entries
-      .filter((e) => e.toLowerCase().startsWith("proton"))
-      .sort()
-      .reverse();
+      .map((name) => {
+        const match = /^Proton (\d+)(?:\.(\d+))?$/i.exec(name);
+        return match === null
+          ? undefined
+          : { major: Number(match[1]), minor: Number(match[2] ?? 0), name };
+      })
+      .filter(
+        (entry): entry is { major: number; minor: number; name: string } => entry !== undefined,
+      )
+      .sort((lhs, rhs) => rhs.major - lhs.major || rhs.minor - lhs.minor);
 
     if (protonDirs.length > 0) {
-      return path.join(commonPath, protonDirs[0]);
+      return path.join(commonPath, protonDirs[0].name);
     }
   } catch (err: any) {
     log("debug", "Could not scan for Proton versions", { error: err?.message });
   }
   return undefined;
+}
+
+/** Steam's internal name for the latest installed official stable Proton. */
+export async function findLatestStableProtonName(steamPath: string): Promise<string | undefined> {
+  const protonPath = await findLatestProton(steamPath);
+  if (protonPath === undefined) return undefined;
+  const match = /^Proton (\d+)(?:\.\d+)?$/i.exec(path.basename(protonPath));
+  return match === null ? undefined : `proton_${match[1]}`;
 }
 
 /**
