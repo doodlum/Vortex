@@ -25,25 +25,26 @@ async function buildExtension(name) {
 }
 
 async function preparePluginManagement() {
-  const extension = await buildExtension("gamebryo-plugin-management");
+  const extension = path.join(EXTENSIONS, "gamebryo-plugin-management");
   const loot = path.join(extension, "node_modules/loot");
-  const files = [
-    ["src/stylesheets/plugin_management.scss", "plugin_management.scss"],
-    ["src/language.json", "language.json"],
-    ["src/loot_icon.png", "loot_icon.png"],
-    [path.join(loot, "async.js"), "async.js"],
-    [path.join(loot, "loot_api/libloot.dll"), "libloot.dll"],
-    [path.join(LOOT_ASSETS, "node-loot.node"), "node-loot.node"],
-    [path.join(LOOT_ASSETS, "libloot.so.0"), "libloot.so.0"],
-  ];
-  await Promise.all(
-    files.map(([source, name]) =>
-      cp(
-        path.isAbsolute(source) ? source : path.join(extension, source),
-        path.join(extension, "dist", name),
-      ),
+  await Promise.all([
+    mkdir(path.join(loot, "build/Release"), { recursive: true }),
+    mkdir(path.join(loot, "loot_api"), { recursive: true }),
+  ]);
+  await Promise.all([
+    cp(path.join(LOOT_ASSETS, "node-loot.node"), path.join(loot, "build/Release/node-loot.node")),
+    cp(path.join(LOOT_ASSETS, "libloot.so.0"), path.join(loot, "loot_api/libloot.so.0")),
+  ]);
+  await buildExtension("gamebryo-plugin-management");
+  await Promise.all([
+    cp(
+      path.join(extension, "src/stylesheets/plugin_management.scss"),
+      path.join(extension, "dist/plugin_management.scss"),
     ),
-  );
+    cp(path.join(extension, "src/language.json"), path.join(extension, "dist/language.json")),
+    cp(path.join(extension, "src/loot_icon.png"), path.join(extension, "dist/loot_icon.png")),
+  ]);
+  runNode(path.join(extension, "copy-loot-native.mjs"), extension);
 }
 
 async function prepareBsaSupport() {

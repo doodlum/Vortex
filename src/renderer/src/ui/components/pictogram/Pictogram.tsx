@@ -31,6 +31,7 @@ export type IPictogramName =
   | "health-check"
   | "preferences"
   | "proton"
+  | "puzzle-piece"
   | "settings"
   | "tools";
 

@@ -4,7 +4,6 @@ const Module = require("module");
 import * as childProcess from "node:child_process";
 import fs from "node:fs";
 import * as fsPromises from "node:fs/promises";
-import * as net from "node:net";
 import path from "node:path";
 
 import * as reduxAct from "redux-act";
@@ -14,11 +13,6 @@ import * as reactSelect from "../controls/ReactSelectWrap";
 import ExtensionManager from "../ExtensionManager";
 import type { IRegisteredExtension } from "../types/extensions";
 import { extensionFilesystem } from "./extensionFilesystem";
-import {
-  extensionNetwork,
-  linuxLootModule,
-  linuxLootNativeModule,
-} from "./linux/lootCompatibility";
 import type { LogLevel } from "./log";
 import { webpackRequireHack } from "./webpack-hacks";
 
@@ -113,7 +107,6 @@ const handlerMapReactAct: { [extId: string]: typeof reduxAct } = {};
 let childProcessProxy: typeof childProcess | undefined;
 let nodeFilesystemProxy: typeof fs | undefined;
 let nodeFilesystemPromisesProxy: typeof fsPromises | undefined;
-let networkProxy: typeof net | undefined;
 
 function extensionChildProcess(): typeof childProcess {
   if (process.platform !== "linux") return childProcess;
@@ -142,11 +135,6 @@ function extensionNodeFilesystem(): typeof fs {
 function extensionNodeFilesystemPromises(): typeof fsPromises {
   nodeFilesystemPromisesProxy ??= extensionFilesystem(fsPromises);
   return nodeFilesystemPromisesProxy;
-}
-
-function extensionNetworkModule(): typeof net {
-  networkProxy ??= extensionNetwork(net);
-  return networkProxy;
 }
 
 function requireFromApplication(id: string): unknown {
@@ -218,14 +206,6 @@ function extensionRequire(orig, getExtensions: () => IRegisteredExtension[]) {
     } else if (id === "fs/promises" || id === "node:fs/promises") {
       const ext = extensionFor(this.filename);
       if (ext !== undefined) return extensionNodeFilesystemPromises();
-    } else if (id === "net" || id === "node:net") {
-      const ext = extensionFor(this.filename);
-      if (ext !== undefined) return extensionNetworkModule();
-    } else if (id === "./node-loot.node" && process.platform === "linux") {
-      const ext = extensionFor(this.filename);
-      if (ext !== undefined) {
-        return linuxLootNativeModule(orig.apply(this, arguments));
-      }
     }
     let moduleFilename = this.filename;
     try {
@@ -250,7 +230,7 @@ function extensionRequire(orig, getExtensions: () => IRegisteredExtension[]) {
       if (res === undefined) {
         res = orig.apply(this, arguments);
       }
-      return id === "loot" && process.platform === "linux" ? linuxLootModule(res as any) : res;
+      return res;
     } else {
       return orig.apply(this, arguments);
     }

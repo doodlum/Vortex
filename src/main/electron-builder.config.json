@@ -59,6 +59,7 @@
   ],
   "files": [
     "**/*",
+    "!node_modules/@nexusmods/fomod-installer-native/prebuilds/**",
     "!node_modules/@nexusmods/fomod-installer-native/bin/**",
     "!node_modules/@nexusmods/fomod-installer-native/src-native/**",
     "!node_modules/@nexusmods/fomod-installer-native/*.{h,lib,dll}",

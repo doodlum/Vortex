@@ -92,11 +92,7 @@ async function getTweaks(dirPath: string): Promise<string[]> {
     const tweaks = await fs.readdirAsync(dirPath);
     return tweaks;
   } catch (err) {
-    // Most mods and collections do not contain an Ini Tweaks directory. Its absence is the normal
-    // empty-list case, not a failed collection post-processing step worth putting in diagnostics.
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-      log("warn", "failed to read ini tweaks", err);
-    }
+    log("debug", "failed to find tweaks", err);
     return [];
   }
 }

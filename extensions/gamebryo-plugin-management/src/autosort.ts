@@ -17,12 +17,14 @@ import { findInvalidPlugins } from "./util/findInvalidPlugins";
 import { gameDataPath, gameSupported, nativePlugins, pluginPath } from "./util/gameSupport";
 import { missingGroupFixes } from "./util/groups";
 import { invalidPluginsFromError } from "./util/invalidPlugins";
+import { lootWorkerDirectory, platformLootAsync } from "./util/lootPlatform";
 import { downloadMasterlist, downloadPrelude } from "./util/masterlist";
+import { toLootName } from "./util/toLootName";
 import toPluginId from "./util/toPluginId";
 
 const MAX_RESTARTS = 3;
 
-const LootProm: any = Bluebird.promisifyAll(LootAsync);
+const LootProm: any = Bluebird.promisifyAll(platformLootAsync(LootAsync));
 
 enum EdgeType {
   userGroup = "userGroup",
@@ -304,7 +306,9 @@ class LootInterface {
       const timeBefore = Date.now();
       store.dispatch(actions.startActivity("plugins", "sorting"));
       this.mSortPromise = this.readLists(gameMode, loot)
-        .then(() => loot.sortPluginsAsync(pluginNames))
+        // Real on-disk names: libloot matches these against the plugins it loaded, which were
+        // loaded under the same names.
+        .then(() => loot.sortPluginsAsync(pluginNames.map((id) => toLootName(id, pluginList))))
         .catch((err) =>
           err.message.toLowerCase() === "already closed"
             ? Promise.resolve([])
@@ -578,7 +582,7 @@ class LootInterface {
     }
     try {
       await loot.loadPluginsAsync(
-        deployed.filter((id) => !invalid.has(id)).map((name) => toPluginId(name)),
+        deployed.filter((id) => !invalid.has(id)).map((id) => toLootName(id, pluginList)),
         false,
       );
       pluginsLoaded = true;
@@ -620,12 +624,15 @@ class LootInterface {
           return;
         }
         try {
-          const meta: PluginMetadata = await loot.getPluginMetadataAsync(pluginName);
+          // The same name the load used, so libloot finds the plugin it loaded regardless of
+          // whether it compares plugin names case-sensitively.
+          const lootName = toLootName(pluginName, pluginList);
+          const meta: PluginMetadata = await loot.getPluginMetadataAsync(lootName);
           let info;
           try {
             const id = toPluginId(pluginName);
             if (pluginList[id] !== undefined && pluginList[id].deployed) {
-              info = await loot.getPluginAsync(pluginName);
+              info = await loot.getPluginAsync(lootName);
             }
           } catch (err) {
             const gameMode = selectors.activeGameId(this.mExtensionApi.store.getState());
@@ -903,6 +910,7 @@ class LootInterface {
     const attempt = (retries: number): Bluebird<void> => {
       return (this.mExtensionApi as any)
         .runExecutable(process.execPath, [modulePath].concat(args || []), {
+          cwd: lootWorkerDirectory(),
           detach: false,
           suggestDeploy: false,
           expectSuccess: true,

@@ -18,8 +18,8 @@
     "test": "pnpm vitest run --config ./vitest.config.ts",
     "test:integration": "pnpm exec vitest run --config ./vitest.integration.config.ts",
     "publish": "pnpm exec rimraf ./dist && pnpm cross-env pnpm_config_inject_workspace_packages=true pnpm_config_node_linker=hoisted pnpm -F @vortex/main deploy ./dist && node ./dist/prepare-dist-package.mjs",
-    "package": "cd ./dist && pnpm electron-builder --config ./electron-builder.config.json --config.win.forceCodeSigning=true --config.win.sign=./sign.cjs --publish never && node ./copy-native-prebuilds.mjs",
-    "package:nosign": "cd ./dist && pnpm electron-builder --config ./electron-builder.config.json --publish never && node ./copy-native-prebuilds.mjs",
+    "package": "cd ./dist && pnpm electron-builder --config ./electron-builder.config.json --config.win.forceCodeSigning=true --config.win.sign=./sign.cjs --publish never",
+    "package:nosign": "cd ./dist && pnpm electron-builder --config ./electron-builder.config.json --publish never",
     "sbom": "pnpm node ./sbom.mjs",
     "download-duckdb-extensions": "pnpm tsx ./download-duckdb-extensions.ts",
     "generate:unleash": "pnpm node src/unleash/trim-spec.mjs && pnpm exec openapi-typescript src/unleash/openapi-slim.json --immutable --output src/unleash/schema.d.ts && pnpm exec oxfmt ./src/unleash/*.json ./src/unleash/schema.d.ts"
@@ -224,7 +224,6 @@
     "./build",
     "./nsis/",
     "./electron-builder.config.json",
-    "./copy-native-prebuilds.mjs",
     "./postinstall.mjs",
     "./prepare-linux-extensions.mjs",
     "./prepare-dist-package.mjs",
@@ -233,6 +232,7 @@
   "dependencies": {
     "@duckdb/node-api": "catalog:",
     "@electron/remote": "catalog:",
+    "@floating-ui/react": "catalog:",
     "@headlessui/react": "catalog:",
     "@hot-updater/bsdiff": "catalog:",
     "@mdi/js": "catalog:",

@@ -8,7 +8,7 @@
   "scripts": {
     "_native": "node ../copy-native.mjs ./node_modules/bsatk/build/Release/bsatk.node",
     "_build": "node build.mjs && pnpm run _native && pnpm extractInfo",
-    "build": "node -e \"if(process.platform==='win32')process.exit(1)\" || (pnpm run _build)",
+    "build": "node -e \"if(['win32','linux'].includes(process.platform))process.exit(1)\" || (pnpm run _build)",
     "typecheck": "pnpm tsc"
   },
   "author": "Black Tree Gaming Ltd.",
@@ -19,15 +19,14 @@
     "extensionName": "Gamebryo BSA Support"
   },
   "devDependencies": {
-    "@types/i18next": "catalog:",
+    "@nexusmods/vortex-api": "workspace:*",
     "@types/node": "catalog:",
     "@types/rimraf": "catalog:",
     "bluebird": "catalog:",
     "bsatk": "catalog:",
     "copyfiles": "catalog:",
     "rimraf": "catalog:",
-    "tmp": "catalog:",
-    "@nexusmods/vortex-api": "workspace:*"
+    "tmp": "catalog:"
   },
   "nx": {
     "tags": [

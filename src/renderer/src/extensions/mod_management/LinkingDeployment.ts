@@ -83,7 +83,6 @@ abstract class LinkingActivator implements IDeploymentMethod {
 
   private mQueue: Promise<void> = Promise.resolve();
   private mContext: IDeploymentContext;
-  private mDirCache: Set<string>;
   private mDirQueue: Promise<void> = Promise.resolve();
   private mWritePath: CaseInsensitiveWritePath;
 
@@ -181,7 +180,6 @@ abstract class LinkingActivator implements IDeploymentMethod {
     // different mounts, which no amount of retrying or closing other applications will fix.
     let crossDeviceCount: number = 0;
 
-    this.mDirCache = new Set<string>();
     this.mDirQueue = Promise.resolve();
 
     // unlink all files that were removed or changed
@@ -390,9 +388,6 @@ abstract class LinkingActivator implements IDeploymentMethod {
             context.onComplete();
           }
           throw err;
-        })
-        .finally(() => {
-          this.mDirCache = undefined;
         })
     );
   }
@@ -730,12 +725,7 @@ abstract class LinkingActivator implements IDeploymentMethod {
             "during purging if it's empty",
         );
       };
-      return fs.ensureDirAsync(dirPath, onDirCreated).then(() => {
-        if (this.mDirCache === undefined) {
-          this.mDirCache = new Set<string>();
-        }
-        this.mDirCache.add(dirPath);
-      });
+      return fs.ensureDirAsync(dirPath, onDirCreated);
     });
     // Directory creation is serialized because concurrent recursive mkdir operations for differently
     // cased sibling paths can observe a half-created parent on case-sensitive filesystems.

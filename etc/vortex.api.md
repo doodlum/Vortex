@@ -6,6 +6,7 @@
 
 import { accessSync } from 'original-fs';
 import type { Action } from 'redux';
+import type { AnyAction } from 'redux';
 import { appendFileSync } from 'original-fs';
 import Bluebird from 'bluebird';
 import type { BrowserWindow } from 'electron';
@@ -91,6 +92,7 @@ import { Stats } from 'fs';
 import { statSync } from 'original-fs';
 import { symlinkSync } from 'original-fs';
 import type { TFunction as TFunction_2 } from 'i18next';
+import type { ThunkAction } from 'redux-thunk';
 import type { ThunkDispatch } from 'redux-thunk';
 import type { TOptions } from 'i18next';
 import { watch } from 'original-fs';
@@ -408,7 +410,7 @@ const addMods: reduxAct.ComplexActionCreator2<string, IMod[], {
 }, {}>;
 
 // @public
-function addNotification(notification: INotification): (dispatch: any) => Promise<void> | Promise_2<void>;
+function addNotification(notification: INotification): ThunkAction<Promise<void>, unknown, null, AnyAction>;
 
 // @public (undocumented)
 function addReducer<ActionT, StateT>(action: ActionT, handler: (state: StateT, payload: PayloadT<ActionT>) => StateT): {
@@ -419,7 +421,7 @@ function addReducer<ActionT, StateT>(action: ActionT, handler: (state: StateT, p
 function addUniqueSafe<T>(state: T, path: Array<string | number>, value: any): T;
 
 // @public (undocumented)
-export const Advanced: React_2.ComponentType<{}>;
+export const Advanced: React_2.ComponentType<React_2.PropsWithChildren<{}>>;
 
 // @public
 type ApiEventArgs<TEvent extends ApiEventName> = Readonly<Parameters<ApiEvents[TEvent]>>;
@@ -607,10 +609,10 @@ const closeAsync: (fd: number) => Promise_2<void>;
 const closeBrowser: EmptyActionCreator;
 
 // @public (undocumented)
-function closeDialog(id: string, actionKey?: string, input?: any): (dispatch: any) => void;
+function closeDialog(id: string, actionKey?: string, input?: unknown): ThunkAction<void, unknown, null, AnyAction>;
 
 // @public (undocumented)
-function closeDialogs(ids: string[], actionKey?: string, input?: any): (dispatch: any) => void;
+function closeDialogs(ids: string[], actionKey?: string, input?: unknown): ThunkAction<void, unknown, null, AnyAction>;
 
 // @public (undocumented)
 function coerceToSemver(version: string): string;
@@ -932,13 +934,13 @@ const discoveryByGame: ParametricSelector<IState, string, IDiscoveryResult> & {
 };
 
 // @public (undocumented)
-function dismissAllNotifications(): (dispatch: any) => Promise_2<void>;
+function dismissAllNotifications(): ThunkAction<void, unknown, null, AnyAction>;
 
 // @public
-const dismissDialog: ComplexActionCreator1<any, any, {}>;
+const dismissDialog: ComplexActionCreator1<unknown, unknown, {}>;
 
 // @public (undocumented)
-function dismissNotification(id: string): (dispatch: any) => Promise_2<void>;
+function dismissNotification(id: string): ThunkAction<void, unknown, null, AnyAction>;
 
 // @public
 const displayGroup: ComplexActionCreator2<string, string, {
@@ -949,7 +951,7 @@ itemId: string;
 // Warning: (ae-forgotten-export) The symbol "IDNDContainerProps" needs to be exported by the entry point api.d.ts
 //
 // @public
-export const DNDContainer: FC<IDNDContainerProps>;
+export const DNDContainer: FC<React_3.PropsWithChildren<IDNDContainerProps>>;
 
 // @public (undocumented)
 const downloadPath: (state: IState) => string;
@@ -1116,7 +1118,7 @@ function extractExeIcon(exePath: string, destPath: string): Promise<void>;
 function fileMD5(input: string | Buffer, progress?: (bytesProcessed: number, totalBytes: number) => void): Promise<string>;
 
 // @public
-export type FileSystemErrorData = OsErrorData & {
+export type FileSystemErrorData = Partial<OsErrorData> & {
     path: string;
 };
 
@@ -1198,6 +1200,12 @@ export class FormCheckboxItem extends React_2.Component<IFormItemProps, {}> {
 //
 // @public (undocumented)
 export class FormFeedback extends React_2.Component<IFormFeedbackProps, {}> {
+    // (undocumented)
+    context: {
+        $bs_formGroup?: {
+            validationState?: string;
+        };
+    };
     // (undocumented)
     static contextTypes: React_2.ValidationMap<any>;
     // (undocumented)
@@ -1664,6 +1672,8 @@ enum HealthCheckTrigger {
     // (undocumented)
     GameChanged = "game-changed",
     // (undocumented)
+    LoginChanged = "login-changed",
+    // (undocumented)
     LootUpdated = "loot-updated",
     // (undocumented)
     Manual = "manual",
@@ -1686,7 +1696,7 @@ interface IActionDefinition {
     // (undocumented)
     action?: (instanceId: string | string[], data?: any) => void;
     // (undocumented)
-    component?: React_2.ComponentType<any>;
+    component?: React_2.ComponentType<React_2.PropsWithChildren<any>>;
     // (undocumented)
     condition?: (instanceId: string | string[], data?: any) => boolean | string;
     // (undocumented)
@@ -1942,7 +1952,7 @@ interface IComponentContext {
 // Warning: (ae-forgotten-export) The symbol "IIconProps" needs to be exported by the entry point api.d.ts
 //
 // @public (undocumented)
-export const Icon: FC<IIconProps>;
+export const Icon: FC<React_3.PropsWithChildren<IIconProps>>;
 
 // @public
 class Icon_2 extends React_2.Component<IconProps, {}> {
@@ -2022,7 +2032,6 @@ interface IDeployedFile {
     merged?: string[];
     relPath: string;
     source: string;
-    sourceRelPath?: string;
     target?: string;
     time: number;
 }
@@ -2102,7 +2111,7 @@ interface IDialog {
 // @public (undocumented)
 interface IDialogAction {
     // (undocumented)
-    action?: (label: string) => void;
+    action?: () => void;
     // (undocumented)
     default?: boolean;
     // (undocumented)
@@ -2418,7 +2427,7 @@ interface IExtensionApiExtension extends INexusAPIExtension, IModsAPIExtension, 
     // (undocumented)
     showHistory?: (stack: string) => void;
     // (undocumented)
-    showOverlay?: (id: string, title: string, content: string | React_2.ComponentType<any>, pos?: IPosition, options?: IOverlayOptions) => void;
+    showOverlay?: (id: string, title: string, content: string | React_2.ComponentType<React_2.PropsWithChildren<any>>, pos?: IPosition, options?: IOverlayOptions) => void;
 }
 
 // @public
@@ -2554,6 +2563,8 @@ interface IFileListItem {
 interface IFilterProps {
     // (undocumented)
     attributeId: string;
+    // (undocumented)
+    children?: React_2.ReactNode;
     // (undocumented)
     domRef: (ref: HTMLElement) => void;
     // (undocumented)
@@ -3028,11 +3039,11 @@ interface ILoadOrderEntry_2<T = any> {
 interface ILoadOrderGameInfo {
     clearStateOnPurge?: boolean;
     condition?: () => boolean;
-    customItemRenderer?: React.ComponentType<{
+    customItemRenderer?: React.ComponentType<React.PropsWithChildren<{
         className?: string;
         item: IItemRendererProps;
         forwardedRef?: (ref: any) => void;
-    }>;
+    }>>;
     deserializeLoadOrder: () => Promise<LoadOrder>;
     // (undocumented)
     gameId: string;
@@ -3040,7 +3051,7 @@ interface ILoadOrderGameInfo {
     serializeLoadOrder: (loadOrder: LoadOrder, prev: LoadOrder) => Promise<void>;
     toggleableEntries?: boolean;
     uniformRowHeight?: boolean;
-    usageInstructions?: string | React.ComponentType<{}>;
+    usageInstructions?: string | React.ComponentType<React.PropsWithChildren<{}>>;
     validate: (prev: LoadOrder, current: LoadOrder) => Promise<IValidationResult>;
 }
 
@@ -3081,7 +3092,7 @@ interface IMainPageOptions {
     isModernOnly?: boolean;
     // (undocumented)
     mdi?: string;
-    menuBadge?: React_2.ComponentType;
+    menuBadge?: React_2.ComponentType<React_2.PropsWithChildren<unknown>>;
     newLayout?: boolean;
     // (undocumented)
     onReset?: () => void;
@@ -4294,7 +4305,7 @@ interface ITableAttribute<T = any> {
 // @public (undocumented)
 interface ITableFilter {
     // (undocumented)
-    component: React.ComponentType<IFilterProps>;
+    component: React_2.ComponentType<React_2.PropsWithChildren<IFilterProps>>;
     dataId?: string;
     isEmpty?: (filter: any) => boolean;
     matches: (filter: any, value: any, state: any) => boolean;
@@ -4734,6 +4745,8 @@ export class Modal extends React_2.PureComponent<typeof Modal_2.prototype.props,
     // (undocumented)
     static childContextTypes: React_2.ValidationMap<any>;
     // (undocumented)
+    context: Partial<IComponentContext>;
+    // (undocumented)
     static Footer: typeof ModalFooter;
     // (undocumented)
     getChildContext(): any;
@@ -5122,33 +5135,33 @@ class ReduxProp<T> {
 }
 
 // @public (undocumented)
-type RegisterAction = (group: string, position: number, iconOrComponent: string | React_2.ComponentType<any>, options: IActionOptions, titleOrProps?: string | PropsCallback, actionOrCondition?: (instanceIds?: string[]) => void | boolean, condition?: (instanceIds?: string[]) => boolean | string) => void;
+type RegisterAction = (group: string, position: number, iconOrComponent: string | React_2.ComponentType<React_2.PropsWithChildren<any>>, options: IActionOptions, titleOrProps?: string | PropsCallback, actionOrCondition?: (instanceIds?: string[]) => void | boolean, condition?: (instanceIds?: string[]) => boolean | string) => void;
 
 // Warning: (ae-forgotten-export) The symbol "IBannerOptions" needs to be exported by the entry point api.d.ts
 //
 // @public (undocumented)
-type RegisterBanner = (group: string, component: React_2.ComponentType<any>, options: IBannerOptions) => void;
+type RegisterBanner = (group: string, component: React_2.ComponentType<React_2.PropsWithChildren<any>>, options: IBannerOptions) => void;
 
 // @public (undocumented)
-type RegisterControlWrapper = (group: string, priority: number, wrapper: React_2.ComponentType<any>) => void;
+type RegisterControlWrapper = (group: string, priority: number, wrapper: React_2.ComponentType<React_2.PropsWithChildren<any>>) => void;
 
 // @public (undocumented)
-type RegisterDashlet = (title: string, width: 1 | 2 | 3, height: 1 | 2 | 3 | 4 | 5 | 6, position: number, component: React_2.ComponentClass<any> | React_2.FunctionComponent<any>, isVisible: (state: any) => boolean, props: PropsCallback, options: IDashletOptions) => void;
+type RegisterDashlet = (title: string, width: 1 | 2 | 3, height: 1 | 2 | 3 | 4 | 5 | 6, position: number, component: React_2.ComponentClass<any> | React_2.FunctionComponent<React_2.PropsWithChildren<any>>, isVisible: (state: any) => boolean, props: PropsCallback, options: IDashletOptions) => void;
 
 // @public (undocumented)
-type RegisterDialog = (id: string, element: React_2.ComponentType<any>, props?: PropsCallback) => void;
+type RegisterDialog = (id: string, element: React_2.ComponentType<React_2.PropsWithChildren<any>>, props?: PropsCallback) => void;
 
 // @public (undocumented)
 type RegisterFooter = (id: string, element: React_2.ComponentClass<any>, props?: PropsCallback) => void;
 
 // @public (undocumented)
-type RegisterMainPage = (icon: string, title: string, element: React_2.ComponentType<any>, options: IMainPageOptions) => void;
+type RegisterMainPage = (icon: string, title: string, element: React_2.ComponentType<React_2.PropsWithChildren<any>>, options: IMainPageOptions) => void;
 
 // @public (undocumented)
-type RegisterOverlay = (id: string, element: React_2.ComponentType<any>, props?: PropsCallback) => void;
+type RegisterOverlay = (id: string, element: React_2.ComponentType<React_2.PropsWithChildren<any>>, props?: PropsCallback) => void;
 
 // @public (undocumented)
-type RegisterSettings = (title: string, element: React_2.ComponentClass<any> | React_2.StatelessComponent<any>, props?: PropsCallback, visible?: () => boolean, priority?: number) => void;
+type RegisterSettings = (title: string, element: React_2.ComponentClass<any> | React_2.FunctionComponent<React_2.PropsWithChildren<any>>, props?: PropsCallback, visible?: () => boolean, priority?: number) => void;
 
 // @public (undocumented)
 type RegisterToDo = (id: string, type: ToDoType, props: (state: any) => any, icon: ((props: any) => JSX.Element) | string, text: ((t: TFunction, props: any) => JSX.Element) | string, action: (props: any) => void, condition: (props: any) => boolean, value: ((t: TFunction, props: any) => JSX.Element) | string, priority: number) => void;
@@ -5954,7 +5967,7 @@ const shouldShowPremiumAd: (state: IState) => boolean;
 function showActivity<S>(dispatch: ThunkDispatch<IState, null, Redux.Action>, message: string, id?: string): void;
 
 // @public
-function showDialog(type: DialogType, title: string, content: IDialogContent, actions: DialogActions, inId?: string): (dispatch: any) => Promise_2<IDialogResult>;
+function showDialog(type: DialogType, title: string, content: IDialogContent, actions: DialogActions, inId?: string): ThunkAction<Promise_2<IDialogResult>, unknown, null, AnyAction>;
 
 // @public
 function showError(dispatch: ThunkDispatch<IState, null, Redux.Action>, title: string, details?: string | Error | any, options?: IErrorOptions): void;
@@ -6074,7 +6087,7 @@ class StarterInfo implements IStarterInfo {
 }
 
 // @public
-const startNotification: ComplexActionCreator1<any, any, {}>;
+const startNotification: ComplexActionCreator1<unknown, unknown, {}>;
 
 // @public (undocumented)
 const statAsync: (path: string) => Promise_2<fs_2.Stats>;
@@ -6103,7 +6116,7 @@ scope: string;
 const stopAllNotifications: EmptyActionCreator;
 
 // @public
-const stopNotification: ComplexActionCreator1<any, any, {}>;
+const stopNotification: ComplexActionCreator1<unknown, unknown, {}>;
 
 // @public
 const suppressNotification: ComplexActionCreator2<string, boolean, {
@@ -6118,7 +6131,7 @@ const symlinkAsync: (srcpath: string, dstpath: string, type?: string) => Promise
 // Warning: (ae-forgotten-export) The symbol "IExtensibleProps" needs to be exported by the entry point api.d.ts
 //
 // @public (undocumented)
-export const Table: React_2.ComponentType<IBaseProps_11 & IExtensibleProps>;
+export const Table: React_2.ComponentType<React_2.PropsWithChildren<IBaseProps_11 & IExtensibleProps>>;
 
 // @public (undocumented)
 export class TableDateTimeFilter implements ITableFilter {
@@ -6256,7 +6269,7 @@ declare namespace tooltip {
 }
 export { tooltip }
 
-// @public (undocumented)
+// @public @deprecated (undocumented)
 function toPromise<ResT>(func: (cb: any) => void): Bluebird<ResT>;
 
 // @public (undocumented)

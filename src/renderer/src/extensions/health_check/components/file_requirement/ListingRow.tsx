@@ -11,7 +11,7 @@ import {
 } from "@/extensions/health_check/utils/fileRequirements/fileRequirementActions";
 import {
   canQuickInstall,
-  downloadCandidates,
+  downloadTargets,
   requirementModName,
   switchTargets,
   uninstalledFiles,
@@ -51,7 +51,8 @@ export const ListingRow = ({ api, entry, isHidden, onOpen, onToggleHide }: IList
   } = useIssueTracking();
 
   const { identity, issueType, resolutionType } = useIssue();
-  const candidates = downloadCandidates(report.requirements);
+  const targets = downloadTargets(report.requirements);
+  const candidates = targets.map((target) => target.candidate);
   const quickInstall = canQuickInstall(report.category) && !!candidates.length;
   const switches = switchTargets(report.requirements);
   const toInstall = uninstalledFiles(report.requirements);
@@ -82,6 +83,11 @@ export const ListingRow = ({ api, entry, isHidden, onOpen, onToggleHide }: IList
   // A listing row is one category, so every requirement in it shares a state.
   const requirementState = sharedRequirementState(report.requirements);
 
+  const runQuickInstall = () =>
+    targets.forEach(
+      (target) => void downloadFileRequirement(api, target.candidate, identity, target.enabledFile),
+    );
+
   const doQuickInstall = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (candidates.length === 1) {
@@ -106,7 +112,7 @@ export const ListingRow = ({ api, entry, isHidden, onOpen, onToggleHide }: IList
       return;
     }
 
-    candidates.forEach((candidate) => void downloadFileRequirement(api, candidate, identity));
+    runQuickInstall();
   };
 
   return (
@@ -206,6 +212,7 @@ export const ListingRow = ({ api, entry, isHidden, onOpen, onToggleHide }: IList
       />
 
       <PremiumModal
+        api={api}
         downloadScope={candidates.length === 1 ? "single" : "all"}
         isOpen={showPremium}
         modCount={candidates.length}
@@ -223,6 +230,7 @@ export const ListingRow = ({ api, entry, isHidden, onOpen, onToggleHide }: IList
             onOpen();
           }
         }}
+        onPremiumUnlocked={runQuickInstall}
       />
     </>
   );

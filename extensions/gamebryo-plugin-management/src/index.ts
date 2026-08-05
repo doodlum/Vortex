@@ -56,6 +56,7 @@ import { isMasterlistOutdated, masterlistExists, masterlistFilePath } from "./ut
 import { markdownToBBCode } from "./util/mdtobb";
 import PluginHistory from "./util/PluginHistory";
 import PluginPersistor from "./util/PluginPersistor";
+import { resolveCaseInsensitivePath } from "./util/resolveCaseInsensitiveChild";
 import toPluginId from "./util/toPluginId";
 import UserlistPersistor from "./util/UserlistPersistor";
 import Connector from "./views/Connector";
@@ -1559,7 +1560,7 @@ function testRulesUnfulfilled(api: types.IExtensionApi): Promise<types.ITestResu
     [".esp", ".esl", ".esm"].includes(path.extname(id))
       ? Promise.resolve(pluginsSet.has(id))
       : fs
-          .statAsync(path.resolve(dataPath, id))
+          .statAsync(resolveCaseInsensitivePath(dataPath, id))
           .then(() => true)
           .catch((err) => false);
 

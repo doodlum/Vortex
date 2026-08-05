@@ -75,7 +75,7 @@ async function adultContentDialog(
 
 function BrowseNexusPage(props: IBrowseNexusPageProps) {
   const { api } = props;
-  const t = (input: string, options?) =>
+  const t = (input: string, options?: Record<string, unknown>) =>
     api.translate(input, {
       isNamespaceKey: true,
       ns: ["collection", "common"],
@@ -278,7 +278,6 @@ function BrowseNexusPage(props: IBrowseNexusPageProps) {
                   hideLabel={true}
                   label={t("collection:browse.searchPlaceholder")}
                   placeholder={t("collection:browse.searchPlaceholder")}
-                  size="sm"
                   value={searchQuery}
                   onChange={(e) => {
                     setSearchQuery(e.target.value);
