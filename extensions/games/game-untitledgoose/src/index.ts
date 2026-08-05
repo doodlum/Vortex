@@ -23,13 +23,25 @@ function ensureBIXConfig(discovery: types.IDiscoveryResult): Bluebird<void> {
     });
 }
 
+// util.epicGamesLauncher is undefined on platforms where the Epic launcher store does not
+// instantiate -- notably Linux -- so calling straight through threw
+// "Cannot read properties of undefined (reading 'findByAppId')" and the game reported a crash
+// instead of simply being undiscovered.
 function requiresLauncher() {
+  if (util.epicGamesLauncher === undefined) {
+    return Bluebird.resolve(undefined);
+  }
   return util.epicGamesLauncher
     .isGameInstalled(EPIC_APP_ID)
     .then((epic) => (epic ? { launcher: "epic", addInfo: EPIC_APP_ID } : undefined));
 }
 
 function findGame() {
+  if (util.epicGamesLauncher === undefined) {
+    return Bluebird.reject(
+      new Error(`${GAME_ID}: the Epic launcher is not available on this platform`),
+    );
+  }
   return util.epicGamesLauncher.findByAppId(EPIC_APP_ID).then((epicEntry) => epicEntry.gamePath);
 }
 
