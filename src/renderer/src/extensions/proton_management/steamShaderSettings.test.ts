@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  enableDefaultToolRedirect,
   disableShaderCacheRedirect,
   enableShaderCacheRedirect,
   getSteamLaunchOptions,
@@ -49,6 +50,27 @@ describe("Steam shader-cache launch integration", () => {
     expect(enabled).toContain(`'${wrapper}' 22380 %command%`);
     expect(enableShaderCacheRedirect(enabled, "22380", wrapper)).toBe(enabled);
     expect(disableShaderCacheRedirect(enabled, "22380", wrapper)).toBe(original);
+  });
+
+  it("nests a detected default tool inside the cache wrapper", () => {
+    const cache = "'/home/user/vortex-shader-cache-run' 489830 %command%";
+    const redirected = enableDefaultToolRedirect(
+      cache,
+      "/games/Skyrim Special Edition/skse64_loader.exe",
+      "/home/user/vortex-game-run",
+    );
+
+    expect(redirected).toBe(
+      "'/home/user/vortex-shader-cache-run' 489830 '/home/user/vortex-game-run' " +
+        "'/games/Skyrim Special Edition/skse64_loader.exe' %command%",
+    );
+    expect(
+      enableDefaultToolRedirect(
+        redirected,
+        "/games/Skyrim Special Edition/skse64_loader.exe",
+        "/home/user/vortex-game-run",
+      ),
+    ).toBe(redirected);
   });
 
   it("reads and writes per-game Steam launch options", async () => {

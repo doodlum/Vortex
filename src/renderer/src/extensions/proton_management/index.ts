@@ -7,7 +7,10 @@ import { activeGameId, activeProfile } from "../profile_management/selectors";
 import { installDependencies } from "./dependencyInstaller";
 import { detectModRuntimeDependencies } from "./modRequirements";
 import {
+  enableDefaultToolRedirect,
   enableShaderCacheRedirect,
+  ensureGameLaunchWrapper,
+  GAME_LAUNCH_WRAPPER,
   getSteamLaunchOptions,
   setSteamLaunchOptions,
   SHADER_CACHE_WRAPPER,
@@ -38,8 +41,7 @@ async function ensureActiveProfileDependencies(context: IExtensionContext): Prom
 
 async function ensureActiveProfileCacheIsolation(context: IExtensionContext): Promise<void> {
   const profile = activeProfile(context.api.getState());
-  if (profile === undefined || profile.features?.["proton-shader-cache-isolation"] === false)
-    return;
+  if (profile === undefined) return;
   const discovery = context.api.getState().settings.gameMode.discovered[profile.gameId];
   if (discovery?.path === undefined) return;
   const steam = GameStoreHelper.getGameStore("steam") as Steam;
@@ -49,7 +51,19 @@ async function ensureActiveProfileCacheIsolation(context: IExtensionContext): Pr
   );
   if (entry === undefined) return;
   const current = await getSteamLaunchOptions(entry.appid);
-  const next = enableShaderCacheRedirect(current, entry.appid, SHADER_CACHE_WRAPPER);
+  let next =
+    profile.features?.["proton-shader-cache-isolation"] === false
+      ? current
+      : enableShaderCacheRedirect(current, entry.appid, SHADER_CACHE_WRAPPER);
+  const state = context.api.getState();
+  const tools = state.settings.gameMode.discovered[profile.gameId]?.tools ?? {};
+  const configuredPrimary = state.settings.interface?.primaryTool?.[profile.gameId];
+  const defaultTool = Object.values(tools).find((tool) => tool?.defaultPrimary === true);
+  const primaryTool = configuredPrimary === undefined ? defaultTool : tools[configuredPrimary];
+  if (primaryTool?.defaultPrimary === true && primaryTool.path !== undefined) {
+    await ensureGameLaunchWrapper();
+    next = enableDefaultToolRedirect(next, primaryTool.path, GAME_LAUNCH_WRAPPER);
+  }
   if (next !== current) await setSteamLaunchOptions(entry.appid, next);
 }
 

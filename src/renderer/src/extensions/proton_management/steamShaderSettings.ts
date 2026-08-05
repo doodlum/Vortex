@@ -1,3 +1,4 @@
+import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 
@@ -24,6 +25,58 @@ export const SHADER_CACHE_WRAPPER = path.join(
   "bin",
   "vortex-shader-cache-run",
 );
+export const GAME_LAUNCH_WRAPPER = path.join(
+  os.homedir(),
+  ".local",
+  "share",
+  "vortex",
+  "bin",
+  "vortex-game-run",
+);
+
+const GAME_LAUNCH_SOURCE = `#!/usr/bin/env python3
+import os
+from pathlib import Path
+import sys
+
+if len(sys.argv) < 3:
+    raise SystemExit("usage: vortex-game-run <loader.exe> <command> [args...]")
+loader = sys.argv[1]
+command = sys.argv[2:]
+for index in range(len(command) - 1, -1, -1):
+    if Path(command[index]).suffix.lower() == ".exe":
+        command[index] = loader
+        break
+else:
+    raise SystemExit("Steam command did not contain a Windows executable")
+os.execvp(command[0], command)
+`;
+
+export async function ensureGameLaunchWrapper(wrapperPath = GAME_LAUNCH_WRAPPER): Promise<void> {
+  await fs.mkdir(path.dirname(wrapperPath), { recursive: true });
+  await fs.writeFile(wrapperPath, GAME_LAUNCH_SOURCE, { mode: 0o755 });
+  await fs.chmod(wrapperPath, 0o755);
+}
+
+function quoteShell(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+export function gameLaunchInvocation(loaderPath: string, wrapperPath: string): string {
+  return `${quoteShell(wrapperPath)} ${quoteShell(loaderPath)} `;
+}
+
+export function enableDefaultToolRedirect(
+  launchOptions: string,
+  loaderPath: string,
+  wrapperPath: string,
+): string {
+  const invocation = gameLaunchInvocation(loaderPath, wrapperPath);
+  if (launchOptions.includes(invocation)) return launchOptions;
+  return launchOptions.includes("%command%")
+    ? launchOptions.replace("%command%", `${invocation}%command%`)
+    : `${invocation}%command% ${launchOptions}`.trim();
+}
 
 async function sharedContextUrl(): Promise<string> {
   const response = await fetch(STEAM_CDP_URL);
