@@ -106,4 +106,20 @@ describe("Steam shader-cache launch integration", () => {
       'SteamClient.Apps.SpecifyCompatTool(489830, "proton_11")',
     );
   });
+
+  it("selects an installed custom Proton through Steam", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => [{ title: "SharedJSContext", webSocketDebuggerUrl: "ws://steam" }],
+      }),
+    );
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    await setSteamCompatTool("489830", "GE-Proton11-3");
+    expect(FakeWebSocket.expressions[0]).toContain(
+      'SteamClient.Apps.SpecifyCompatTool(489830, "GE-Proton11-3")',
+    );
+  });
 });

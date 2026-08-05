@@ -1,6 +1,9 @@
+import { unknownToError } from "@vortex/shared";
 import type PromiseBB from "bluebird";
 
 import type { IExtensionApi } from "@/types/IExtensionContext";
+
+import { publishProtonSetupStatus } from "./setupStatus";
 
 const PROTONTRICKS_APP_ID = "com.github.Matoking.protontricks";
 
@@ -21,23 +24,42 @@ export async function installDependencies(
   onProgress?: DependencyProgress,
 ): Promise<void> {
   if (verbs.length === 0) return;
-  onProgress?.(5, "Checking Proton dependency support");
-  await runHost(api, "flatpak", ["info", PROTONTRICKS_APP_ID]).catch(() =>
-    runHost(api, "flatpak", [
-      "install",
+  const report = (progress: number, message: string) => {
+    onProgress?.(progress, message);
+    publishProtonSetupStatus({ appId, message, phase: "installing", progress });
+  };
+  try {
+    report(5, "Checking Proton dependency support");
+    await runHost(api, "flatpak", ["info", "--user", PROTONTRICKS_APP_ID]).catch(() =>
+      runHost(api, "flatpak", [
+        "install",
+        "--user",
+        "--noninteractive",
+        "-y",
+        "flathub",
+        PROTONTRICKS_APP_ID,
+      ]),
+    );
+    // Winetricks recipes contain checksums for vendor redistributables. Vendors update those files,
+    // so an old Protontricks can reject an authentic current installer and silently leave a prefix
+    // without the dependency Vortex requested. Refresh the helper before relying on its result.
+    report(20, "Installing or updating Protontricks");
+    await runHost(api, "flatpak", [
+      "update",
       "--user",
       "--noninteractive",
       "-y",
-      "flathub",
       PROTONTRICKS_APP_ID,
-    ]),
-  );
-  // Winetricks recipes contain checksums for vendor redistributables. Vendors update those files,
-  // so an old Protontricks can reject an authentic current installer and silently leave a prefix
-  // without the dependency Vortex requested. Refresh the helper before relying on its result.
-  onProgress?.(20, "Installing or updating Protontricks");
-  await runHost(api, "flatpak", ["update", "--noninteractive", "-y", PROTONTRICKS_APP_ID]);
-  onProgress?.(55, `Installing ${verbs.join(", ")}`);
-  await runHost(api, "flatpak", ["run", PROTONTRICKS_APP_ID, appId, ...verbs]);
-  onProgress?.(100, "Windows dependencies installed");
+    ]);
+    report(55, `Installing ${verbs.join(", ")}`);
+    await runHost(api, "flatpak", ["run", PROTONTRICKS_APP_ID, appId, ...verbs]);
+    report(100, "Windows dependencies installed");
+  } catch (err) {
+    publishProtonSetupStatus({
+      appId,
+      message: unknownToError(err).message,
+      phase: "error",
+    });
+    throw err;
+  }
 }

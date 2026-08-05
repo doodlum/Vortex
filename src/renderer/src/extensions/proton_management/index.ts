@@ -1,6 +1,8 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 
+import { unknownToError } from "@vortex/shared";
+
 import type { IExtensionContext } from "@/types/IExtensionContext";
 import GameStoreHelper from "@/util/GameStoreHelper";
 import {
@@ -9,12 +11,14 @@ import {
   getConfiguredProtonName,
   inspectPrefix,
   isWindowsExecutable,
+  protonConfigName,
 } from "@/util/linux/proton";
 import type { ISteamEntry, Steam } from "@/util/Steam";
 
 import { activeGameId, activeProfile } from "../profile_management/selectors";
 import { installDependencies } from "./dependencyInstaller";
 import { detectModRuntimeDependencies } from "./modRequirements";
+import { publishProtonSetupStatus } from "./setupStatus";
 import {
   enableDefaultToolRedirect,
   enableShaderCacheRedirect,
@@ -28,7 +32,6 @@ import {
 import { ProtonPage } from "./views/ProtonPage";
 
 let reconciliation: Promise<void> | undefined;
-let cacheReconciliation: Promise<void> | undefined;
 
 async function prefixDependencyVersion(compatDataPath: string): Promise<string> {
   return fs.readFile(path.join(compatDataPath, "version"), "utf8").then((value) => value.trim());
@@ -57,6 +60,12 @@ async function ensureActiveProfileDependencies(context: IExtensionContext): Prom
     discovery.path.toLowerCase().startsWith(game.gamePath.toLowerCase()),
   );
   if (entry === undefined) return;
+  publishProtonSetupStatus({
+    appId: entry.appid,
+    message: "Checking enabled mods",
+    phase: "checking",
+    progress: 0,
+  });
   const steamAppsPath = path.dirname(path.dirname(entry.gamePath));
   const compatDataPath = entry.compatDataPath ?? getCompatDataPath(steamAppsPath, entry.appid);
   const required = detectModRuntimeDependencies(context.api.getState(), profile);
@@ -70,8 +79,27 @@ async function ensureActiveProfileDependencies(context: IExtensionContext): Prom
   const missing = prefixChanged
     ? verbs
     : verbs.filter((verb) => !inventory.components.includes(verb));
-  if (missing.length > 0) await installDependencies(context.api, entry.appid, missing);
+  if (missing.length > 0) {
+    await installDependencies(context.api, entry.appid, missing);
+    publishProtonSetupStatus({
+      appId: entry.appid,
+      message: "Verifying installed components",
+      phase: "verifying",
+      progress: 95,
+    });
+    const verified = await inspectPrefix(compatDataPath);
+    const unresolved = verbs.filter((verb) => !verified.components.includes(verb));
+    if (unresolved.length > 0) {
+      throw new Error(`Components were not installed correctly: ${unresolved.join(", ")}`);
+    }
+  }
   await fs.writeFile(path.join(compatDataPath, ".vortex-dependencies-version"), protonVersion);
+  publishProtonSetupStatus({
+    appId: entry.appid,
+    message: "Proton setup is ready",
+    phase: "ready",
+    progress: 100,
+  });
 }
 
 async function ensureActiveProfileCacheIsolation(context: IExtensionContext): Promise<void> {
@@ -87,9 +115,21 @@ async function ensureActiveProfileCacheIsolation(context: IExtensionContext): Pr
   if (entry === undefined) return;
   const steamAppsPath = path.dirname(path.dirname(entry.gamePath));
   const steamPath = path.dirname(steamAppsPath);
-  if ((await getConfiguredProtonName(steamPath, entry.appid)) === undefined) {
-    const latestStable = await findLatestStableProtonName(steamPath);
-    if (latestStable !== undefined) await setSteamCompatTool(entry.appid, latestStable);
+  const configured = await getConfiguredProtonName(steamPath, entry.appid);
+  const selectedPath = profile.features?.["proton-version"];
+  const selectedName =
+    typeof selectedPath === "string" && selectedPath.length > 0
+      ? protonConfigName({
+          id: selectedPath,
+          name: path.basename(selectedPath),
+          path: selectedPath,
+          source: selectedPath.startsWith(path.join(steamPath, "compatibilitytools.d"))
+            ? "custom"
+            : "steam",
+        })
+      : await findLatestStableProtonName(steamPath);
+  if (selectedName !== undefined && configured !== selectedName) {
+    await setSteamCompatTool(entry.appid, selectedName);
   }
   const current = await getSteamLaunchOptions(entry.appid);
   let next =
@@ -134,27 +174,30 @@ function init(context: IExtensionContext): boolean {
     const required = detectModRuntimeDependencies(context.api.getState(), profile);
     const [verbs, inventory] = await Promise.all([required, inspectPrefix(compatDataPath)]);
     const missing = verbs.filter((verb) => !inventory.components.includes(verb));
-    if (missing.length > 0) await installDependencies(context.api, entry.appid, missing);
+    if (missing.length > 0) {
+      await installDependencies(context.api, entry.appid, missing);
+      const verified = await inspectPrefix(compatDataPath);
+      const unresolved = verbs.filter((verb) => !verified.components.includes(verb));
+      if (unresolved.length > 0) {
+        throw new Error(`Components were not installed correctly: ${unresolved.join(", ")}`);
+      }
+    }
     return input;
   });
   context.once(() => {
     const reconcile = () => {
       if (reconciliation === undefined) {
-        reconciliation = ensureActiveProfileDependencies(context)
-          .catch((err) =>
-            context.api.showErrorNotification("Failed to satisfy Windows dependencies", err),
-          )
+        // Steam must select the profile's Proton before Protontricks opens or repairs that prefix.
+        // Keeping this ordered makes the page's single selected version authoritative end to end.
+        reconciliation = ensureActiveProfileCacheIsolation(context)
+          .then(() => ensureActiveProfileDependencies(context))
+          .catch((err) => {
+            const message = unknownToError(err).message;
+            publishProtonSetupStatus({ message, phase: "error" });
+            context.api.showErrorNotification("Failed to prepare Proton for this game", err);
+          })
           .finally(() => {
             reconciliation = undefined;
-          });
-      }
-      if (cacheReconciliation === undefined) {
-        cacheReconciliation = ensureActiveProfileCacheIsolation(context)
-          .catch((err) =>
-            context.api.showErrorNotification("Failed to enable shader-cache isolation", err),
-          )
-          .finally(() => {
-            cacheReconciliation = undefined;
           });
       }
     };

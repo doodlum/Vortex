@@ -20,6 +20,16 @@ export interface IInstalledProton {
   source: "steam" | "custom";
 }
 
+/** Convert an installed Proton folder to the compatibility-tool key Steam stores for a game. */
+export function protonConfigName(tool: IInstalledProton): string | undefined {
+  if (tool.source === "custom") return tool.name;
+  const stable = /^Proton (\d+)(?:\.\d+)?$/i.exec(tool.name);
+  if (stable !== null) return `proton_${stable[1]}`;
+  if (/^Proton(?:\s*-)?\s*Experimental$/i.test(tool.name)) return "proton_experimental";
+  if (/^Proton\s+Hotfix$/i.test(tool.name)) return "proton_hotfix";
+  return undefined;
+}
+
 export interface IPrefixInventory {
   components: string[];
   compatDataPath: string;
@@ -51,7 +61,7 @@ const RUNTIME_COMPONENT_FILES: Record<string, string[]> = {
   xinput: ["xinput1_3.dll"],
 };
 
-async function executableFiles(rootPath: string, depth = 2): Promise<string[]> {
+async function portableExecutableFiles(rootPath: string, depth = 8): Promise<string[]> {
   if (depth < 0) return [];
   let entries: Dirent[];
   try {
@@ -62,8 +72,10 @@ async function executableFiles(rootPath: string, depth = 2): Promise<string[]> {
   const nested = await Promise.all(
     entries.map((entry) => {
       const fullPath = path.join(rootPath, entry.name);
-      if (entry.isDirectory()) return executableFiles(fullPath, depth - 1);
-      return Promise.resolve(entry.isFile() && /\.exe$/i.test(entry.name) ? [fullPath] : []);
+      if (entry.isDirectory()) return portableExecutableFiles(fullPath, depth - 1);
+      return Promise.resolve(
+        entry.isFile() && /\.(?:dll|exe)$/i.test(entry.name) ? [fullPath] : [],
+      );
     }),
   );
   return nested.flat();
@@ -72,7 +84,7 @@ async function executableFiles(rootPath: string, depth = 2): Promise<string[]> {
 /** Infer redistributable requirements from PE import names, independent of game extensions. */
 export async function detectRuntimeDependencies(gamePath: string): Promise<string[]> {
   const verbs = new Set<string>();
-  for (const filePath of await executableFiles(gamePath)) {
+  for (const filePath of await portableExecutableFiles(gamePath)) {
     let handle: fsPromises.FileHandle | undefined;
     try {
       handle = await fsPromises.open(filePath, "r");

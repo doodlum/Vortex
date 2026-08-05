@@ -19,7 +19,13 @@ import { Switch } from "@/ui/components/form/switch/Switch";
 import { Picker } from "@/ui/components/picker/Picker";
 import { Typography } from "@/ui/components/typography/Typography";
 import GameStoreHelper from "@/util/GameStoreHelper";
-import { inspectPrefix, listInstalledProton } from "@/util/linux/proton";
+import {
+  findLatestStableProtonName,
+  getCompatDataPath,
+  inspectPrefix,
+  listInstalledProton,
+  protonConfigName,
+} from "@/util/linux/proton";
 import { findLinuxSteamPath } from "@/util/linux/steamPaths";
 import type { ISteamEntry, Steam } from "@/util/Steam";
 import { useRelativeTime } from "@/util/useRelativeTime";
@@ -31,6 +37,11 @@ import { setFeature } from "../../profile_management/actions/profiles";
 import { activeProfile } from "../../profile_management/selectors";
 import { installDependencies } from "../dependencyInstaller";
 import { detectModRuntimeDependencies } from "../modRequirements";
+import {
+  protonSetupStatus,
+  subscribeProtonSetupStatus,
+  type IProtonSetupStatus,
+} from "../setupStatus";
 import {
   clearModShaderCache,
   inspectModShaderCache,
@@ -45,6 +56,7 @@ import {
   getSteamLaunchOptions,
   SHADER_CACHE_WRAPPER,
   setSteamLaunchOptions,
+  setSteamCompatTool,
   shaderCacheInvocation,
 } from "../steamShaderSettings";
 
@@ -55,8 +67,10 @@ interface IProtonPageProps {
 
 interface IPageData {
   appId?: string;
+  compatDataPath?: string;
+  gameName?: string;
   required: string[];
-  tools: Array<{ label: string; value: string }>;
+  tools: Array<{ configName?: string; label: string; value: string }>;
   components: string[];
   shaderCache: IModShaderCacheInfo;
   shaderRoots: string[];
@@ -106,6 +120,8 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
   const [steamSettingsAvailable, setSteamSettingsAvailable] = useState(true);
   const [dependencyProgress, setDependencyProgress] = useState<number>();
   const [dependencyStatus, setDependencyStatus] = useState<string>();
+  const [pageError, setPageError] = useState<string>();
+  const [setupStatus, setSetupStatus] = useState<IProtonSetupStatus>(protonSetupStatus);
   const selected = profile?.features?.["proton-version"] ?? "";
   const automatic = profile?.features?.["proton-auto-dependencies"] !== false;
   const pageFeedback = profile?.features?.["proton-page-feedback"] as string | undefined;
@@ -128,6 +144,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
   const refresh = useCallback(async () => {
     if (profile === undefined) return;
     setLoading(true);
+    setPageError(undefined);
     try {
       const steamPath = findLinuxSteamPath();
       if (steamPath === undefined) {
@@ -141,9 +158,13 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
         discovery?.path?.toLowerCase().startsWith(game.gamePath.toLowerCase()),
       );
       const tools = await listInstalledProton(steamPath);
-      const inventory = entry?.compatDataPath
-        ? await inspectPrefix(entry.compatDataPath)
-        : undefined;
+      const compatDataPath =
+        entry === undefined
+          ? undefined
+          : (entry.compatDataPath ??
+            getCompatDataPath(path.dirname(path.dirname(entry.gamePath)), entry.appid));
+      const inventory =
+        compatDataPath === undefined ? undefined : await inspectPrefix(compatDataPath);
       const required = await detectModRuntimeDependencies(api.getState(), profile);
       const steamShaderRoots =
         entry === undefined
@@ -181,14 +202,22 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
           : await inspectPrivateShaderCache(shaderRoots[0], entry.appid);
       setData({
         appId: entry?.appid,
+        compatDataPath,
+        gameName: entry?.name,
         required,
-        tools: tools.map((tool) => ({ label: tool.name, value: tool.path })),
+        tools: tools.map((tool) => ({
+          configName: protonConfigName(tool),
+          label: tool.name,
+          value: tool.path,
+        })),
         components: inventory?.components ?? [],
         shaderCache,
         shaderRoots,
         steamShaderRoots,
         privateShaderCache,
       });
+    } catch (err: any) {
+      setPageError(err?.message ?? String(err));
     } finally {
       setLastUpdated(Date.now());
       setLoading(false);
@@ -199,22 +228,65 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
     if (active) void refresh();
   }, [active, refresh]);
 
+  useEffect(() => subscribeProtonSetupStatus(setSetupStatus), []);
+
   const options = useMemo(
-    () => [{ label: t("Steam default"), value: "" }, ...data.tools],
+    () => [{ label: t("Latest stable (recommended)"), value: "" }, ...data.tools],
     [data.tools, t],
   );
 
   const changeVersion = useCallback(
-    (value: string) => {
-      if (profile !== undefined) dispatch(setFeature(profile.id, "proton-version", value));
+    async (value: string) => {
+      if (profile === undefined || data.appId === undefined) return;
+      const steamPath = findLinuxSteamPath();
+      if (steamPath === undefined) return;
+      const configName =
+        value === ""
+          ? await findLatestStableProtonName(steamPath)
+          : data.tools.find((tool) => tool.value === value)?.configName;
+      if (configName === undefined) {
+        api.showErrorNotification(
+          "Failed to change Proton version",
+          new Error("Steam cannot identify this Proton installation"),
+        );
+        return;
+      }
+      setLoading(true);
+      try {
+        await setSteamCompatTool(data.appId, configName);
+        dispatch(setFeature(profile.id, "proton-version", value));
+        api.sendNotification({
+          type: "success",
+          message: `Steam and Vortex will use ${
+            value === ""
+              ? "the latest stable Proton"
+              : data.tools.find((tool) => tool.value === value)?.label
+          }`,
+          displayMS: 5000,
+        });
+        await refresh();
+      } catch (err) {
+        api.showErrorNotification("Failed to change Proton version", err);
+      } finally {
+        setLoading(false);
+      }
     },
-    [dispatch, profile],
+    [api, data.appId, data.tools, dispatch, profile, refresh],
   );
 
   const missing = useMemo(
     () => data.required.filter((verb) => !data.components.includes(verb)),
     [data.components, data.required],
   );
+  const selectedToolName = useMemo(
+    () =>
+      selected === ""
+        ? t("Latest stable")
+        : (data.tools.find((tool) => tool.value === selected)?.label ?? t("Unavailable")),
+    [data.tools, selected, t],
+  );
+  const visibleSetupStatus =
+    setupStatus.appId === undefined || setupStatus.appId === data.appId ? setupStatus : undefined;
 
   const satisfyDependencies = useCallback(async () => {
     if (data.appId === undefined || missing.length === 0) return;
@@ -237,7 +309,18 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
         setDependencyStatus(message);
       });
       setDependencyStatus("Verifying installed components");
+      if (data.compatDataPath === undefined) throw new Error("The game prefix is unavailable");
+      const verified = await inspectPrefix(data.compatDataPath);
+      const unresolved = missing.filter((verb) => !verified.components.includes(verb));
+      if (unresolved.length > 0) {
+        throw new Error(`Components were not installed correctly: ${unresolved.join(", ")}`);
+      }
       await refresh();
+      api.sendNotification({
+        type: "success",
+        message: "Mod requirements installed and verified",
+        displayMS: 5000,
+      });
     } catch (err) {
       api.showErrorNotification("Failed to install Windows dependencies", err);
     } finally {
@@ -245,7 +328,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
       setDependencyStatus(undefined);
       setLoading(false);
     }
-  }, [api, data.appId, missing, refresh]);
+  }, [api, data.appId, data.compatDataPath, missing, refresh]);
 
   const changeAutomatic = useCallback(
     (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -389,12 +472,73 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
       </PageHeader>
       <PageScroll className="flex flex-col gap-6 p-6">
         <section className="rounded-lg border border-stroke-weak bg-surface-low p-6">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <Typography as="h3" typographyType="heading-sm">
+                {data.gameName ?? t("Proton setup")}
+              </Typography>
+              <Typography appearance="subdued" className="mt-2">
+                {visibleSetupStatus?.phase === "error"
+                  ? t("Setup needs attention. Review the error below and try again.")
+                  : data.appId === undefined
+                    ? t("Select a Steam game profile to manage its Proton setup.")
+                    : missing.length > 0
+                      ? t("Setup needs attention before every enabled mod can run correctly.")
+                      : t("This game is ready to launch with its detected mod requirements.")}
+              </Typography>
+            </div>
+            <div className="text-right">
+              <Typography typographyType="body-sm">{selectedToolName}</Typography>
+              <Typography appearance="subdued" typographyType="body-sm">
+                {missing.length === 0
+                  ? t("Requirements ready")
+                  : t("{{count}} requirements missing", { count: missing.length })}
+              </Typography>
+            </div>
+          </div>
+          {visibleSetupStatus !== undefined &&
+            ["checking", "installing", "verifying"].includes(visibleSetupStatus.phase) && (
+              <div className="mt-4">
+                <Typography typographyType="body-sm">
+                  {t(visibleSetupStatus.message ?? "Preparing Proton")}
+                </Typography>
+                <ProgressBar max={100} min={0} now={visibleSetupStatus.progress ?? 0} />
+              </div>
+            )}
+          {visibleSetupStatus?.phase === "error" && (
+            <div className="mt-4 rounded-md bg-danger-subdued p-4">
+              <Typography typographyType="body-sm">{t("Automatic setup failed")}</Typography>
+              <Typography appearance="subdued" className="mt-1" typographyType="body-sm">
+                {visibleSetupStatus.message}
+              </Typography>
+              <Typography appearance="subdued" className="mt-2" typographyType="body-sm">
+                {t(
+                  "Keep Steam open, then use Install requirements below. Vortex will update its dependency helper, retry the detected components, and verify them.",
+                )}
+              </Typography>
+            </div>
+          )}
+          {pageError !== undefined && (
+            <div className="mt-4 rounded-md bg-danger-subdued p-4">
+              <Typography typographyType="body-sm">
+                {t("Proton setup could not be checked")}
+              </Typography>
+              <Typography appearance="subdued" className="mt-1" typographyType="body-sm">
+                {pageError}
+              </Typography>
+              <Button className="mt-3" leftIconPath={mdiRefresh} size="sm" onClick={refresh}>
+                {t("Try again")}
+              </Button>
+            </div>
+          )}
+        </section>
+        <section className="rounded-lg border border-stroke-weak bg-surface-low p-6">
           <Typography as="h3" typographyType="heading-sm">
             {t("Windows compatibility")}
           </Typography>
           <Typography appearance="subdued" className="mt-2">
             {t(
-              "Choose the Proton version Steam uses to run this profile's game and mod tools. Leave this on Steam default unless a mod or troubleshooting guide requires another version.",
+              "Choose one Proton version for both the Steam game and its mod tools. Vortex keeps them together so they use the same Windows environment.",
             )}
           </Typography>
           <Picker
@@ -402,8 +546,13 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
             className="mt-4 w-fit"
             options={options}
             value={selected}
-            onChange={changeVersion}
+            onChange={(value) => void changeVersion(value)}
           />
+          <Typography appearance="subdued" className="mt-2" typographyType="body-sm">
+            {t(
+              "Latest stable is recommended. A specific version remains selected for this profile until you change it here.",
+            )}
+          </Typography>
           <div className="mt-6 flex items-center justify-between gap-4 border-t border-stroke-weak pt-4">
             <div>
               <Typography typographyType="body-sm">

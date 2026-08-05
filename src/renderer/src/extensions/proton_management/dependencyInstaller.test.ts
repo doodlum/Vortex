@@ -59,6 +59,7 @@ describe("Proton dependency installer", () => {
       "--host",
       "flatpak",
       "update",
+      "--user",
       "--noninteractive",
       "-y",
       "com.github.Matoking.protontricks",

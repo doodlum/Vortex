@@ -9,6 +9,7 @@ import {
   findLatestStableProtonName,
   inspectPrefix,
   listInstalledProton,
+  protonConfigName,
 } from "./proton";
 
 const temporaryPaths: string[] = [];
@@ -41,6 +42,23 @@ describe("Proton management", () => {
       ["GE-Proton11-3", "custom"],
       ["Proton 11.0", "steam"],
     ]);
+  });
+
+  it("maps installed tools to the compatibility names Steam uses", () => {
+    expect(protonConfigName({ id: "one", name: "Proton 11.0", path: "one", source: "steam" })).toBe(
+      "proton_11",
+    );
+    expect(
+      protonConfigName({
+        id: "two",
+        name: "Proton - Experimental",
+        path: "two",
+        source: "steam",
+      }),
+    ).toBe("proton_experimental");
+    expect(
+      protonConfigName({ id: "three", name: "GE-Proton11-3", path: "three", source: "custom" }),
+    ).toBe("GE-Proton11-3");
   });
 
   it("defaults to the newest installed official stable Proton", async () => {
@@ -89,7 +107,7 @@ describe("Proton management", () => {
   it("infers redistributables from executable imports without a game-specific rule", async () => {
     const gamePath = await temporaryDirectory();
     await fs.writeFile(
-      path.join(gamePath, "tool.exe"),
+      path.join(gamePath, "tool.dll"),
       Buffer.from("header VCRUNTIME140.dll MSVCP140_1.dll XINPUT1_3.dll footer"),
     );
 
