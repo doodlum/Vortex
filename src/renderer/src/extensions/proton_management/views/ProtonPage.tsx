@@ -65,7 +65,7 @@ interface IProtonPageProps {
   active?: boolean;
 }
 
-type CacheView = "bar" | "ring" | "cards";
+type CacheView = "split" | "rows" | "compact";
 
 interface IPageData {
   appId?: string;
@@ -123,7 +123,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
   const [dependencyStatus, setDependencyStatus] = useState<string>();
   const [pageError, setPageError] = useState<string>();
   const [setupStatus, setSetupStatus] = useState<IProtonSetupStatus>(protonSetupStatus);
-  const [cacheView, setCacheView] = useState<CacheView>("bar");
+  const [cacheView, setCacheView] = useState<CacheView>("split");
   const selected = profile?.features?.["proton-version"] ?? "";
   const automatic = profile?.features?.["proton-auto-dependencies"] !== false;
   const pageFeedback = profile?.features?.["proton-page-feedback"] as string | undefined;
@@ -463,7 +463,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
       >
         <div className="flex shrink-0 items-center gap-x-2">
           <div className="flex items-center gap-x-1 rounded-md border border-stroke-weak p-1">
-            {(["bar", "ring", "cards"] as CacheView[]).map((view) => (
+            {(["split", "rows", "compact"] as CacheView[]).map((view) => (
               <Button
                 appearance={cacheView === view ? "strong" : "subdued"}
                 brand={cacheView === view ? "primary" : "neutral"}
@@ -471,7 +471,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
                 size="xs"
                 onClick={() => setCacheView(view)}
               >
-                {t(view === "bar" ? "Bar" : view === "ring" ? "Ring" : "Cards")}
+                {t(view === "split" ? "Split" : view === "rows" ? "Rows" : "Compact")}
               </Button>
             ))}
           </div>
@@ -661,7 +661,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
           </div>
           {cacheRedirectEnabled && data.privateShaderCache !== undefined && (
             <div className="mt-4 border-t border-stroke-weak pt-4">
-              {cacheView === "bar" && (
+              {cacheView === "split" && (
                 <div>
                   <div className="flex h-4 overflow-hidden rounded-full bg-surface-mid">
                     <div className="bg-info" style={{ width: `${100 - cacheChangedPercent}%` }} />
@@ -692,80 +692,69 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
                   </Typography>
                 </div>
               )}
-              {cacheView === "ring" && (
-                <div className="flex flex-wrap items-center gap-6">
-                  <div className="relative h-24 w-24 shrink-0">
-                    <svg className="h-24 w-24 -rotate-90" viewBox="0 0 36 36">
-                      <circle
-                        className="text-info"
-                        cx="18"
-                        cy="18"
-                        fill="none"
-                        pathLength="100"
-                        r="14"
-                        stroke="currentColor"
-                        strokeWidth="6"
-                      />
-                      <circle
-                        className="text-warning"
-                        cx="18"
-                        cy="18"
-                        fill="none"
-                        pathLength="100"
-                        r="14"
-                        stroke="currentColor"
-                        strokeDasharray={`${cacheChangedPercent} ${100 - cacheChangedPercent}`}
-                        strokeDashoffset="25"
-                        strokeWidth="6"
-                      />
-                    </svg>
-                    <Typography
-                      className="absolute inset-0 flex items-center justify-center"
-                      typographyType="heading-sm"
-                    >
-                      {t("{{percent}}%", { percent: cacheChangedPercent })}
-                    </Typography>
-                  </div>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div>
-                      <Typography typographyType="body-sm">{t("Steam copy")}</Typography>
+              {cacheView === "rows" && (
+                <div className="space-y-4">
+                  <div>
+                    <div className="mb-1 flex items-center justify-between gap-4">
+                      <Typography typographyType="body-sm">{t("Copied from Steam")}</Typography>
                       <Typography appearance="subdued" typographyType="body-sm">
                         {formatBytes(data.privateShaderCache.copiedBytes)} ·{" "}
-                        {data.privateShaderCache.copiedFiles}
+                        {data.privateShaderCache.copiedFiles} {t("files")}
                       </Typography>
                     </div>
-                    <div>
-                      <Typography typographyType="body-sm">{t("Changed")}</Typography>
+                    <div className="h-2 overflow-hidden rounded-full bg-surface-mid">
+                      <div
+                        className="bg-info h-full rounded-full"
+                        style={{ width: `${100 - cacheChangedPercent}%` }}
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <div className="mb-1 flex items-center justify-between gap-4">
+                      <Typography typographyType="body-sm">{t("Added or changed")}</Typography>
                       <Typography appearance="subdued" typographyType="body-sm">
                         {formatBytes(data.privateShaderCache.changedBytes)} ·{" "}
-                        {data.privateShaderCache.changedFiles}
+                        {data.privateShaderCache.changedFiles} {t("files")}
                       </Typography>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-surface-mid">
+                      <div
+                        className="bg-warning h-full rounded-full"
+                        style={{ width: `${cacheChangedPercent}%` }}
+                      />
                     </div>
                   </div>
                 </div>
               )}
-              {cacheView === "cards" && (
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div className="border-info rounded-md border-l-4 bg-surface-mid p-4">
-                    <Typography typographyType="body-sm">{t("Copied from Steam")}</Typography>
-                    <Typography as="div" className="mt-1" typographyType="heading-sm">
-                      {formatBytes(data.privateShaderCache.copiedBytes)}
-                    </Typography>
+              {cacheView === "compact" && (
+                <div className="rounded-md bg-surface-mid p-4">
+                  <div className="mb-3 flex items-end justify-between gap-4">
+                    <div>
+                      <Typography appearance="subdued" typographyType="body-sm">
+                        {t("Private cache")}
+                      </Typography>
+                      <Typography as="div" typographyType="heading-sm">
+                        {formatBytes(
+                          data.privateShaderCache.copiedBytes +
+                            data.privateShaderCache.changedBytes,
+                        )}
+                      </Typography>
+                    </div>
                     <Typography appearance="subdued" typographyType="body-sm">
-                      {t("{{count}} files · expected", {
-                        count: data.privateShaderCache.copiedFiles,
-                      })}
+                      {data.privateShaderCache.copiedFiles + data.privateShaderCache.changedFiles}{" "}
+                      {t("files")}
                     </Typography>
                   </div>
-                  <div className="border-warning rounded-md border-l-4 bg-surface-mid p-4">
-                    <Typography typographyType="body-sm">{t("Added or changed")}</Typography>
-                    <Typography as="div" className="mt-1" typographyType="heading-sm">
-                      {formatBytes(data.privateShaderCache.changedBytes)}
+                  <div className="flex h-2 overflow-hidden rounded-sm bg-surface-high">
+                    <div className="bg-info" style={{ width: `${100 - cacheChangedPercent}%` }} />
+                    <div className="bg-warning" style={{ width: `${cacheChangedPercent}%` }} />
+                  </div>
+                  <div className="mt-2 flex justify-between gap-4">
+                    <Typography appearance="subdued" typographyType="body-sm">
+                      {t("Steam {{percent}}%", { percent: 100 - cacheChangedPercent })}
                     </Typography>
                     <Typography appearance="subdued" typographyType="body-sm">
-                      {t("{{count}} files · resettable", {
-                        count: data.privateShaderCache.changedFiles,
-                      })}
+                      {t("Changed {{percent}}%", { percent: cacheChangedPercent })}
                     </Typography>
                   </div>
                 </div>
