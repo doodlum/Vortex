@@ -13,6 +13,12 @@ export interface IModShaderCacheInfo {
 }
 
 export interface IPrivateShaderCacheInfo {
+  changedBytes: number;
+  changedFiles: number;
+  copiedBytes: number;
+  copiedFiles: number;
+  matchesSteam: boolean;
+  missingFiles: number;
   privatePath: string;
   sourcePath?: string;
   seededAt?: number;
@@ -45,32 +51,86 @@ export async function inspectPrivateShaderCache(
   appId: string,
 ): Promise<IPrivateShaderCacheInfo> {
   const privatePath = path.join(privateShaderRoot, appId);
-  const files = await filesBelow(privatePath);
-  const stats = await Promise.all(files.map((file) => fs.stat(file).catch(() => undefined)));
-  const totals = stats.reduce(
-    (result, stat) => {
-      if (stat !== undefined) {
-        result.totalFiles += 1;
-        result.totalBytes += stat.size;
-      }
-      return result;
-    },
-    { totalBytes: 0, totalFiles: 0 },
-  );
+  const markerPath = path.join(privatePath, ".vortex-steam-source.json");
+  const files = (await filesBelow(privatePath)).filter((file) => file !== markerPath);
   try {
-    const markerPath = path.join(privatePath, ".vortex-steam-source.json");
     const [marker, markerStat] = await Promise.all([
       fs.readFile(markerPath, "utf8").then((value) => JSON.parse(value)),
       fs.stat(markerPath),
     ]);
+    const sourcePath = typeof marker.source === "string" ? marker.source : undefined;
+    if (sourcePath === undefined) throw new Error("Private cache source is unavailable");
+    const sourceFiles = (await filesBelow(sourcePath)).filter((file) => {
+      const relative = path.relative(sourcePath, file);
+      return relative.split(path.sep)[0] !== "downloads";
+    });
+    const sourceStats = new Map(
+      await Promise.all(
+        sourceFiles.map(
+          async (file) => [path.relative(sourcePath, file), await fs.stat(file)] as const,
+        ),
+      ),
+    );
+    let changedBytes = 0;
+    let changedFiles = 0;
+    let copiedBytes = 0;
+    let copiedFiles = 0;
+    const matched = new Set<string>();
+    for (const file of files) {
+      const relative = path.relative(privatePath, file);
+      const [privateStat, sourceStat] = await Promise.all([
+        fs.stat(file),
+        sourceStats.get(relative),
+      ]);
+      if (
+        sourceStat !== undefined &&
+        privateStat.size === sourceStat.size &&
+        Math.abs(privateStat.mtimeMs - sourceStat.mtimeMs) < 2
+      ) {
+        copiedBytes += privateStat.size;
+        copiedFiles += 1;
+        matched.add(relative);
+      } else {
+        changedBytes += privateStat.size;
+        changedFiles += 1;
+      }
+    }
+    const missingFiles = sourceStats.size - matched.size;
     return {
-      ...totals,
+      changedBytes,
+      changedFiles,
+      copiedBytes,
+      copiedFiles,
+      matchesSteam: changedFiles === 0 && missingFiles === 0,
+      missingFiles,
       privatePath,
       seededAt: markerStat.mtimeMs,
-      sourcePath: typeof marker.source === "string" ? marker.source : undefined,
+      sourcePath,
+      totalBytes: copiedBytes + changedBytes,
+      totalFiles: copiedFiles + changedFiles,
     };
   } catch {
-    return { ...totals, privatePath };
+    const stats = await Promise.all(files.map((file) => fs.stat(file).catch(() => undefined)));
+    const totals = stats.reduce(
+      (result, stat) => {
+        if (stat !== undefined) {
+          result.totalFiles += 1;
+          result.totalBytes += stat.size;
+        }
+        return result;
+      },
+      { totalBytes: 0, totalFiles: 0 },
+    );
+    return {
+      ...totals,
+      changedBytes: totals.totalBytes,
+      changedFiles: totals.totalFiles,
+      copiedBytes: 0,
+      copiedFiles: 0,
+      matchesSteam: false,
+      missingFiles: 0,
+      privatePath,
+    };
   }
 }
 

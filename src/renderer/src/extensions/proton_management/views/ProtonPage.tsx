@@ -287,6 +287,8 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
   );
   const visibleSetupStatus =
     setupStatus.appId === undefined || setupStatus.appId === data.appId ? setupStatus : undefined;
+  const privateCacheMatchesSteam =
+    cacheRedirectEnabled === true && data.privateShaderCache?.matchesSteam === true;
 
   const satisfyDependencies = useCallback(async () => {
     if (data.appId === undefined || missing.length === 0) return;
@@ -651,11 +653,15 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
               </Typography>
             </div>
             <Button
-              disabled={data.appId === undefined || Object.keys(toolsRunning).length > 0}
+              disabled={
+                data.appId === undefined ||
+                Object.keys(toolsRunning).length > 0 ||
+                privateCacheMatchesSteam
+              }
               leftIconPath={mdiDeleteSweep}
               onClick={clearShaderCache}
             >
-              {t("Reset cache")}
+              {privateCacheMatchesSteam ? t("Already matches Steam") : t("Reset cache")}
             </Button>
           </div>
           <div className="mt-4 flex items-center justify-between gap-4 border-t border-stroke-weak pt-4">
@@ -679,50 +685,50 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
           {cacheRedirectEnabled && data.privateShaderCache !== undefined && (
             <div className="mt-4 grid gap-3 border-t border-stroke-weak pt-4 md:grid-cols-2">
               <div>
-                <Typography typographyType="body-sm">{t("Private cache")}</Typography>
+                <Typography typographyType="body-sm">{t("Copied from Steam")}</Typography>
                 <Typography appearance="subdued" typographyType="body-sm">
                   {t(
-                    "{{size}} across {{count}} files. Mods and the game may change this copy safely.",
+                    "{{size}} across {{count}} files. This clean starting copy is meant to be here and Steam still owns the originals.",
                     {
-                      size: formatBytes(data.privateShaderCache.totalBytes),
-                      count: data.privateShaderCache.totalFiles,
+                      size: formatBytes(data.privateShaderCache.copiedBytes),
+                      count: data.privateShaderCache.copiedFiles,
                     },
                   )}
                 </Typography>
               </div>
               <div>
-                <Typography typographyType="body-sm">{t("Generated while playing")}</Typography>
+                <Typography typographyType="body-sm">
+                  {t("Added or changed while playing")}
+                </Typography>
                 <Typography appearance="subdued" typographyType="body-sm">
-                  {data.shaderCache.files === 0
-                    ? t("No new shader files have been generated since the Steam copy was created.")
-                    : t(
-                        "{{size}} across {{count}} files were created or updated by this game and its mods.",
-                        {
-                          size: formatBytes(data.shaderCache.bytes),
-                          count: data.shaderCache.files,
-                        },
-                      )}
-                </Typography>
-              </div>
-              <div>
-                <Typography typographyType="body-sm">{t("Copied from Steam")}</Typography>
-                <Typography appearance="subdued" className="break-all" typographyType="body-sm">
-                  {data.privateShaderCache.sourcePath ??
-                    t(
-                      "A Steam cache has not been copied yet. It will be created when the game starts.",
-                    )}
-                </Typography>
-              </div>
-              <div>
-                <Typography typographyType="body-sm">{t("Stored by Vortex")}</Typography>
-                <Typography appearance="subdued" className="break-all" typographyType="body-sm">
-                  {data.privateShaderCache.privatePath}
+                  {data.privateShaderCache.changedFiles === 0 &&
+                  data.privateShaderCache.missingFiles === 0
+                    ? t("Nothing. The private cache is still a one-to-one copy of Steam's cache.")
+                    : data.privateShaderCache.changedFiles === 0
+                      ? t(
+                          "The private copy is missing {{count}} files now present in Steam's cache.",
+                          {
+                            count: data.privateShaderCache.missingFiles,
+                          },
+                        )
+                      : t(
+                          "{{size}} across {{count}} files were added or changed by the game and its mods. {{missing}} Steam files are missing from the copy.",
+                          {
+                            size: formatBytes(data.privateShaderCache.changedBytes),
+                            count: data.privateShaderCache.changedFiles,
+                            missing: data.privateShaderCache.missingFiles,
+                          },
+                        )}
                 </Typography>
               </div>
               <Typography appearance="subdued" className="md:col-span-2" typographyType="body-sm">
-                {t(
-                  "Reset cache removes this private copy and immediately replaces it with a clean copy of Steam's current cache. It does not remove mods, game files, or Steam downloads.",
-                )}
+                {privateCacheMatchesSteam
+                  ? t(
+                      "Reset is not needed because every private cache file matches Steam's current copy.",
+                    )
+                  : t(
+                      "Reset cache removes only additions and changes in the private copy, then recreates it from Steam. It does not remove mods, game files, or Steam downloads.",
+                    )}
               </Typography>
             </div>
           )}

@@ -45,19 +45,37 @@ describe("mod shader cache", () => {
   it("reports the Steam source and private-cache details shown to the user", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "vortex-private-shaders-"));
     const app = path.join(root, "489830");
+    const source = path.join(root, "steam", "489830");
     await fs.mkdir(app, { recursive: true });
-    await fs.writeFile(path.join(app, "steam-cache.bin"), "steam");
+    await fs.mkdir(source, { recursive: true });
+    const sourceFile = path.join(source, "steam-cache.bin");
+    const privateFile = path.join(app, "steam-cache.bin");
+    await fs.writeFile(sourceFile, "steam");
+    await fs.copyFile(sourceFile, privateFile);
+    const sourceStat = await fs.stat(sourceFile);
+    await fs.utimes(privateFile, sourceStat.atime, sourceStat.mtime);
     await fs.writeFile(
       path.join(app, ".vortex-steam-source.json"),
       JSON.stringify({
         fingerprint: "test",
-        source: "/steam/steamapps/shadercache/489830",
+        source,
       }),
     );
 
     expect(await inspectPrivateShaderCache(root, "489830")).toMatchObject({
+      changedFiles: 0,
+      copiedFiles: 1,
+      matchesSteam: true,
       privatePath: app,
-      sourcePath: "/steam/steamapps/shadercache/489830",
+      sourcePath: source,
+      totalFiles: 1,
+    });
+
+    await fs.writeFile(path.join(app, "added.dxvk-cache"), "modded");
+    expect(await inspectPrivateShaderCache(root, "489830")).toMatchObject({
+      changedFiles: 1,
+      copiedFiles: 1,
+      matchesSteam: false,
       totalFiles: 2,
     });
     await fs.rm(root, { recursive: true, force: true });
