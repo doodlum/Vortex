@@ -190,12 +190,27 @@ export type ExternalChangeBucket = "merged" | "autoResolved" | "rest";
  */
 export function classifyExternalChange(
   change: IFileChange,
-  context: { isInstallingCollection: boolean; recentChanges?: Set<string> },
+  context: {
+    isInstallingCollection: boolean;
+    recentChanges?: Set<string>;
+    installedSources?: Set<string>;
+  },
 ): ExternalChangeBucket {
   if (path.basename(change.source).startsWith(MERGED_PATH)) {
     return "merged";
   }
   if (context.isInstallingCollection || context.recentChanges?.has(change.source)) {
+    return "autoResolved";
+  }
+  // If Vortex has removed the owning mod from its state, a missing staging
+  // source is the expected result of uninstalling it.  The destination is a
+  // surviving hardlink, not a user edit, so silently drop the stale manifest
+  // entry instead of reporting "changed outside Vortex".
+  if (
+    change.changeType === "srcdeleted" &&
+    context.installedSources !== undefined &&
+    !context.installedSources.has(change.source)
+  ) {
     return "autoResolved";
   }
   return "rest";
@@ -287,7 +302,13 @@ export function dealWithExternalChanges(
       let count = 0;
       const state = api.store.getState() as IState;
       const isInstallingCollection = getCollectionActiveSession(state) !== undefined;
-      const context = { isInstallingCollection, recentChanges };
+      const gameId = state.persistent.profiles?.[profileId]?.gameId;
+      const installedSources = new Set(
+        Object.values(state.persistent.mods?.[gameId] ?? {})
+          .map((mod) => mod?.installationPath)
+          .filter(truthy),
+      );
+      const context = { isInstallingCollection, recentChanges, installedSources };
 
       for (const typeId of Object.keys(changes)) {
         for (const change of changes[typeId]) {
