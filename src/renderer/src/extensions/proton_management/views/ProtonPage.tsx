@@ -643,37 +643,33 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
           </div>
           {cacheRedirectEnabled && data.privateShaderCache !== undefined && (
             <div className="mt-4 border-t border-stroke-weak pt-4">
-              <div className="rounded-md bg-surface-mid p-4">
-                <div className="mb-3 flex items-end justify-between gap-4">
-                  <div>
-                    <Typography appearance="subdued" typographyType="body-sm">
-                      {t("Private cache")}
-                    </Typography>
-                    <Typography as="div" typographyType="heading-sm">
-                      {formatBytes(
-                        data.privateShaderCache.copiedBytes + data.privateShaderCache.changedBytes,
-                      )}
-                    </Typography>
-                  </div>
-                  <Typography appearance="subdued" typographyType="body-sm">
-                    {data.privateShaderCache.copiedFiles + data.privateShaderCache.changedFiles}{" "}
-                    {t("files")}
-                  </Typography>
-                </div>
-                <div className="flex h-2 overflow-hidden rounded-sm bg-surface-high">
+              <div>
+                <div className="flex h-4 overflow-hidden rounded-full bg-surface-mid">
                   <div
                     className="bg-neutral-subdued"
                     style={{ width: `${100 - cacheChangedPercent}%` }}
                   />
                   <div className="bg-white" style={{ width: `${cacheChangedPercent}%` }} />
                 </div>
-                <div className="mt-2 flex justify-between gap-4">
-                  <Typography appearance="subdued" typographyType="body-sm">
-                    {t("Steam {{percent}}%", { percent: 100 - cacheChangedPercent })}
-                  </Typography>
-                  <Typography appearance="subdued" typographyType="body-sm">
-                    {t("Changed {{percent}}%", { percent: cacheChangedPercent })}
-                  </Typography>
+                <div className="mt-3 flex flex-wrap gap-x-6 gap-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className="h-3 w-3 rounded-sm bg-neutral-subdued" />
+                    <Typography typographyType="body-sm">
+                      {t("Steam copy · {{size}} · {{count}} files", {
+                        size: formatBytes(data.privateShaderCache.copiedBytes),
+                        count: data.privateShaderCache.copiedFiles,
+                      })}
+                    </Typography>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="h-3 w-3 rounded-sm border border-stroke-weak bg-white" />
+                    <Typography typographyType="body-sm">
+                      {t("Added/changed · {{size}} · {{count}} files", {
+                        size: formatBytes(data.privateShaderCache.changedBytes),
+                        count: data.privateShaderCache.changedFiles,
+                      })}
+                    </Typography>
+                  </div>
                 </div>
               </div>
               {!privateCacheMatchesSteam && (
