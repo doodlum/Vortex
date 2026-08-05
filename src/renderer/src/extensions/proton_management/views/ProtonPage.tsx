@@ -65,10 +65,11 @@ interface IProtonPageProps {
   active?: boolean;
 }
 
+type CacheView = "bar" | "ring" | "cards";
+
 interface IPageData {
   appId?: string;
   compatDataPath?: string;
-  gameName?: string;
   required: string[];
   tools: Array<{ configName?: string; label: string; value: string }>;
   components: string[];
@@ -122,6 +123,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
   const [dependencyStatus, setDependencyStatus] = useState<string>();
   const [pageError, setPageError] = useState<string>();
   const [setupStatus, setSetupStatus] = useState<IProtonSetupStatus>(protonSetupStatus);
+  const [cacheView, setCacheView] = useState<CacheView>("bar");
   const selected = profile?.features?.["proton-version"] ?? "";
   const automatic = profile?.features?.["proton-auto-dependencies"] !== false;
   const pageFeedback = profile?.features?.["proton-page-feedback"] as string | undefined;
@@ -203,7 +205,6 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
       setData({
         appId: entry?.appid,
         compatDataPath,
-        gameName: entry?.name,
         required,
         tools: tools.map((tool) => ({
           configName: protonConfigName(tool),
@@ -278,17 +279,18 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
     () => data.required.filter((verb) => !data.components.includes(verb)),
     [data.components, data.required],
   );
-  const selectedToolName = useMemo(
-    () =>
-      selected === ""
-        ? t("Latest stable")
-        : (data.tools.find((tool) => tool.value === selected)?.label ?? t("Unavailable")),
-    [data.tools, selected, t],
-  );
   const visibleSetupStatus =
     setupStatus.appId === undefined || setupStatus.appId === data.appId ? setupStatus : undefined;
   const privateCacheMatchesSteam =
     cacheRedirectEnabled === true && data.privateShaderCache?.matchesSteam === true;
+  const cacheChangedPercent = useMemo(() => {
+    const cache = data.privateShaderCache;
+    if (cache === undefined) return 0;
+    const total = cache.copiedBytes + cache.changedBytes;
+    if (total > 0) return Math.round((cache.changedBytes / total) * 100);
+    const files = cache.copiedFiles + cache.changedFiles;
+    return files === 0 ? 0 : Math.round((cache.changedFiles / files) * 100);
+  }, [data.privateShaderCache]);
 
   const satisfyDependencies = useCallback(async () => {
     if (data.appId === undefined || missing.length === 0) return;
@@ -460,6 +462,19 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
         title={t("Proton")}
       >
         <div className="flex shrink-0 items-center gap-x-2">
+          <div className="flex items-center gap-x-1 rounded-md border border-stroke-weak p-1">
+            {(["bar", "ring", "cards"] as CacheView[]).map((view) => (
+              <Button
+                appearance={cacheView === view ? "strong" : "subdued"}
+                brand={cacheView === view ? "primary" : "neutral"}
+                key={view}
+                size="xs"
+                onClick={() => setCacheView(view)}
+              >
+                {t(view === "bar" ? "Bar" : view === "ring" ? "Ring" : "Cards")}
+              </Button>
+            ))}
+          </div>
           <LastUpdated timestamp={lastUpdated} />
           <Button
             appearance="subdued"
@@ -473,67 +488,36 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
         </div>
       </PageHeader>
       <PageScroll className="flex flex-col gap-6 p-6">
-        <section className="rounded-lg border border-stroke-weak bg-surface-low p-6">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <Typography as="h3" typographyType="heading-sm">
-                {data.gameName ?? t("Proton setup")}
-              </Typography>
-              <Typography appearance="subdued" className="mt-2">
-                {visibleSetupStatus?.phase === "error"
-                  ? t("Setup needs attention. Review the error below and try again.")
-                  : data.appId === undefined
-                    ? t("Select a Steam game profile to manage its Proton setup.")
-                    : missing.length > 0
-                      ? t("Setup needs attention before every enabled mod can run correctly.")
-                      : t("This game is ready to launch with its detected mod requirements.")}
-              </Typography>
-            </div>
-            <div className="text-right">
-              <Typography typographyType="body-sm">{selectedToolName}</Typography>
-              <Typography appearance="subdued" typographyType="body-sm">
-                {missing.length === 0
-                  ? t("Requirements ready")
-                  : t("{{count}} requirements missing", { count: missing.length })}
-              </Typography>
-            </div>
-          </div>
-          {visibleSetupStatus !== undefined &&
-            ["checking", "installing", "verifying"].includes(visibleSetupStatus.phase) && (
-              <div className="mt-4">
-                <Typography typographyType="body-sm">
-                  {t(visibleSetupStatus.message ?? "Preparing Proton")}
-                </Typography>
-                <ProgressBar max={100} min={0} now={visibleSetupStatus.progress ?? 0} />
-              </div>
-            )}
-          {visibleSetupStatus?.phase === "error" && (
-            <div className="mt-4 rounded-md bg-danger-subdued p-4">
-              <Typography typographyType="body-sm">{t("Automatic setup failed")}</Typography>
-              <Typography appearance="subdued" className="mt-1" typographyType="body-sm">
-                {visibleSetupStatus.message}
-              </Typography>
-              <Typography appearance="subdued" className="mt-2" typographyType="body-sm">
-                {t(
-                  "Keep Steam open, then use Install requirements below. Vortex will update its dependency helper, retry the detected components, and verify them.",
-                )}
-              </Typography>
-            </div>
-          )}
-          {pageError !== undefined && (
-            <div className="mt-4 rounded-md bg-danger-subdued p-4">
+        {visibleSetupStatus !== undefined &&
+          ["checking", "installing", "verifying"].includes(visibleSetupStatus.phase) && (
+            <div className="rounded-lg border border-stroke-weak bg-surface-low p-4">
               <Typography typographyType="body-sm">
-                {t("Proton setup could not be checked")}
+                {t(visibleSetupStatus.message ?? "Preparing Proton")}
               </Typography>
-              <Typography appearance="subdued" className="mt-1" typographyType="body-sm">
-                {pageError}
-              </Typography>
-              <Button className="mt-3" leftIconPath={mdiRefresh} size="sm" onClick={refresh}>
-                {t("Try again")}
-              </Button>
+              <ProgressBar max={100} min={0} now={visibleSetupStatus.progress ?? 0} />
             </div>
           )}
-        </section>
+        {visibleSetupStatus?.phase === "error" && (
+          <div className="rounded-md bg-danger-subdued p-4">
+            <Typography typographyType="body-sm">{t("Automatic setup failed")}</Typography>
+            <Typography appearance="subdued" className="mt-1" typographyType="body-sm">
+              {visibleSetupStatus.message}
+            </Typography>
+          </div>
+        )}
+        {pageError !== undefined && (
+          <div className="rounded-md bg-danger-subdued p-4">
+            <Typography typographyType="body-sm">
+              {t("Proton setup could not be checked")}
+            </Typography>
+            <Typography appearance="subdued" className="mt-1" typographyType="body-sm">
+              {pageError}
+            </Typography>
+            <Button className="mt-3" leftIconPath={mdiRefresh} size="sm" onClick={refresh}>
+              {t("Try again")}
+            </Button>
+          </div>
+        )}
         <section className="rounded-lg border border-stroke-weak bg-surface-low p-6">
           <Typography as="h3" typographyType="heading-sm">
             {t("Windows compatibility")}
@@ -642,14 +626,9 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
                 {t("Mod shader cache")}
               </Typography>
               <Typography appearance="subdued" className="mt-2">
-                {t(
-                  "Mods can change shaders while you play. Vortex gives this game a private copy of Steam's shader cache so those changes cannot alter Steam's original cache or make Steam replace it.",
-                )}
-              </Typography>
-              <Typography appearance="subdued" className="mt-2" typographyType="body-sm">
                 {cacheRedirectEnabled
-                  ? t("Protection is on. The game reads and writes only its private cache.")
-                  : t("Protection is off. The game may write modded shaders into Steam's cache.")}
+                  ? t("Steam's cache is protected. Mod changes stay in a private copy.")
+                  : t("Protection is off. Mod changes may reach Steam's cache.")}
               </Typography>
             </div>
             <Button
@@ -669,9 +648,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
               <Typography typographyType="body-sm">{t("Protect Steam's shader cache")}</Typography>
               <Typography appearance="subdued" typographyType="body-sm">
                 {steamSettingsAvailable
-                  ? t(
-                      "Recommended and enabled by default. Vortex starts with Steam's cache, keeps mod changes separate, and refreshes the private copy after Steam updates.",
-                    )
+                  ? t("Recommended. Refreshes automatically when Steam's cache changes.")
                   : t("Start Steam so Vortex can read and update this game's launch settings.")}
               </Typography>
             </div>
@@ -683,53 +660,127 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
             />
           </div>
           {cacheRedirectEnabled && data.privateShaderCache !== undefined && (
-            <div className="mt-4 grid gap-3 border-t border-stroke-weak pt-4 md:grid-cols-2">
-              <div>
-                <Typography typographyType="body-sm">{t("Copied from Steam")}</Typography>
+            <div className="mt-4 border-t border-stroke-weak pt-4">
+              {cacheView === "bar" && (
+                <div>
+                  <div className="flex h-4 overflow-hidden rounded-full bg-surface-mid">
+                    <div className="bg-info" style={{ width: `${100 - cacheChangedPercent}%` }} />
+                    <div className="bg-warning" style={{ width: `${cacheChangedPercent}%` }} />
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-x-6 gap-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="bg-info h-3 w-3 rounded-sm" />
+                      <Typography typographyType="body-sm">
+                        {t("Steam copy · {{size}} · {{count}} files", {
+                          size: formatBytes(data.privateShaderCache.copiedBytes),
+                          count: data.privateShaderCache.copiedFiles,
+                        })}
+                      </Typography>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="bg-warning h-3 w-3 rounded-sm" />
+                      <Typography typographyType="body-sm">
+                        {t("Added/changed · {{size}} · {{count}} files", {
+                          size: formatBytes(data.privateShaderCache.changedBytes),
+                          count: data.privateShaderCache.changedFiles,
+                        })}
+                      </Typography>
+                    </div>
+                  </div>
+                  <Typography appearance="subdued" className="mt-2" typographyType="body-sm">
+                    {t("Blue is the clean Steam copy and is meant to be here.")}
+                  </Typography>
+                </div>
+              )}
+              {cacheView === "ring" && (
+                <div className="flex flex-wrap items-center gap-6">
+                  <div className="relative h-24 w-24 shrink-0">
+                    <svg className="h-24 w-24 -rotate-90" viewBox="0 0 36 36">
+                      <circle
+                        className="text-info"
+                        cx="18"
+                        cy="18"
+                        fill="none"
+                        pathLength="100"
+                        r="14"
+                        stroke="currentColor"
+                        strokeWidth="6"
+                      />
+                      <circle
+                        className="text-warning"
+                        cx="18"
+                        cy="18"
+                        fill="none"
+                        pathLength="100"
+                        r="14"
+                        stroke="currentColor"
+                        strokeDasharray={`${cacheChangedPercent} ${100 - cacheChangedPercent}`}
+                        strokeDashoffset="25"
+                        strokeWidth="6"
+                      />
+                    </svg>
+                    <Typography
+                      className="absolute inset-0 flex items-center justify-center"
+                      typographyType="heading-sm"
+                    >
+                      {t("{{percent}}%", { percent: cacheChangedPercent })}
+                    </Typography>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <Typography typographyType="body-sm">{t("Steam copy")}</Typography>
+                      <Typography appearance="subdued" typographyType="body-sm">
+                        {formatBytes(data.privateShaderCache.copiedBytes)} ·{" "}
+                        {data.privateShaderCache.copiedFiles}
+                      </Typography>
+                    </div>
+                    <div>
+                      <Typography typographyType="body-sm">{t("Changed")}</Typography>
+                      <Typography appearance="subdued" typographyType="body-sm">
+                        {formatBytes(data.privateShaderCache.changedBytes)} ·{" "}
+                        {data.privateShaderCache.changedFiles}
+                      </Typography>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {cacheView === "cards" && (
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="border-info rounded-md border-l-4 bg-surface-mid p-4">
+                    <Typography typographyType="body-sm">{t("Copied from Steam")}</Typography>
+                    <Typography as="div" className="mt-1" typographyType="heading-sm">
+                      {formatBytes(data.privateShaderCache.copiedBytes)}
+                    </Typography>
+                    <Typography appearance="subdued" typographyType="body-sm">
+                      {t("{{count}} files · expected", {
+                        count: data.privateShaderCache.copiedFiles,
+                      })}
+                    </Typography>
+                  </div>
+                  <div className="border-warning rounded-md border-l-4 bg-surface-mid p-4">
+                    <Typography typographyType="body-sm">{t("Added or changed")}</Typography>
+                    <Typography as="div" className="mt-1" typographyType="heading-sm">
+                      {formatBytes(data.privateShaderCache.changedBytes)}
+                    </Typography>
+                    <Typography appearance="subdued" typographyType="body-sm">
+                      {t("{{count}} files · resettable", {
+                        count: data.privateShaderCache.changedFiles,
+                      })}
+                    </Typography>
+                  </div>
+                </div>
+              )}
+              <div className="mt-3 flex items-center justify-between gap-4">
                 <Typography appearance="subdued" typographyType="body-sm">
-                  {t(
-                    "{{size}} across {{count}} files. This clean starting copy is meant to be here and Steam still owns the originals.",
-                    {
-                      size: formatBytes(data.privateShaderCache.copiedBytes),
-                      count: data.privateShaderCache.copiedFiles,
-                    },
-                  )}
+                  {privateCacheMatchesSteam
+                    ? t("Private cache matches Steam.")
+                    : data.privateShaderCache.missingFiles > 0
+                      ? t("{{count}} Steam files are missing from the copy.", {
+                          count: data.privateShaderCache.missingFiles,
+                        })
+                      : t("Reset removes only private changes.")}
                 </Typography>
               </div>
-              <div>
-                <Typography typographyType="body-sm">
-                  {t("Added or changed while playing")}
-                </Typography>
-                <Typography appearance="subdued" typographyType="body-sm">
-                  {data.privateShaderCache.changedFiles === 0 &&
-                  data.privateShaderCache.missingFiles === 0
-                    ? t("Nothing. The private cache is still a one-to-one copy of Steam's cache.")
-                    : data.privateShaderCache.changedFiles === 0
-                      ? t(
-                          "The private copy is missing {{count}} files now present in Steam's cache.",
-                          {
-                            count: data.privateShaderCache.missingFiles,
-                          },
-                        )
-                      : t(
-                          "{{size}} across {{count}} files were added or changed by the game and its mods. {{missing}} Steam files are missing from the copy.",
-                          {
-                            size: formatBytes(data.privateShaderCache.changedBytes),
-                            count: data.privateShaderCache.changedFiles,
-                            missing: data.privateShaderCache.missingFiles,
-                          },
-                        )}
-                </Typography>
-              </div>
-              <Typography appearance="subdued" className="md:col-span-2" typographyType="body-sm">
-                {privateCacheMatchesSteam
-                  ? t(
-                      "Reset is not needed because every private cache file matches Steam's current copy.",
-                    )
-                  : t(
-                      "Reset cache removes only additions and changes in the private copy, then recreates it from Steam. It does not remove mods, game files, or Steam downloads.",
-                    )}
-              </Typography>
             </div>
           )}
         </section>
