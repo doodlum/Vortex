@@ -162,7 +162,12 @@ export function loadSaveGame(
     .then(() => maintainCache())
     .catch((err) =>
       tries > 0
-        ? loadSaveGame(filePath, fileSize, onAddSavegame, full, tries - 1)
+        ? // Steam Cloud and Proton can replace a save atomically while this list is refreshing.
+          // Immediate retries hit the same short write window and incorrectly mark a healthy save
+          // as corrupted. Give the writer time to finish before parsing the file again.
+          Promise.delay((3 - tries) * 250).then(() =>
+            loadSaveGame(filePath, fileSize, onAddSavegame, full, tries - 1),
+          )
         : Promise.reject(err),
     );
 }
