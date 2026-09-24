@@ -100,6 +100,9 @@ class InstallDriver {
   private mPrepare: Bluebird<void> = Bluebird.resolve();
   private mTimeStarted: number;
   private mPostprocessing: boolean = false;
+  // set while an attempt to start is still preparing the install (revision info, the game-version
+  // prompt); the step is already "start" then, but nothing may begin the install yet
+  private mStarting: object | undefined;
 
   // Throttle the progress notification to avoid flooding Redux/UI on every single mod
   // event. (Session status writes are dispatched directly now - InstallManager is the
@@ -407,7 +410,7 @@ class InstallDriver {
     this.mLastCollection = this.mCollection = collection;
     this.mGameId = profile?.gameId ?? activeGameId(this.mApi.getState());
 
-    await this.startInstall();
+    await this.startAttempt();
     await this.initCollectionInfo();
 
     this.triggerUpdate();
@@ -579,7 +582,7 @@ class InstallDriver {
       await this.initCollectionInfo();
 
       const steps = {
-        query: this.startInstall,
+        query: this.startAttempt,
         start: this.begin,
         disclaimer: this.closeDisclaimers,
         installing: this.finishInstalling,
@@ -600,6 +603,10 @@ class InstallDriver {
       return this.mInstallDone;
     } else if (this.mStep === "disclaimer") {
       return this.mInstalledMods.length > 0 || this.mInstallDone;
+    } else if (this.mStep === "start") {
+      // the collections extension continues every update that finds the driver on "start", so
+      // "start" waits until the install is prepared and the game-version prompt answered
+      return this.mStarting === undefined;
     } else {
       return true;
     }
@@ -612,6 +619,20 @@ class InstallDriver {
   public canHide() {
     return ["disclaimer", "installing"].indexOf(this.mStep) !== -1;
   }
+
+  /** startInstall, marked as preparing until it returns, which "start" waits for (canContinue) */
+  private startAttempt = async () => {
+    const attempt = {};
+    this.mStarting = attempt;
+    try {
+      return await this.startInstall();
+    } finally {
+      // a later attempt, begun while this one's prompt was open, keeps its own mark
+      if (this.mStarting === attempt) {
+        this.mStarting = undefined;
+      }
+    }
+  };
 
   public get currentSessionId(): string | undefined {
     return this.mCurrentSessionId;
@@ -820,6 +841,7 @@ class InstallDriver {
     this.mInstalledMods = [];
     this.mInstallingMod = undefined;
     this.mInstallDone = false;
+    this.mStep = "start";
 
     const collection = this.mCollection;
     const profile = this.mProfile;
@@ -908,11 +930,6 @@ class InstallDriver {
         return false;
       }
     }
-
-    // Only now, with nothing left to ask, is the install ready to begin: the collections
-    // extension continues any update that finds the driver on "start", so setting it before the
-    // prompt let an update while it was open, or after Cancel, begin the install.
-    this.mStep = "start";
 
     this.mApi.events.emit("will-install-collection", gameId, collection.id);
 
@@ -1162,6 +1179,28 @@ class InstallDriver {
       ],
     });
   }
+}
+
+/**
+ * The collections extension's handler for every driver update: nothing on screen belongs to the
+ * "start" step, so it continues from there, and it records when the review of a collection opens.
+ */
+export function makeDriverUpdateHandler(api: IExtensionApi, driver: InstallDriver): UpdateCB {
+  return () => {
+    if (driver.step === "start") {
+      driver.continue();
+    }
+
+    if (driver.step === "review") {
+      // this is called a few times so we need to check if collection is undefined or not so we only write timestamp once
+      if (driver.collection === undefined) return;
+
+      const gameId = driver.profile.gameId;
+      const modId = driver.collection.id;
+
+      api.store.dispatch(setModAttribute(gameId, modId, "installCompleted", Date.now()));
+    }
+  };
 }
 
 export default InstallDriver;
