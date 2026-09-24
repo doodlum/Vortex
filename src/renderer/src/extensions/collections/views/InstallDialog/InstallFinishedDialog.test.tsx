@@ -15,15 +15,28 @@ vi.mock("../../../mod_management/util/findModByRef", async (importOriginal) => {
   return { ...actual, findModByRef: vi.fn(actual.findModByRef) };
 });
 
+// The real Modal keeps rendering its children while it fades out after `show` turns false, so the
+// stub always renders them and only records `show`.
 vi.mock("../../../../controls/Modal", () => {
   const passThrough = ({ children }: { children?: React.ReactNode }) => <div>{children}</div>;
-  const Modal = ({ show, children }: { show: boolean; children?: React.ReactNode }) =>
-    show ? <div data-testid="install-finished-dialog">{children}</div> : null;
+  const Modal = ({ show, children }: { show: boolean; children?: React.ReactNode }) => (
+    <div data-show={show} data-testid="install-finished-dialog">
+      {children}
+    </div>
+  );
   Modal.Header = passThrough;
   Modal.Title = passThrough;
   Modal.Body = passThrough;
   Modal.Footer = passThrough;
   return { default: Modal };
+});
+
+// Render interpolation values too, so markup compared between renders includes the optional count.
+vi.mock("react-i18next", async (importOriginal) => {
+  const actual = await importOriginal<object>();
+  const t = (key: string, options?: object) =>
+    options === undefined ? key : `${key} ${JSON.stringify(options)}`;
+  return { ...actual, useTranslation: () => ({ t }) };
 });
 
 vi.mock("../CollectionTile", () => ({ default: () => null }));
@@ -109,10 +122,12 @@ const addMod = (i: number) => {
   });
 };
 
+const triggerUpdate = () => updateHandlers.forEach((cb) => cb());
+
 const setStep = (step: string) => {
   act(() => {
     driver.step = step;
-    updateHandlers.forEach((cb) => cb());
+    triggerUpdate();
   });
 };
 
@@ -131,6 +146,20 @@ const renderDialog = () =>
 // The footer offers "No Thanks" / "View optional mods" / "Install optional mods" while optional
 // members are missing, and a single "Done" otherwise.
 const footerButtons = () => screen.getAllByRole("button").length;
+
+const dialog = () => screen.getByTestId("install-finished-dialog");
+const dialogShown = () => dialog().dataset.show === "true";
+
+// Footer order while optionals are offered: No Thanks, View optional mods, Install optional mods.
+const NO_THANKS = 0;
+const VIEW_OPTIONALS = 1;
+const INSTALL_OPTIONALS = 2;
+
+const clickFooterButton = async (index: number) => {
+  await act(async () => {
+    screen.getAllByRole("button")[index].click();
+  });
+};
 
 beforeEach(() => {
   vi.mocked(findModByRef).mockClear();
@@ -151,8 +180,19 @@ beforeEach(() => {
         updateHandlers = updateHandlers.filter((iter) => iter !== cb);
       };
     },
-    continue: vi.fn(() => Promise.resolve()),
-    installRecommended: vi.fn(),
+    // As InstallDriver: continuing from review closes it, which clears the collection...
+    continue: vi.fn(() => {
+      if (driver.step === "review") {
+        driver.collection = undefined;
+      }
+      triggerUpdate();
+      return Promise.resolve();
+    }),
+    // ...while installing the optionals leaves review with the collection still set.
+    installRecommended: vi.fn(() => {
+      driver.step = "installing";
+      triggerUpdate();
+    }),
   };
 });
 
@@ -163,7 +203,7 @@ describe("InstallFinishedDialog optional members", () => {
       addMod(200 + i);
     }
 
-    expect(screen.queryByTestId("install-finished-dialog")).toBeNull();
+    expect(dialogShown()).toBe(false);
     expect(lookups()).toBe(0);
   });
 
@@ -174,7 +214,7 @@ describe("InstallFinishedDialog optional members", () => {
     }
     setStep("review");
 
-    expect(screen.getByTestId("install-finished-dialog")).toBeInTheDocument();
+    expect(dialogShown()).toBe(true);
     expect(lookups()).toBe(OPTIONAL_COUNT);
     expect(footerButtons()).toBe(3);
   });
@@ -201,7 +241,77 @@ describe("InstallFinishedDialog optional members", () => {
       addMod(200 + i);
     }
 
-    expect(screen.queryByTestId("install-finished-dialog")).toBeNull();
+    expect(dialogShown()).toBe(false);
+    expect(lookups()).toBe(0);
+  });
+
+  it("keeps showing the offer while the dialog hides for Install optional mods", async () => {
+    driver.step = "review";
+    renderDialog();
+    const initialOffer = dialog().innerHTML;
+    addMod(INSTALLED_OPTIONALS);
+    const reviewed = dialog().innerHTML;
+    expect(reviewed).not.toBe(initialOffer);
+    vi.mocked(findModByRef).mockClear();
+
+    await clickFooterButton(INSTALL_OPTIONALS);
+
+    expect(driver.installRecommended).toHaveBeenCalledTimes(1);
+    expect(dialogShown()).toBe(false);
+    expect(dialog().innerHTML).toBe(reviewed);
+    expect(footerButtons()).toBe(3);
+
+    for (let i = 0; i < 20; i++) {
+      addMod(200 + i);
+    }
+
+    expect(dialog().innerHTML).toBe(reviewed);
+    expect(lookups()).toBe(0);
+  });
+
+  it("offers only what is still missing when review opens again after the optionals", async () => {
+    driver.step = "review";
+    renderDialog();
+    await clickFooterButton(INSTALL_OPTIONALS);
+    for (let i = INSTALLED_OPTIONALS; i < OPTIONAL_COUNT; i++) {
+      addMod(i);
+    }
+    vi.mocked(findModByRef).mockClear();
+
+    setStep("review");
+
+    expect(dialogShown()).toBe(true);
+    expect(lookups()).toBe(OPTIONAL_COUNT);
+    expect(footerButtons()).toBe(1);
+  });
+
+  it("does not carry one collection's reviewed offer over to another", async () => {
+    driver.step = "review";
+    renderDialog();
+    await clickFooterButton(INSTALL_OPTIONALS);
+    vi.mocked(findModByRef).mockClear();
+
+    driver.collection = { ...makeMod(998), type: "collection", rules: collectionRules };
+    driver.step = "query";
+    addMod(200);
+
+    expect(footerButtons()).toBe(1);
+    expect(lookups()).toBe(0);
+  });
+
+  it.each([
+    ["No Thanks", NO_THANKS],
+    ["View optional mods", VIEW_OPTIONALS],
+  ])("drops the offer when %s closes the review and clears the collection", async (_, button) => {
+    driver.step = "review";
+    renderDialog();
+    vi.mocked(findModByRef).mockClear();
+
+    await clickFooterButton(button);
+
+    expect(driver.continue).toHaveBeenCalledTimes(1);
+    expect(dialogShown()).toBe(false);
+    expect(footerButtons()).toBe(1);
     expect(lookups()).toBe(0);
   });
 
@@ -211,7 +321,7 @@ describe("InstallFinishedDialog optional members", () => {
     renderDialog();
     addMod(200);
 
-    expect(screen.queryByTestId("install-finished-dialog")).toBeNull();
+    expect(dialogShown()).toBe(false);
     expect(lookups()).toBe(0);
   });
 });
