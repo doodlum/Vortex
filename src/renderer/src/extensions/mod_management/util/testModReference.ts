@@ -18,6 +18,7 @@ import type {
 import { coerceToSemver, safeCoerce } from "./coerceToSemver";
 import { isFuzzyVersion } from "./isFuzzyVersion";
 import { globMatch, sanitizedFileName } from "./matchMemo";
+export { globMatch } from "./matchMemo";
 
 export interface IModLookupInfo {
   id?: string;

@@ -11,7 +11,7 @@ import minimatch from "minimatch";
  * expression string alone, answers every later call exactly as a fresh one would. Invalid
  * patterns throw from the constructor and are never stored, so they throw every time, as before.
  */
-const MAX_COMPILED = 2000;
+const MAX_COMPILED = 10_000;
 const compiled = new Map<string, minimatch.IMinimatch>();
 
 export function globMatch(name: string, expression: string): boolean {
