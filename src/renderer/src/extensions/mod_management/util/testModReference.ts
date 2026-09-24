@@ -132,6 +132,139 @@ export function referenceEqual(lhs: IModReference, rhs: IModReference): boolean 
 }
 
 /**
+ * JSON with object keys sorted, so equal values stringify equally whatever their key order.
+ * A key present with an undefined value is kept, as _.pick and _.isEqual keep it.
+ *
+ * Two values get the same string exactly when _.isEqual calls them equal, for values JSON can
+ * represent, which is what persisted state holds. Outside that the two differ: NaN and Infinity
+ * stringify as null, Dates and boxed primitives as {}, and a sparse array differs from one with
+ * undefined in its holes.
+ */
+function stableStringify(value: unknown): string {
+  if (value === undefined) {
+    return "\u0000undefined";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    const entries = Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`);
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * What referenceEqual compares, computed once per reference: whether it identifies a mod by id
+ * alone, and if not, a key two references share exactly when referenceEqual calls them equal.
+ * Comparing these instead of calling referenceEqual is what lets a lookup over thousands of
+ * collection rules be O(1) rather than an _.pick and _.isEqual per rule.
+ *
+ * One deliberate difference: referenceEqual throws comparing a missing reference with an id-only
+ * one, while these identities just do not match.
+ */
+export interface IReferenceIdentity {
+  idOnly: boolean;
+  id: string | undefined;
+  key: string;
+}
+
+// Cached per reference object, which assumes nobody edits a reference in place after it was
+// first compared: state is immutable, and every core site that edits a reference edits a fresh
+// copy. An extension that mutates a reference it has already dispatched would get stale matches.
+const identityCache = new WeakMap<IModReference, IReferenceIdentity>();
+const definedIdentityCache = new WeakMap<IModReference, IReferenceIdentity>();
+
+/**
+ * The identity referenceEqual compares. With `omitUndefined`, the identity of
+ * `_.omitBy(ref, _.isUndefined)` instead, which is what the mods reducer compares.
+ */
+export function referenceIdentity(
+  ref: IModReference,
+  options: { omitUndefined?: boolean } = {},
+): IReferenceIdentity {
+  const compute = (): IReferenceIdentity => {
+    const compared = options.omitUndefined === true ? _.omitBy(ref, _.isUndefined) : ref;
+    return {
+      idOnly: idOnlyRef(compared),
+      id: compared?.id,
+      key: stableStringify(_.pick(compared, REFERENCE_FIELDS)),
+    };
+  };
+  // referenceEqual accepts a missing reference, which a WeakMap cannot key on
+  if (ref === null || typeof ref !== "object") {
+    return compute();
+  }
+  const cache = options.omitUndefined === true ? definedIdentityCache : identityCache;
+  let identity = cache.get(ref);
+  if (identity === undefined) {
+    identity = compute();
+    cache.set(ref, identity);
+  }
+  return identity;
+}
+
+/** referenceEqual, on identities computed by referenceIdentity. */
+export function identitiesEqual(lhs: IReferenceIdentity, rhs: IReferenceIdentity): boolean {
+  if (lhs.idOnly || rhs.idOnly) {
+    return lhs.id === rhs.id;
+  }
+  return lhs.key === rhs.key;
+}
+
+/**
+ * Finds the first item whose reference equals a given one, as
+ * `items.find((item) => referenceEqual(refOf(item), ref))` would (within the limits noted on
+ * stableStringify and IReferenceIdentity), in O(1) per lookup after an O(n) build. For matching
+ * a collection's thousands of members against its rules.
+ */
+export class ReferenceIndex<T> {
+  #byKey = new Map<string, number>();
+  #idOnlyById = new Map<string, number>();
+  #anyById = new Map<string, number>();
+  #items: T[];
+
+  constructor(items: T[], refOf: (item: T) => IModReference) {
+    this.#items = items;
+    const first = (map: Map<string, number>, key: string, index: number) => {
+      if (!map.has(key)) {
+        map.set(key, index);
+      }
+    };
+    items.forEach((item, index) => {
+      const identity = referenceIdentity(refOf(item));
+      if (identity.id !== undefined) {
+        first(this.#anyById, identity.id, index);
+        if (identity.idOnly) {
+          first(this.#idOnlyById, identity.id, index);
+        }
+      }
+      if (!identity.idOnly) {
+        first(this.#byKey, identity.key, index);
+      }
+    });
+  }
+
+  find(ref: IModReference): T | undefined {
+    const identity = referenceIdentity(ref);
+    let index: number | undefined;
+    if (identity.idOnly) {
+      // an id-only reference equals any item with the same id
+      index = this.#anyById.get(identity.id);
+    } else {
+      // otherwise: an item with the same key, or an id-only item with the same id, whichever
+      // comes first
+      const byKey = this.#byKey.get(identity.key);
+      const byId = identity.id === undefined ? undefined : this.#idOnlyById.get(identity.id);
+      index = byKey === undefined ? byId : byId === undefined ? byKey : Math.min(byKey, byId);
+    }
+    return index === undefined ? undefined : this.#items[index];
+  }
+}
+
+/**
  * Check whether an installed mod matches a requested install spec: the same installer
  * choices, file list, and binary patches. This is deliberately separate from
  * testModReference / findModByRef, which match a mod by IDENTITY only (which mod,

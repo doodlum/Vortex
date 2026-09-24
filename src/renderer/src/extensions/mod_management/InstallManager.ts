@@ -210,6 +210,7 @@ import testModReference, {
   isRequiredRule,
   modMatchesInstallSpec,
   referenceEqual,
+  ReferenceIndex,
   ruleInstallSpec,
   testRefByIdentifiers,
 } from "./util/testModReference";
@@ -6786,26 +6787,25 @@ class InstallManager {
     dep: IDependency,
     reference: IModReference,
     recommended: boolean,
-  ): IModRule | undefined {
-    const state: IState = api.store.getState();
-    const rules: IModRule[] = getSafe(state.persistent.mods, [gameId, sourceModId, "rules"], []);
-    const oldRule = rules.find((iter) => referenceEqual(iter.reference, dep.reference));
+    rulesIndex: ReferenceIndex<IModRule>,
+  ): boolean {
+    const oldRule = rulesIndex.find(dep.reference);
 
     const type = recommended ? "recommends" : "requires";
 
     if (oldRule === undefined) {
-      return undefined;
+      return false;
     }
 
     if (oldRule.type === type && referenceEqual(oldRule.reference, reference)) {
-      return oldRule;
+      return false;
     }
 
     const updatedRule: IModRule = { ...oldRule, type, reference };
 
     api.store.dispatch(removeModRule(gameId, sourceModId, oldRule));
     api.store.dispatch(addModRule(gameId, sourceModId, updatedRule));
-    return updatedRule;
+    return true;
   }
 
   private updateRules(
@@ -6815,10 +6815,26 @@ class InstallManager {
     dependencies: IDependency[],
     recommended: boolean,
   ): Promise<void> {
+    // Matching each member with a linear referenceEqual scan of every rule is O(members x
+    // rules) and blocks the UI on a large collection even when nothing changes. Index the rules
+    // once instead, and re-index from state after a member's rule is updated, so later members
+    // see the rules as that update left them, as a fresh scan would. A rule persisted as null
+    // is left out: it can match nothing, and reading its reference would throw even when there
+    // is no member to match.
+    const indexRules = () =>
+      new ReferenceIndex<IModRule>(
+        (api.store.getState().persistent.mods?.[gameId]?.[sourceModId]?.rules ?? []).filter(
+          (rule) => rule != null,
+        ),
+        (rule) => rule.reference,
+      );
+    let rulesIndex = indexRules();
     dependencies.forEach((dep) => {
       const updatedRef: IModReference = { ...dep.reference };
       updatedRef.idHint = dep.mod?.id;
-      this.updateModRule(api, gameId, sourceModId, dep, updatedRef, recommended);
+      if (this.updateModRule(api, gameId, sourceModId, dep, updatedRef, recommended, rulesIndex)) {
+        rulesIndex = indexRules();
+      }
     });
     return Promise.resolve();
   }
