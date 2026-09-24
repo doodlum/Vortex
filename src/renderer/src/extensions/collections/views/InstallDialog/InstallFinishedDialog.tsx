@@ -8,7 +8,7 @@ import Modal from "../../../../controls/Modal";
 import Spinner from "../../../../controls/Spinner";
 import * as tooltip from "../../../../controls/TooltipControls";
 import { getGame } from "../../../../extensions/gamemode_management/util/getGame";
-import type { IMod } from "../../../../extensions/mod_management/types/IMod";
+import type { IMod, IModRule } from "../../../../extensions/mod_management/types/IMod";
 import { findModByRef } from "../../../../extensions/mod_management/util/findModByRef";
 import renderModName from "../../../../extensions/mod_management/util/modName";
 import { isOptionalRule } from "../../../../extensions/mod_management/util/testModReference";
@@ -120,14 +120,22 @@ function InstallFinishedDialog(props: IInstallFinishedDialogProps) {
 
   // The dialog stays mounted for the whole install, which changes the mods on nearly every
   // dispatch. Each lookup scans every mod, so only look optionals up while the dialog is shown.
+  // Hidden, it keeps the collection's last reviewed list: the Modal still shows it while it fades
+  // out after "Install optional mods", which leaves review with the collection still set.
+  const reviewed = React.useRef<{ collectionId: string; optionals: IModRule[] }>(undefined);
   const optionals = React.useMemo(() => {
-    if (!reviewing) {
+    if (collection?.rules === undefined) {
       return [];
     }
-    return (collection?.rules ?? []).filter(
+    if (!reviewing) {
+      return reviewed.current?.collectionId === collection.id ? reviewed.current.optionals : [];
+    }
+    const missing = collection.rules.filter(
       (rule) => isOptionalRule(rule) && findModByRef(rule.reference, mods) === undefined,
     );
-  }, [reviewing, collection?.rules, mods]);
+    reviewed.current = { collectionId: collection.id, optionals: missing };
+    return missing;
+  }, [reviewing, collection?.id, collection?.rules, mods]);
 
   const game = driver.profile !== undefined ? getGame(driver.profile.gameId) : undefined;
 
