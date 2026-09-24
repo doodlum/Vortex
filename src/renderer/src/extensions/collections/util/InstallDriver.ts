@@ -820,7 +820,6 @@ class InstallDriver {
     this.mInstalledMods = [];
     this.mInstallingMod = undefined;
     this.mInstallDone = false;
-    this.mStep = "start";
 
     const collection = this.mCollection;
     const profile = this.mProfile;
@@ -898,11 +897,22 @@ class InstallDriver {
         },
         [{ label: "Cancel" }, { label: "Continue" }],
       );
+      if (this.mCollection !== collection) {
+        // the install was paused or cancelled while the prompt was open, which already reset
+        // the driver; whatever the answer, this attempt is over
+        return false;
+      }
       if (choice.action === "Cancel") {
-        this.mInstallDone = true;
+        // end the attempt as the install dialog's "Later" does, so the driver is idle again
+        this.cancel();
         return false;
       }
     }
+
+    // Only now, with nothing left to ask, is the install ready to begin: the collections
+    // extension continues any update that finds the driver on "start", so setting it before the
+    // prompt let an update while it was open, or after Cancel, begin the install.
+    this.mStep = "start";
 
     this.mApi.events.emit("will-install-collection", gameId, collection.id);
 
