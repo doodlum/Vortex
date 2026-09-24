@@ -116,11 +116,18 @@ function InstallFinishedDialog(props: IInstallFinishedDialogProps) {
     driver.profile !== undefined ? state.persistent.mods[driver.profile?.gameId] : emptyObject,
   );
 
+  const reviewing = driver.collection !== undefined && driver.step === "review";
+
+  // The dialog stays mounted for the whole install, which changes the mods on nearly every
+  // dispatch. Each lookup scans every mod, so only look optionals up while the dialog is shown.
   const optionals = React.useMemo(() => {
+    if (!reviewing) {
+      return [];
+    }
     return (collection?.rules ?? []).filter(
       (rule) => isOptionalRule(rule) && findModByRef(rule.reference, mods) === undefined,
     );
-  }, [collection?.rules, mods]);
+  }, [reviewing, collection?.rules, mods]);
 
   const game = driver.profile !== undefined ? getGame(driver.profile.gameId) : undefined;
 
@@ -145,11 +152,7 @@ function InstallFinishedDialog(props: IInstallFinishedDialogProps) {
   const failedCount = failedRequired.length + failedOptional.length;
 
   return (
-    <Modal
-      id="install-finished-dialog"
-      show={driver.collection !== undefined && driver.step === "review"}
-      onHide={nop}
-    >
+    <Modal id="install-finished-dialog" show={reviewing} onHide={nop}>
       <Modal.Header>
         <Modal.Title>
           {hasFailures
