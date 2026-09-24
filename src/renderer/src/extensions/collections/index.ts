@@ -74,7 +74,7 @@ import { collectionsByMod } from "./util/collectionsByMod";
 import { createCollection } from "./util/createCollection";
 import { genDefaultsAction } from "./util/defaults";
 import { addExtension } from "./util/extension";
-import InstallDriver from "./util/InstallDriver";
+import InstallDriver, { makeDriverUpdateHandler } from "./util/InstallDriver";
 import { canLinkProfile, findLinkedCollection, linkProfileToCollection } from "./util/profileLink";
 import { readCollection } from "./util/readCollection";
 import { getActiveInstallSession } from "./util/selectors";
@@ -1264,22 +1264,7 @@ function once(api: IExtensionApi, collectionsCB: () => ICallbackMap) {
 
   driver = new InstallDriver(api);
 
-  driver.onUpdate(() => {
-    // currently no UI associated with the start step
-    if (driver.step === "start") {
-      driver.continue();
-    }
-
-    if (driver.step === "review") {
-      // this is called a few times so we need to check if collection is undefined or not so we only write timestamp once
-      if (driver.collection === undefined) return;
-
-      const gameId = driver.profile.gameId;
-      const modId = driver.collection.id;
-
-      api.store.dispatch(actions.setModAttribute(gameId, modId, "installCompleted", Date.now()));
-    }
-  });
+  driver.onUpdate(makeDriverUpdateHandler(api, driver));
 
   // Pause collection installation if user becomes unauthenticated
   api.onStateChange(["persistent", "nexus", "userInfo"], (oldValue, newValue) => {
