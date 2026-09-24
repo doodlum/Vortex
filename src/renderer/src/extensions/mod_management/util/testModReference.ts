@@ -222,6 +222,27 @@ export function downloadToModRef(download: IDownload): IModReference {
   return ref;
 }
 
+// Compiled glob patterns, by pattern. minimatch(name, pattern) compiles the pattern on every
+// call, and matching a collection's members compares each member's fileExpression against
+// installed mod after installed mod, re-parsing the same patterns over and over.
+const MAX_CACHED_PATTERNS = 10_000;
+const globCache = new Map<string, InstanceType<typeof minimatch.Minimatch>>();
+
+/** minimatch(fileName, pattern), with the pattern compiled once. */
+export function globMatch(fileName: string, pattern: string): boolean {
+  let matcher = globCache.get(pattern);
+  if (matcher === undefined) {
+    if (globCache.size >= MAX_CACHED_PATTERNS) {
+      globCache.clear();
+    }
+    // the same object minimatch() builds internally, which also handles the comment and
+    // empty-pattern cases minimatch() shortcuts
+    matcher = new minimatch.Minimatch(pattern);
+    globCache.set(pattern, matcher);
+  }
+  return matcher.match(fileName);
+}
+
 export function sanitizeExpression(fileName: string): string {
   // Validate input - return empty string for invalid inputs
   if (fileName == null || typeof fileName !== "string") {
@@ -360,7 +381,7 @@ function testRef(
       }
     } else {
       const baseName = sanitizeExpression(mod.fileName);
-      if (baseName !== ref.fileExpression && !minimatch(baseName, ref.fileExpression)) {
+      if (baseName !== ref.fileExpression && !globMatch(baseName, ref.fileExpression)) {
         return false;
       }
     }
@@ -463,7 +484,7 @@ export function testRefByIdentifiers(
     // a glob match against the archive name (without file extension)
     for (const fileName of fileNames) {
       const baseName = sanitizeExpression(fileName);
-      if (baseName === ref.fileExpression || minimatch(baseName, ref.fileExpression)) {
+      if (baseName === ref.fileExpression || globMatch(baseName, ref.fileExpression)) {
         return true;
       }
     }
