@@ -47,6 +47,8 @@ interface IUserlistEntry {
   name: string;
   group?: string;
   after?: Array<string | ILootReference>;
+  req?: Array<string | ILootReference>;
+  inc?: Array<string | ILootReference>;
 }
 
 interface IGamebryoRules {
@@ -59,7 +61,12 @@ function extractPluginRules(state: IStateWithLootLists, plugins: string[]): IGam
   const customisedPlugins = (state.userlist?.plugins ?? []).filter(
     (plug: IUserlistEntry) =>
       installedPlugins.has(plug.name.toLowerCase()) &&
-      (plug.after !== undefined || plug.group !== undefined),
+      // a plugin whose only rules are requires/incompatible still carries curator intent; the
+      // parser replays req/inc, so the export must not filter those entries out
+      (plug.after !== undefined ||
+        plug.group !== undefined ||
+        (plug.req?.length ?? 0) > 0 ||
+        (plug.inc?.length ?? 0) > 0),
   );
 
   // TODO this may be a bit overly simplified.
@@ -259,8 +266,15 @@ export async function parser(
 
       ["requires", "incompatible", "after"].forEach((type) => {
         const lootType = toLootType(type);
-        (plugin[type] || []).forEach((ref) => {
-          const match = (iter) => refName(iter).toUpperCase() === ref.toUpperCase();
+        // The manifest carries userlist entries verbatim, so the rules sit under the LOOT keys
+        // (req/inc/after), not under the action names. Reading plugin[type] found nothing for
+        // requires/incompatible, silently dropping every such rule the curator had set.
+        const refs = plugin[lootType] ?? plugin[type] ?? [];
+        refs.forEach((ref) => {
+          // a reference is either a plain name or {name, display, condition}; refName covers both,
+          // and calling toUpperCase on the object form throws out of the whole reduce.
+          const refUpper = refName(ref).toUpperCase();
+          const match = (iter) => refName(iter).toUpperCase() === refUpper;
 
           if (getSafe(existing, [lootType], []).find(match) === undefined) {
             prev.push({
