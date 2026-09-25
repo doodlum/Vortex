@@ -81,7 +81,7 @@ There are **two view modes** toggled by "Show individual files":
 
 ## Auto-resolution rules
 
-Not all changes reach the dialog. Two categories are resolved silently:
+Not all changes reach the dialog. These categories are resolved silently:
 
 **Merged files** (`__merged` prefix) and **collection installs / autoResolveAll** use `defaultInternalAction`:
 
@@ -89,6 +89,26 @@ Not all changes reach the dialog. Two categories are resolved silently:
 - `valchange` → `nop`
 - `deleted` → `restore` (always re-create the link)
 - `srcdeleted` → `drop`
+
+**Deployed files of uninstalled mods** also use `defaultInternalAction`, so the file is deleted
+(`drop`), but only when all of these hold:
+
+- the change is `srcdeleted`;
+- no mod of the game has that `installationPath` any more;
+- the manifest has an entry for the file, and the file at its deployed path (including the entry's
+  `target` subfolder, when the game deploys each mod into one) is a regular file whose modification
+  time still matches the entry's `time` (compared to the second). A hardlink keeps the staging
+  file's time, so an untouched orphan matches; a file the user replaced or edited does not.
+
+The recorded `time` is the staging file's modification time, which is the file's timestamp inside
+the mod archive. It identifies the archive's copy of the file, not this particular deployment. A
+file the user put there that carries the same archive timestamp, for example by extracting the same
+archive into the game folder by hand or restoring a timestamp-preserving copy, matches as well and
+is deleted without a prompt. File size is not recorded in the manifest, so it can't be used to tell
+them apart.
+
+If any check fails, or the file can't be read, the change goes to the dialog as before. This only
+affects hardlink deployment, because `srcdeleted` is raised only when the method can restore.
 
 These defaults prioritize staging as the source of truth — appropriate for automated operations where external edits should not be preserved.
 

@@ -24,6 +24,24 @@ import { MERGED_PATH } from "../modMerging";
 import type { FileAction, IFileEntry } from "../types/IFileEntry";
 
 /**
+ * Where a manifest entry is deployed, the same way the deployment method
+ * resolves it: games whose mergeMods returns a subfolder deploy each mod into
+ * its own `target` below the mod path.
+ */
+function deployedPath(
+  outputPath: string,
+  entry: Pick<IDeployedFile, "target" | "relPath">,
+): string {
+  return truthy(entry.target)
+    ? path.join(outputPath, entry.target, entry.relPath)
+    : path.join(outputPath, entry.relPath);
+}
+
+function manifestKey(source: string, relPath: string): string {
+  return JSON.stringify([source, relPath]);
+}
+
+/**
  * look at the file actions and act accordingly. Depending on the action this can
  * be a direct file operation or a modification to the previous manifest so that
  * the deployment ext runs the necessary operation
@@ -64,11 +82,20 @@ async function applyFileActions(
   // not doing anything with 'nop'. The regular deployment code is responsible for doing the right
   // thing in this case.
 
+  const targets = new Map(
+    lastDeployment.map((entry) => [manifestKey(entry.source, entry.relPath), entry.target]),
+  );
+  const destination = (entry: IFileEntry) =>
+    deployedPath(outputPath, {
+      target: targets.get(manifestKey(entry.source, entry.filePath)),
+      relPath: entry.filePath,
+    });
+
   // process the actions that the user selected in the dialog
   await Promise.all(
     (actionGroups["drop"] || []).map((entry) =>
       truthy(entry.filePath)
-        ? fs.removeAsync(path.join(outputPath, entry.filePath))
+        ? fs.removeAsync(destination(entry))
         : Promise.reject(new Error("invalid file path")),
     ),
   );
@@ -84,7 +111,7 @@ async function applyFileActions(
   await Promise.all(
     (actionGroups["import"] || []).map((entry) => {
       const source = path.join(sourcePath, entry.source, entry.filePath);
-      const deployed = path.join(outputPath, entry.filePath);
+      const deployed = destination(entry);
       // Very rarely we have a case where the files are links of each other
       // (or at least node reports that) so the copy would fail.
       // Instead of handling the errors (when we can't be sure if it's due to a bug in node.js
@@ -190,7 +217,12 @@ export type ExternalChangeBucket = "merged" | "autoResolved" | "rest";
  */
 export function classifyExternalChange(
   change: IFileChange,
-  context: { isInstallingCollection: boolean; recentChanges?: Set<string> },
+  context: {
+    isInstallingCollection: boolean;
+    recentChanges?: Set<string>;
+    installedSources?: Set<string>;
+    verifiedOrphans?: Set<IFileChange>;
+  },
 ): ExternalChangeBucket {
   if (path.basename(change.source).startsWith(MERGED_PATH)) {
     return "merged";
@@ -198,7 +230,86 @@ export function classifyExternalChange(
   if (context.isInstallingCollection || context.recentChanges?.has(change.source)) {
     return "autoResolved";
   }
+  // If Vortex has removed the owning mod from its state, a missing staging
+  // source is the expected result of uninstalling it. Dropping the entry
+  // deletes the deployed file, so only do that silently when the file was
+  // verified as still being the one Vortex deployed (see verifyOrphans).
+  // Anything else, such as a file the user put there after uninstalling, is
+  // left for the user to decide.
+  if (isOrphanCandidate(change, context.installedSources) && context.verifiedOrphans?.has(change)) {
+    return "autoResolved";
+  }
   return "rest";
+}
+
+function isOrphanCandidate(change: IFileChange, installedSources?: Set<string>): boolean {
+  return (
+    change.changeType === "srcdeleted" &&
+    installedSources !== undefined &&
+    !installedSources.has(change.source)
+  );
+}
+
+/**
+ * Find the orphan candidates whose deployed file is still the one Vortex
+ * deployed. srcdeleted is raised whenever anything exists at the destination,
+ * so it says nothing about who put the file there. A hardlink shares the
+ * staging file's modification time, which the manifest recorded at deployment;
+ * a file that was replaced or edited since has a different one. The recorded
+ * time is the staging file's mtime, which extraction sets to the file's
+ * timestamp inside the mod archive, so it is not unique to this deployment:
+ * any file carrying the archive's original timestamp for that file, such as a
+ * manual re-extraction of the same archive or a timestamp-preserving copy,
+ * also matches and is deleted without a prompt. A missing
+ * manifest entry, a destination that is not a regular file or cannot be read
+ * all count as unverified.
+ */
+async function verifyOrphans(
+  changes: { [typeId: string]: IFileChange[] },
+  modPaths: { [typeId: string]: string },
+  lastDeployment: { [typeId: string]: IDeployedFile[] },
+  installedSources?: Set<string>,
+): Promise<Set<IFileChange>> {
+  const verified = new Set<IFileChange>();
+  for (const typeId of Object.keys(changes)) {
+    const candidates = changes[typeId].filter((change) =>
+      isOrphanCandidate(change, installedSources),
+    );
+    if (candidates.length === 0 || modPaths[typeId] === undefined) {
+      continue;
+    }
+    const manifest = new Map(
+      (lastDeployment[typeId] ?? []).map((entry) => [
+        manifestKey(entry.source, entry.relPath),
+        entry,
+      ]),
+    );
+    await Promise.all(
+      candidates.map(async (change) => {
+        const entry = manifest.get(manifestKey(change.source, change.filePath));
+        if (entry?.time === undefined) {
+          return;
+        }
+        try {
+          const stats = await fs.lstatAsync(deployedPath(modPaths[typeId], entry));
+          // The manifest time comes from a directory walk that may only have
+          // whole-second precision, so compare at that granularity.
+          if (
+            stats.isFile() &&
+            Math.floor(stats.mtime.getTime() / 1000) === Math.floor(entry.time / 1000)
+          ) {
+            verified.add(change);
+          }
+        } catch (err) {
+          log("debug", "can't verify deployed file of uninstalled mod", {
+            filePath: change.filePath,
+            error: unknownToError(err).message,
+          });
+        }
+      }),
+    );
+  }
+  return verified;
 }
 
 export function changeToEntry(modTypeId: string, change: IFileChange): IFileEntry {
@@ -281,13 +392,44 @@ export function dealWithExternalChanges(
   recentChanges?: Set<string>,
 ) {
   return checkForExternalChanges(api, activator, profileId, stagingPath, modPaths, lastDeployment)
-    .then((changes: { [typeId: string]: IFileChange[] }) => {
+    .then(async (changes: { [typeId: string]: IFileChange[] }) => {
       const automaticActions: IFileEntry[] = [];
       const userChanges: { [typeId: string]: IFileChange[] } = {};
       let count = 0;
       const state = api.store.getState() as IState;
       const isInstallingCollection = getCollectionActiveSession(state) !== undefined;
-      const context = { isInstallingCollection, recentChanges };
+      // Resolve the game the same way checkForExternalChanges does. profileId can
+      // be stale (that is why the activeProfile fallback exists there), and
+      // reading persistent.profiles[profileId] directly would yield undefined for
+      // a stale id, which would make every source look uninstalled.
+      //
+      // The unknown case is specifically "we could not work out which game this
+      // is": only then is undefined right, so classifyExternalChange skips the
+      // check. Once the game IS known, a missing or empty mod table means
+      // exactly what it says — nothing is installed — so an empty Set is
+      // correct. Treating that as unknown would miss the common case of
+      // removing the last remaining mod, where the game's mod table goes away.
+      const profile = profileById(state, profileId) ?? activeProfile(state);
+      const installedSources =
+        profile === undefined
+          ? undefined
+          : new Set(
+              Object.values(state.persistent.mods?.[profile.gameId] ?? {})
+                .map((mod) => mod?.installationPath)
+                .filter(truthy),
+            );
+      const verifiedOrphans = await verifyOrphans(
+        changes,
+        modPaths,
+        lastDeployment,
+        installedSources,
+      );
+      const context = {
+        isInstallingCollection,
+        recentChanges,
+        installedSources,
+        verifiedOrphans,
+      };
 
       for (const typeId of Object.keys(changes)) {
         for (const change of changes[typeId]) {
