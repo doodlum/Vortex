@@ -25,9 +25,27 @@ import { modRuleId } from "../../../util/collectionInstallSession";
 import { reconstructSessionMods } from "../../../util/collectionSessionReconstruct";
 import type { IMod, IModAttributes, IModRule } from "../../mod_management/types/IMod";
 import type { IProfileMod } from "../../profile_management/types/IProfile";
-import { buildCollectionItemRows, collectRemovalTargets, isRemovableItem } from "./itemRows";
+import {
+  buildCollectionItemRows,
+  collectRemovalTargets,
+  isRemovableItem,
+  makeRowFallbackCache,
+} from "./itemRows";
 
 vi.mock("../../../util/log", () => ({ log: vi.fn() }));
+
+// counts how many mods the findModByRef fallback is asked to search
+const fallbackSearch = vi.hoisted(() => ({ candidates: 0 }));
+vi.mock("../../mod_management/util/findModByRef", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../mod_management/util/findModByRef")>();
+  return {
+    ...actual,
+    findModByRef: (reference: any, mods: Record<string, any>, ...rest: any[]) => {
+      fallbackSearch.candidates += Object.keys(mods).length;
+      return (actual.findModByRef as any)(reference, mods, ...rest);
+    },
+  };
+});
 
 // domain-specific conveniences over the shared builders: a requires-rule referencing
 // "mod-1" by id, and an installed mod whose attributes.name defaults to its id
@@ -515,5 +533,75 @@ describe("collectRemovalTargets", () => {
       installedModIds: ["mod-1"],
       archiveIds: ["dl-1"],
     });
+  });
+});
+
+describe("buildCollectionItemRows fallback cache", () => {
+  // tagless, hashless fuzzy members: only the findModByRef fallback can resolve these
+  const fuzzyRule = (n: number): IModRule =>
+    makeRule({ reference: { logicalFileName: `member-${n}`, versionMatch: "*" } });
+  const fuzzyMod = (n: number, version = "1.0.0"): IMod =>
+    installedMod(`mod-${n}`, { logicalFileName: `member-${n}`, version });
+  const RULES = Array.from({ length: 30 }, (_, i) => fuzzyRule(i));
+  // unrelated installed mods that every pending member's fallback has to scan
+  const OTHERS: Record<string, IMod> = Object.fromEntries(
+    Array.from({ length: 40 }, (_, i) => [`other-${i}`, installedMod(`other-${i}`)]),
+  );
+
+  function build(mods: Record<string, IMod>, cache?: ReturnType<typeof makeRowFallbackCache>) {
+    return buildCollectionItemRows(
+      { rules: RULES, mods, downloads: {}, modState: {}, sessionMods: {} },
+      undefined,
+      cache,
+    );
+  }
+
+  // one member installed per step, plus an attribute change and a removal along the way
+  function steps(): Array<Record<string, IMod>> {
+    const result: Array<Record<string, IMod>> = [];
+    let mods: Record<string, IMod> = { ...OTHERS };
+    result.push(mods);
+    for (let i = 0; i < RULES.length; i += 3) {
+      mods = { ...mods, [`mod-${i}`]: fuzzyMod(i) };
+      result.push(mods);
+      if (i === 9) {
+        mods = { ...mods, "mod-9": fuzzyMod(9, "2.0.0") };
+        result.push(mods);
+      }
+      if (i === 12) {
+        const { "mod-3": _removed, ...rest } = mods;
+        mods = rest;
+        result.push(mods);
+      }
+    }
+    return result;
+  }
+
+  it("resolves every member exactly as an uncached build does", () => {
+    const cache = makeRowFallbackCache();
+    for (const mods of steps()) {
+      const cached = build(mods, cache);
+      const uncached = build(mods);
+      expect(cached).toEqual(uncached);
+    }
+    const last = build(steps().at(-1), cache);
+    expect(last[modRuleId(RULES[9])].attributes.version).toBe("2.0.0");
+    expect(last[modRuleId(RULES[3])].status).toBe("pending");
+    expect(last[modRuleId(RULES[0])].status).toBe("installed");
+  });
+
+  it("searches only the changed mods for members that were missing", () => {
+    const all = steps();
+    const cache = makeRowFallbackCache();
+    build(all[0], cache);
+    fallbackSearch.candidates = 0;
+    // one more member installed: every still-pending member checks just that one mod
+    build(all[1], cache);
+    expect(fallbackSearch.candidates).toBeLessThanOrEqual(RULES.length);
+
+    fallbackSearch.candidates = 0;
+    build(all[1]);
+    // without the cache each pending member scans every installed mod
+    expect(fallbackSearch.candidates).toBeGreaterThan(RULES.length * Object.keys(OTHERS).length);
   });
 });
