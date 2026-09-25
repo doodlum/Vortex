@@ -376,46 +376,14 @@ export function selectPage(
   };
 }
 
-/** Maximize panel height first, width second; keep focus when areas are equal. */
-export function preferredNavigationPanel(workspace: IPanelWorkspace): string {
-  let best = { id: workspace.focusedPanel, width: -1, height: -1 };
-  const compare = (id: string, width: number, height: number) => {
-    const heightDifference = height - best.height;
-    const widthDifference = width - best.width;
-    if (
-      heightDifference > 1e-9 ||
-      (Math.abs(heightDifference) <= 1e-9 &&
-        (widthDifference > 1e-9 ||
-          (Math.abs(widthDifference) <= 1e-9 && id === workspace.focusedPanel)))
-    )
-      best = { id, width, height };
-  };
-  const visit = (node: PanelNode, width: number, height: number) => {
-    if (node.kind === "panel") {
-      compare(node.id, width, height);
-      return;
-    }
-    const first = node.ratio / 100;
-    if (node.axis === "x") {
-      visit(node.first, width * first, height);
-      visit(node.second, width * (1 - first), height);
-    } else {
-      visit(node.first, width, height * first);
-      visit(node.second, width, height * (1 - first));
-    }
-  };
-  visit(workspace.root, 1, 1);
-  return best.id;
-}
-
-/** Sidebar navigation activates an existing tab or replaces the best area's active tab. */
+/** Sidebar navigation activates an existing tab or replaces the focused panel's active tab. */
 export function navigatePage(workspace: IPanelWorkspace, pageId: string): IPanelWorkspace {
   if (!pageId) return workspace;
   for (const panelId of panelIds(workspace.root)) {
     const tab = workspace.panels[panelId].tabs.find((entry) => entry.pageId === pageId);
     if (tab) return selectPage(workspace, panelId, tab.id, pageId);
   }
-  const panelId = preferredNavigationPanel(workspace);
+  const panelId = workspace.focusedPanel;
   return selectPage(workspace, panelId, workspace.panels[panelId].activeTab, pageId);
 }
 

@@ -25,7 +25,7 @@ pop-out windows. Experimental linking is excluded by the design owner's choice.
 - Right click a sidebar page to open it in a panel or in a tab. Ctrl+click opens
   a panel; Shift+click opens a tab. Plain navigation activates that page's
   existing tab in place. If it is not open, navigation replaces the active tab
-  in the tallest panel; equal heights prefer the wider panel, then focus.
+  in the active panel, regardless of its size.
 - Each panel's always-visible tab bar holds its new-tab and close actions
   on the right. There is no new-tab action in the application title bar. Panels
   allow up to 16 tabs. Arrow keys, Home, End and Delete operate tabs; overflow

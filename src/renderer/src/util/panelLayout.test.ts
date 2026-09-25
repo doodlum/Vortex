@@ -16,7 +16,6 @@ import {
   panelIds,
   panelBounds,
   panelPlacements,
-  preferredNavigationPanel,
   previewPanelPlacement,
   resizePanel,
   selectPage,
@@ -45,7 +44,7 @@ describe("panel workspace", () => {
     expect(next.focusedPanel).toBe("panel-1");
     expect(activePage(next.panels["panel-1"])).toBe("Mods");
   });
-  it("replaces the active tab in the tallest panel, preserving its other tabs", () => {
+  it("replaces the active tab in the focused panel even when it is shorter", () => {
     let state = addPanel(createWorkspace("Mods"), "right", "Plugins");
     state = addPanel(state, "bottom-right", "Save games");
     state = addTab(state, "panel-1");
@@ -54,21 +53,19 @@ describe("panel workspace", () => {
       panel.tabs.some((tab) => tab.pageId === "Save games"),
     )!;
     state = selectPage(state, narrowPanel.id, narrowPanel.activeTab, "Save games");
-    expect(preferredNavigationPanel(state)).toBe("panel-1");
     const next = navigatePage(state, "Tools");
     expect(next.root).toBe(state.root);
-    expect(next.focusedPanel).toBe("panel-1");
-    expect(next.panels["panel-1"].tabs.map((tab) => tab.pageId)).toEqual(["Mods", "Tools"]);
-    expect(next.panels[narrowPanel.id]).toBe(state.panels[narrowPanel.id]);
+    expect(next.focusedPanel).toBe(narrowPanel.id);
+    expect(next.panels["panel-1"].tabs.map((tab) => tab.pageId)).toEqual(["Mods", "Collections"]);
+    expect(activePage(next.panels[narrowPanel.id])).toBe("Tools");
   });
-  it("prefers a wider panel at equal height, then the focused panel on a tie", () => {
+  it("replaces the focused panel even when another panel is wider", () => {
     let state = addPanel(createWorkspace("Mods"), "right", "Plugins");
-    expect(preferredNavigationPanel(state)).toBe(state.focusedPanel);
     state = resizePanel(state, state.root.id, 70);
-    expect(preferredNavigationPanel(state)).toBe("panel-1");
     const next = navigatePage(state, "Health check");
-    expect(next.focusedPanel).toBe("panel-1");
-    expect(activePage(next.panels["panel-1"])).toBe("Health check");
+    expect(next.focusedPanel).toBe(state.focusedPanel);
+    expect(activePage(next.panels["panel-1"])).toBe("Mods");
+    expect(activePage(next.panels[state.focusedPanel])).toBe("Health check");
   });
   it("migrates saved game/page partners and adds with a four-panel limit", () => {
     let state = createWorkspace("Mods", "Plugins");
