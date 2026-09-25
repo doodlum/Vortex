@@ -5,16 +5,19 @@ import { useTranslation } from "react-i18next";
 import { usePagesContext } from "@/contexts";
 import type { IMainPage } from "@/types/IMainPage";
 import { Button } from "@/ui/components/button/Button";
+import { Icon } from "@/ui/components/icon/Icon";
 import { Typography } from "@/ui/components/typography/Typography";
 import { joinClasses } from "@/ui/utils/joinClasses";
 import { activePage, panelIds, type IPanel, type PanelNode } from "@/util/panelLayout";
 
 import { DNDContainer } from "../../DNDContainer";
 import { MainPageContainer } from "../../MainPageContainer";
+import { getIconPath } from "../iconMap";
 import { PageHeaderActionsContext } from "../Page/PageHeader";
 import { PanelChooser } from "./PanelChooser";
 import { PanelCloseButton } from "./PanelCloseButton";
 import { usePanels } from "./PanelContext";
+import { PanelNewTabButton } from "./PanelNewTabButton";
 import { PanelTabs } from "./PanelTabs";
 import { usePanelActivation } from "./usePanelActivation";
 
@@ -25,18 +28,22 @@ function PanelPageHost({
   active,
   secondary,
   panelId,
+  showTabBar,
   showTabs,
   hasMultiplePanels,
   closePanel,
+  newTab,
 }: {
   page: IMainPage;
   target: HTMLElement | undefined;
   active: boolean;
   secondary: boolean;
   panelId: string | undefined;
+  showTabBar: boolean;
   showTabs: boolean;
   hasMultiplePanels: boolean;
   closePanel: (panelId: string) => void;
+  newTab: (panelId: string) => void;
 }) {
   const { t } = useTranslation();
   const container = useMemo(() => {
@@ -52,8 +59,13 @@ function PanelPageHost({
   useEffect(() => () => container.remove(), [container]);
   const closeLabel = t("Close {{page}} panel", { page: t(page.title, { ns: page.namespace }) });
   const headerActions =
-    !showTabs && hasMultiplePanels && panelId ? (
-      <PanelCloseButton label={closeLabel} onClick={() => closePanel(panelId)} />
+    !showTabBar && panelId && (showTabs || hasMultiplePanels) ? (
+      <>
+        {showTabs && <PanelNewTabButton onClick={() => newTab(panelId)} />}
+        {hasMultiplePanels && (
+          <PanelCloseButton label={closeLabel} onClick={() => closePanel(panelId)} />
+        )}
+      </>
     ) : null;
   return createPortal(
     <PageHeaderActionsContext.Provider value={headerActions}>
@@ -72,12 +84,15 @@ function PanelFrame({
   registerSlot: (id: string, node: HTMLDivElement | null) => void;
 }) {
   const { t } = useTranslation();
-  const { workspace, pages, focus, close, showTabs } = usePanels();
+  const { workspace, pages, focus, close, newTab, showTabs } = usePanels();
   const frame = usePanelActivation(panel.id, focus);
   const pageId = activePage(panel);
   const page = pages.find((entry) => entry.id === pageId);
   const label = page ? t(page.title, { ns: page.namespace }) : pageId || t("New tab");
   const multi = Object.keys(workspace.panels).length > 1;
+  const showTabBar = showTabs && panel.tabs.length > 1;
+  const showPlainActions =
+    !showTabBar && page?.newLayout !== true && (multi || (!!pageId && showTabs));
   return (
     <section
       ref={frame}
@@ -91,29 +106,51 @@ function PanelFrame({
           : "border-stroke-weak",
       ])}
     >
-      {showTabs ? (
+      {showTabBar ? (
         <PanelTabs panel={panel} />
       ) : (
-        multi && (
+        showPlainActions && (
           <div
             data-panel-plain-actions=""
-            className="flex h-10 shrink-0 items-center justify-between border-b border-stroke-weak bg-surface-panel-bar px-3"
+            className="flex h-10 shrink-0 items-center justify-between border-b border-stroke-weak bg-surface-low px-3"
           >
-            <Typography brand="none" typographyType="body-sm" className="truncate font-semibold">
-              {label}
-            </Typography>
-            <PanelCloseButton
-              label={pageId ? t("Close {{page}} panel", { page: label }) : t("Close new panel")}
-              onClick={() => close(panel.id)}
-            />
+            <div className="flex min-w-0 items-center gap-3">
+              {page ? (
+                <Icon path={page.mdi ?? getIconPath(page.icon)} size="sm" />
+              ) : (
+                <img
+                  alt=""
+                  draggable={false}
+                  className="size-4 shrink-0"
+                  src="assets/panels/tab.svg"
+                />
+              )}
+              <Typography
+                as="span"
+                brand="none"
+                typographyType="body-sm"
+                className="block truncate font-semibold"
+              >
+                {label}
+              </Typography>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              {showTabs && !!pageId && <PanelNewTabButton onClick={() => newTab(panel.id)} />}
+              {multi && (
+                <PanelCloseButton
+                  label={pageId ? t("Close {{page}} panel", { page: label }) : t("Close new panel")}
+                  onClick={() => close(panel.id)}
+                />
+              )}
+            </div>
           </div>
         )
       )}
       <div
         id={`panel-content-${panel.id}`}
-        role={showTabs ? "tabpanel" : "region"}
-        aria-labelledby={showTabs ? `panel-tab-${panel.activeTab}` : undefined}
-        aria-label={showTabs ? undefined : label}
+        role={showTabBar ? "tabpanel" : "region"}
+        aria-labelledby={showTabBar ? `panel-tab-${panel.activeTab}` : undefined}
+        aria-label={showTabBar ? undefined : label}
         className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
       >
         {!pageId ? (
@@ -239,7 +276,7 @@ function PanelTree({
 export function PanelWorkspace() {
   const { t } = useTranslation();
   const { mainPages } = usePagesContext();
-  const { workspace, focus, close, showTabs, setOrientation } = usePanels();
+  const { workspace, focus, close, newTab, showTabs, setOrientation } = usePanels();
   const root = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(false);
   const [slots, setSlots] = useState<Record<string, HTMLDivElement>>({});
@@ -340,9 +377,11 @@ export function PanelWorkspace() {
               active={!!target}
               secondary={owner?.id !== panelIds(workspace.root)[0]}
               panelId={owner?.id}
+              showTabBar={!!owner && showTabs && owner.tabs.length > 1}
               showTabs={showTabs}
               hasMultiplePanels={ids.length > 1}
               closePanel={close}
+              newTab={newTab}
             />
           );
         })}

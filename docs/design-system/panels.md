@@ -3,8 +3,8 @@
 The modern layout uses panels in place of the previous split view. The source is
 [Panel management in Figma](https://www.figma.com/design/VNqTTMrBsVaU2UZ9UlNsJj/Panel-management?node-id=106-36450).
 The whole canvas informs this implementation. The design owner selected the
-visible placement dropdown and explicitly requested that every panel retain its
-tab bar. Later experiments that hide single-tab bars do not apply. The design
+visible placement dropdown. A panel's tab bar now appears when it has multiple
+tabs; its single-tab controls move to the page header or legacy action row. The design
 owner subsequently replaced the chooser card with sidebar rows and removed
 pop-out windows. Experimental linking is excluded by the design owner's choice.
 
@@ -26,8 +26,13 @@ pop-out windows. Experimental linking is excluded by the design owner's choice.
   a panel; Shift+click opens a tab. Plain navigation activates that page's
   existing tab in place. If it is not open, navigation replaces the active tab
   in the active panel, regardless of its size.
-- Each panel's always-visible tab bar holds its new-tab and close actions
-  on the right. There is no new-tab action in the application title bar. Panels
+- Each panel with multiple tabs shows a tab bar with new-tab and close actions
+  on the right. A panel with one tab hides its tab bar and puts those actions in
+  the page header, or in a small action row for older pages. That row retains the
+  new-tab button, uses the page surface color, and displays the same page icon,
+  label, and spacing as a normal tab. The New tab chooser shows only its close
+  action there.
+  There is no new-tab action in the application title bar. Panels
   allow up to 16 tabs. Arrow keys, Home, End and Delete operate tabs; overflow
   arrows scroll by 232px. A single tab has no redundant tab-close button.
   Tab bars use the sidebar's 40px height, 16px icons, semibold `body-sm`
@@ -43,7 +48,7 @@ pop-out windows. Experimental linking is excluded by the design owner's choice.
   chooser uses the sidebar's surface and shared NavigationButton rows in sidebar
   order. It lists only the current sidebar's pages that are not already open in another tab or panel,
   without search, section headings, or a split-view card. A new panel has one
-  close control in its tab bar.
+  close control in its action row.
 - Drag anywhere in a 12px gutter to resize. Arrow keys also resize a focused
   divider; Home/End choose its limits, and double click resets it to half.
 - Every page held by an open tab has the selected sidebar background, including

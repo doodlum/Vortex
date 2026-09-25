@@ -10,6 +10,7 @@ import { activePage, MAX_TABS, type IPanel } from "@/util/panelLayout";
 
 import { getIconPath } from "../iconMap";
 import { usePanels } from "./PanelContext";
+import { PanelNewTabButton } from "./PanelNewTabButton";
 
 export function PanelTabs({ panel }: { panel: IPanel }) {
   const { t } = useTranslation();
@@ -111,7 +112,16 @@ export function PanelTabs({ panel }: { panel: IPanel }) {
                     const doc = event.currentTarget.ownerDocument;
                     const next = panel.tabs[index === 0 ? 1 : index - 1].id;
                     close(panel.id, tab.id);
-                    requestAnimationFrame(() => doc.getElementById(`panel-tab-${next}`)?.focus());
+                    requestAnimationFrame(() => {
+                      const nextTab = doc.getElementById(`panel-tab-${next}`);
+                      if (nextTab) nextTab.focus();
+                      else
+                        doc
+                          .querySelector<HTMLElement>(
+                            `[data-panel-id="${panel.id}"] [data-panel-new-tab]`,
+                          )
+                          ?.focus();
+                    });
                     return;
                   }
                   const next =
@@ -182,13 +192,12 @@ export function PanelTabs({ panel }: { panel: IPanel }) {
             () => scroll.current?.scrollBy({ left: 232, behavior: "smooth" }),
             !edges.right,
           )}
-        {!blankPanel &&
-          action(
-            t("Open new tab"),
-            "tab-add",
-            () => newTab(panel.id),
-            panel.tabs.length >= MAX_TABS,
-          )}
+        {!blankPanel && (
+          <PanelNewTabButton
+            onClick={() => newTab(panel.id)}
+            disabled={panel.tabs.length >= MAX_TABS}
+          />
+        )}
         {Object.keys(workspace.panels).length > 1 &&
           (blankPanel || !!activePage(panel)) &&
           action(
