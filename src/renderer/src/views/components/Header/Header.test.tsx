@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -33,5 +33,11 @@ describe("Header", () => {
   it("cancels the page zoom so the title bar stays at 100%", () => {
     render(<Header />);
     expect(screen.getByTestId("window-titlebar").style.zoom).toBe(CHROME_ZOOM);
+  });
+
+  it("puts the zoom control in the title bar", () => {
+    render(<Header />);
+    const titleBar = screen.getByTestId("window-titlebar");
+    expect(within(titleBar).getByTestId("zoom-control")).toBeVisible();
   });
 });
