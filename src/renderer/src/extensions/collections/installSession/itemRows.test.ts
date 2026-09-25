@@ -37,7 +37,7 @@ vi.mock("../../../util/log", () => ({ log: vi.fn() }));
 // counts how many mods the findModByRef fallback is asked to search
 const fallbackSearch = vi.hoisted(() => ({ candidates: 0 }));
 vi.mock("../../mod_management/util/findModByRef", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../mod_management/util/findModByRef")>();
+  const actual = await importOriginal<Record<string, any>>();
   return {
     ...actual,
     findModByRef: (reference: any, mods: Record<string, any>, ...rest: any[]) => {
