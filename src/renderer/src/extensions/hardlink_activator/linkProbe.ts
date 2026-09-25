@@ -4,6 +4,7 @@ import { getErrorCode, getErrorMessageOrDefault } from "@vortex/shared";
 
 import { log } from "../../logging";
 import * as fs from "../../util/fs";
+import { scopedProbe } from "../mod_management/util/probeScope";
 
 /** the synchronous file operations the probe needs; injectable so tests can count them */
 export interface ILinkProbeOps {
@@ -20,22 +21,7 @@ const defaultOps: ILinkProbeOps = {
   removeAsync: (filePath) => fs.removeAsync(filePath),
 };
 
-/**
- * How long a successful probe of a directory is trusted. `isSupported` runs on every
- * getCurrentActivator call - several times per installed mod during a collection install, once
- * per mod type - and each probe writes, links and deletes a canary file synchronously on the
- * renderer. A directory that could hard link a moment ago still can, so a recent success is
- * reused; failures are never cached, so a directory that starts working is noticed immediately.
- */
-export const LINK_PROBE_TTL_MS = 60 * 1000;
-
-// canary directory -> time of the last successful probe
-const successfulProbes = new Map<string, number>();
-
-/** forget every cached probe result (tests) */
-export function resetLinkProbeCache(): void {
-  successfulProbes.clear();
-}
+export type LinkProbeResult = "linked" | "refused" | "inconclusive";
 
 function cleanUpCanary(canary: string, ops: ILinkProbeOps, installationPath: string): void {
   try {
@@ -60,24 +46,13 @@ function cleanUpCanary(canary: string, ops: ILinkProbeOps, installationPath: str
   }
 }
 
-/**
- * Test whether hard links can be created in `installationPath` by linking a canary file.
- * Returns true if they can (or the test was inconclusive because of EMFILE, which shouldn't keep
- * us from hard linking), false if the filesystem refused.
- */
-export function canHardlinkIn(
+/** link a canary file in `installationPath` */
+export function probeHardlink(
   installationPath: string,
   ops: ILinkProbeOps = defaultOps,
-  now: number = Date.now(),
-): boolean {
-  const lastSuccess = successfulProbes.get(installationPath);
-  if (lastSuccess !== undefined && now - lastSuccess < LINK_PROBE_TTL_MS) {
-    return true;
-  }
-
+): LinkProbeResult {
   const canary = path.join(installationPath, "__vortex_canary.tmp");
-  let supported = true;
-  let conclusive = true;
+  let result: LinkProbeResult = "linked";
 
   try {
     try {
@@ -89,20 +64,25 @@ export function canHardlinkIn(
     ops.linkSync(canary, canary + ".link");
   } catch (err) {
     // EMFILE shouldn't keep us from using hard linking
-    if (getErrorCode(err) !== "EMFILE") {
-      // the error code we're actually getting is EISDIR, which makes no sense at all
-      supported = false;
-    } else {
-      conclusive = false;
-    }
+    // the error code we're actually getting otherwise is EISDIR, which makes no sense at all
+    result = getErrorCode(err) === "EMFILE" ? "inconclusive" : "refused";
   }
 
   cleanUpCanary(canary, ops, installationPath);
+  return result;
+}
 
-  if (supported && conclusive) {
-    successfulProbes.set(installationPath, now);
-  } else {
-    successfulProbes.delete(installationPath);
-  }
-  return supported;
+/**
+ * Whether hard links can be created in `installationPath`. True if the canary linked or the test
+ * was inconclusive (EMFILE), false if the filesystem refused. Within one probe scope (one
+ * getCurrentActivator call) a conclusive answer for the folder is reused; outside a scope, and
+ * after an inconclusive answer, it probes every time.
+ */
+export function canHardlinkIn(installationPath: string, ops: ILinkProbeOps = defaultOps): boolean {
+  const result = scopedProbe(
+    `hardlink-canary:${installationPath}`,
+    () => probeHardlink(installationPath, ops),
+    (res) => res !== "inconclusive",
+  );
+  return result !== "refused";
 }
