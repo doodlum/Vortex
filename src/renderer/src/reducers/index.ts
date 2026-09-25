@@ -27,7 +27,9 @@ import { downloadsReducer } from "./downloads";
 import { loReducer } from "./loadOrder";
 import { notificationsReducer } from "./notifications";
 import { notificationSettingsReducer } from "./notificationSettings";
+import { panelsReducer } from "./panels";
 import { sessionReducer } from "./session";
+import { splitViewReducer } from "./splitView";
 import { tableReducer } from "./tables";
 import { toolbarReducer } from "./toolbars";
 import { userReducer } from "./user";
@@ -257,6 +259,8 @@ export function buildReducerTree(extensionReducers: IExtensionReducer[]): Reduce
       notifications: notificationsReducer,
     },
     settings: {
+      splitView: splitViewReducer,
+      panels: panelsReducer,
       window: windowReducer,
       tables: tableReducer,
       toolbars: toolbarReducer,

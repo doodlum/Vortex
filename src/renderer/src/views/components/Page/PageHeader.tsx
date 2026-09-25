@@ -1,4 +1,4 @@
-import React, { type HTMLAttributes, type ReactNode } from "react";
+import React, { createContext, useContext, type HTMLAttributes, type ReactNode } from "react";
 
 import { type IPictogramName, Pictogram } from "@/ui/components/pictogram/Pictogram";
 import { Typography } from "@/ui/components/typography/Typography";
@@ -14,6 +14,9 @@ export type IPageHeaderProps = Omit<HTMLAttributes<HTMLDivElement>, "children"> 
   pictogramName?: IPictogramName;
   subtitle?: string;
 } & XOr<{ title: string }, { customTitle: ReactNode | ((compact: boolean) => ReactNode) }>;
+
+/** Panel chrome can occupy the header's trailing toolbar slot without changing page APIs. */
+export const PageHeaderActionsContext = createContext<ReactNode>(null);
 
 /**
  * Full-bleed header for a non-scrolling `Page`. The bar itself spans the full
@@ -44,6 +47,8 @@ export const PageHeader = ({
   ...rest
 }: IPageHeaderProps) => {
   const { compact, scrolled } = usePage();
+  const panelActions = useContext(PageHeaderActionsContext);
+  const pageActions = typeof children === "function" ? children(compact) : children;
 
   return (
     <div
@@ -77,7 +82,17 @@ export const PageHeader = ({
               )}
             </div>
 
-            {typeof children === "function" ? children(compact) : children}
+            {(pageActions || panelActions) && (
+              <div className="flex shrink-0 items-center gap-3">
+                {pageActions}
+                {panelActions && (
+                  <div data-panel-header-actions="" className="flex items-center gap-3">
+                    {pageActions && <span aria-hidden="true" className="h-6 w-px bg-stroke-weak" />}
+                    {panelActions}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {!!subtitle && (

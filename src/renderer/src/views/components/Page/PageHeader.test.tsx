@@ -16,7 +16,7 @@ vi.mock("react-redux", async () => {
 });
 
 import { Page } from "./Page";
-import { PageHeader } from "./PageHeader";
+import { PageHeader, PageHeaderActionsContext } from "./PageHeader";
 import { PageScroll } from "./PageScroll";
 
 const renderPage = () =>
@@ -80,5 +80,22 @@ describe("PageHeader", () => {
     scrollDown();
 
     expect(screen.getByTestId("header")).toHaveClass("shadow-md");
+  });
+  it("places panel controls after the page toolbar with a divider", () => {
+    render(
+      <PageHeaderActionsContext.Provider value={<button>Close panel</button>}>
+        <Page scrollable={false}>
+          <PageHeader data-testid="header" title="Mods">
+            <button>Page toolbar</button>
+          </PageHeader>
+        </Page>
+      </PageHeaderActionsContext.Provider>,
+    );
+
+    const header = screen.getByTestId("header");
+    const actions = header.querySelector("[data-panel-header-actions]") as HTMLElement;
+    expect(actions).toContainElement(screen.getByRole("button", { name: "Close panel" }));
+    expect(actions.querySelector("span[aria-hidden='true']")).toHaveClass("w-px");
+    expect(screen.getByRole("button", { name: "Page toolbar" })).toBeVisible();
   });
 });

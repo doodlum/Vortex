@@ -9,6 +9,7 @@ import { Typography } from "@/ui/components/typography/Typography";
 import { joinClasses } from "@/ui/utils/joinClasses";
 import type { XOr } from "@/ui/utils/types";
 
+import { usePanels } from "../../panels/PanelContext";
 import { SpineButton } from "../SpineButton";
 import { useSpineContext } from "../SpineContext";
 import { DownloadFlyout } from "./DownloadFlyout";
@@ -82,6 +83,7 @@ const ProgressRing = ({
 
 export const DownloadButton = () => {
   const { selection, selectDownloads } = useSpineContext();
+  const { navigate } = usePanels();
 
   const isActive = selection.type === "downloads";
 
@@ -133,7 +135,7 @@ export const DownloadButton = () => {
         iconPath={!showProgress && (isActive ? mdiDownload : mdiDownloadOutline)}
         isActive={isActive}
         title={LABEL}
-        onClick={() => selectDownloads()}
+        onClick={(event) => (event.ctrlKey ? navigate("Downloads", "panel") : selectDownloads())}
         onMouseEnter={onTriggerEnter}
         onMouseLeave={onTriggerLeave}
       >

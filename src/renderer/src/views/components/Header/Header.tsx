@@ -13,6 +13,7 @@ import {
   gameProfiles as gameProfilesSelector,
   knownGames as knownGamesSelector,
 } from "../../../util/selectors";
+import { PanelToolbar } from "../panels/PanelToolbar";
 import { useSpineContext } from "../Spine/SpineContext";
 import { PremiumIndicator } from "./premium/PremiumIndicator";
 import { ProfileSection } from "./profile/ProfileSection";
@@ -69,7 +70,7 @@ export const Header: FC<React.PropsWithChildren<unknown>> = () => {
 
         <Typography
           brand="none"
-          className="flex grow items-center gap-x-2 overflow-hidden font-semibold whitespace-nowrap"
+          className="flex max-w-64 items-center gap-x-2 overflow-hidden font-semibold whitespace-nowrap"
         >
           <span className="truncate text-neutral-strong">{title}</span>
 
@@ -80,6 +81,7 @@ export const Header: FC<React.PropsWithChildren<unknown>> = () => {
       </div>
 
       <div className="flex shrink-0 items-center gap-x-2" style={{ WebkitAppRegion: "no-drag" }}>
+        <PanelToolbar />
         <StagingIndicator />
 
         <VersionIndicator />

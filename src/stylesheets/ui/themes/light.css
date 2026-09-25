@@ -18,6 +18,11 @@
     /* Surface — elevation climbs towards white rather than away from black. */
     --color-surface-base: var(--color-neutral-300);
     --color-surface-low: var(--color-neutral-200);
+    --color-surface-panel-bar: color-mix(
+        in srgb,
+        var(--color-surface-base) 60%,
+        var(--color-surface-low)
+    );
     --color-surface-mid: var(--color-neutral-100);
     --color-surface-high: var(--color-neutral-50);
     --color-surface-inverted: var(--color-neutral-950);
