@@ -1,10 +1,11 @@
 /**
  * The hard link deployment method's isSupported, as getCurrentActivator/allTypesSupported call it:
- * once per mod type, on every call. The canary link test must run once for the staging folder,
- * not once per type per call, while write access and the same-drive check still run every time.
+ * once per mod type, on every call. Separate calls answer exactly as before (every check, including
+ * the canary link, runs each time), while one getCurrentActivator call links the canary once for
+ * the staging folder instead of once per type per support check.
  */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fsMock = vi.hoisted(() => ({
   constants: { W_OK: 2 },
@@ -32,8 +33,11 @@ vi.mock("../gamemode_management/util/getGame", () => ({
 
 import type { IDeploymentMethod } from "../mod_management/types/IDeploymentMethod";
 import allTypesSupported from "../mod_management/util/allTypesSupported";
+import {
+  getCurrentActivator,
+  registerDeploymentMethod,
+} from "../mod_management/util/deploymentMethods";
 import init from "./index";
-import { resetLinkProbeCache } from "./linkProbe";
 
 function makeActivator(): IDeploymentMethod {
   let activator: IDeploymentMethod;
@@ -49,12 +53,14 @@ function makeActivator(): IDeploymentMethod {
 const state = (stagingPath: string) =>
   ({
     stagingPath,
-    settings: { gameMode: { discovered: { fallout4: { path: "D:\\game" } } } },
+    settings: {
+      gameMode: { discovered: { fallout4: { path: "D:\\game" } } },
+      mods: { activator: {} },
+    },
   }) as any;
 
 describe("hardlink isSupported", () => {
   beforeEach(() => {
-    resetLinkProbeCache();
     vi.clearAllMocks();
   });
 
@@ -67,17 +73,14 @@ describe("hardlink isSupported", () => {
     expect(result.errors).toEqual([]);
   });
 
-  it("links the canary once across repeated calls for every mod type", () => {
+  it("still links the canary on every separate support check", () => {
     const activator = makeActivator();
     for (let i = 0; i < 20; ++i) {
       allTypesSupported(activator, state("D:\\staging"), "fallout4", ["", "root", "enb"]);
     }
-    expect(fsMock.linkSync).toHaveBeenCalledTimes(1);
-    expect(fsMock.writeFileSync).toHaveBeenCalledTimes(1);
-    // the cheap checks still run on every call, so losing write access is noticed at once
+    expect(fsMock.linkSync).toHaveBeenCalledTimes(60);
     expect(fsMock.accessSync).toHaveBeenCalledTimes(60);
   });
-
   it("still rejects a staging folder on another drive without a canary", () => {
     const result = allTypesSupported(makeActivator(), state("E:\\staging"), "fallout4", [""]);
     expect(result.errors).toHaveLength(1);
@@ -94,5 +97,51 @@ describe("hardlink isSupported", () => {
     expect(first.errors).toHaveLength(1);
     expect(second.errors).toHaveLength(1);
     fsMock.linkSync.mockReset();
+  });
+});
+
+describe("getCurrentActivator with the hard link method", () => {
+  let hardlink: IDeploymentMethod;
+  beforeAll(() => {
+    hardlink = makeActivator();
+    registerDeploymentMethod(hardlink);
+  });
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fsMock.linkSync.mockReset();
+  });
+
+  it("links the canary once per call instead of once per type per check", () => {
+    for (let i = 0; i < 20; ++i) {
+      expect(getCurrentActivator(state("D:\\staging"), "fallout4", true)).toBe(hardlink);
+    }
+    // unshared: 3 types for the default search + 3 for the re-check, per call = 120
+    expect(fsMock.linkSync).toHaveBeenCalledTimes(20);
+    expect(fsMock.writeFileSync).toHaveBeenCalledTimes(20);
+    // the other checks still run for every type
+    expect(fsMock.accessSync).toHaveBeenCalledTimes(120);
+  });
+
+  it("notices on the very next call that the folder stopped linking, and started again", () => {
+    expect(getCurrentActivator(state("D:\\staging"), "fallout4", true)).toBe(hardlink);
+    fsMock.linkSync.mockImplementation(() => {
+      throw Object.assign(new Error("EISDIR"), { code: "EISDIR" });
+    });
+    expect(getCurrentActivator(state("D:\\staging"), "fallout4", true)).toBeUndefined();
+    fsMock.linkSync.mockReset();
+    expect(getCurrentActivator(state("D:\\staging"), "fallout4", true)).toBe(hardlink);
+  });
+
+  it("re-probes within a call after an inconclusive EMFILE, as before", () => {
+    fsMock.linkSync.mockImplementation(() => {
+      throw Object.assign(new Error("EMFILE"), { code: "EMFILE" });
+    });
+    expect(getCurrentActivator(state("D:\\staging"), "fallout4", true)).toBe(hardlink);
+    expect(fsMock.linkSync).toHaveBeenCalledTimes(6);
+  });
+
+  it("rejects another drive without a canary", () => {
+    expect(getCurrentActivator(state("E:\\staging"), "fallout4", true)).toBeUndefined();
+    expect(fsMock.linkSync).not.toHaveBeenCalled();
   });
 });
