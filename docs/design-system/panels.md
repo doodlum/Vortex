@@ -46,8 +46,9 @@ pop-out windows. Experimental linking is excluded by the design owner's choice.
   close control in its tab bar.
 - Drag anywhere in a 12px gutter to resize. Arrow keys also resize a focused
   divider; Home/End choose its limits, and double click resets it to half.
-- Only the focused page is selected in the sidebar, with an outline when several
-  panels are present. The panel frame retains a visible weak
+- Every page held by an open tab has the selected sidebar background, including
+  inactive tabs. Only the page visible in the focused panel has the sidebar
+  outline and `aria-current="page"`. The panel frame retains a visible weak
   border even when it is the only panel. The old paired row and split opener are gone.
 - Panels stay within the main application window. Clicking anywhere in a panel,
   or moving keyboard focus into its content, selects and highlights that panel.

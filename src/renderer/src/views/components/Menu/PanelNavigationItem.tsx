@@ -12,6 +12,9 @@ import { MenuButton } from "./MenuButton";
 export function PanelNavigationItem({ page }: { page: IMainPage }) {
   const { t } = useTranslation();
   const { workspace, navigate, showTabs } = usePanels();
+  const open = Object.values(workspace.panels).some((panel) =>
+    panel.tabs.some((tab) => tab.pageId === page.id),
+  );
   const focused = activePage(workspace.panels[workspace.focusedPanel]) === page.id;
   const label = t(page.title, { ns: page.namespace });
   return (
@@ -44,13 +47,9 @@ export function PanelNavigationItem({ page }: { page: IMainPage }) {
             {...props}
             Badge={page.menuBadge}
             iconPath={page.mdi ?? getIconPath(page.icon)}
-            isActive={focused}
+            isActive={open}
             aria-current={focused ? "page" : undefined}
-            className={
-              focused && Object.keys(workspace.panels).length > 1
-                ? "w-full ring-1 ring-stroke-moderate ring-inset"
-                : "w-full"
-            }
+            className={focused ? "w-full ring-1 ring-stroke-moderate ring-inset" : "w-full"}
             onClick={(event) =>
               navigate(
                 page.id,
