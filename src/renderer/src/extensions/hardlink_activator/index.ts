@@ -1,7 +1,7 @@
 import * as path from "path";
 import * as util from "util";
 
-import { getErrorCode, getErrorMessageOrDefault, unknownToError } from "@vortex/shared";
+import { getErrorCode, unknownToError } from "@vortex/shared";
 import PromiseBB from "bluebird";
 import type { TFunction } from "i18next";
 import turbowalk from "turbowalk";
@@ -22,6 +22,7 @@ import type {
   IDeploymentMethod,
   IUnavailableReason,
 } from "../mod_management/types/IDeploymentMethod";
+import { canHardlinkIn } from "./linkProbe";
 
 export class FileFound extends Error {
   constructor(name: string) {
@@ -157,50 +158,13 @@ class DeploymentMethod extends LinkingDeployment {
       };
     }
 
-    const canary = path.join(installationPath, "__vortex_canary.tmp");
-
-    let res: IUnavailableReason;
-
-    try {
-      try {
-        fs.removeSync(canary + ".link");
-      } catch {
-        // nop
-      }
-      fs.writeFileSync(canary, "Should only exist temporarily, feel free to delete");
-      fs.linkSync(canary, canary + ".link");
-    } catch (err) {
-      // EMFILE shouldn't keep us from using hard linking
-      const code = getErrorCode(err);
-      if (code !== "EMFILE") {
-        // the error code we're actually getting is EISDIR, which makes no sense at all
-        res = {
-          description: (t) => t("Filesystem doesn't support hard links."),
-        };
-      }
+    if (!canHardlinkIn(installationPath)) {
+      return {
+        description: (t) => t("Filesystem doesn't support hard links."),
+      };
     }
 
-    try {
-      fs.removeSync(canary + ".link");
-      fs.removeSync(canary);
-    } catch {
-      // cleanup failed, this is almost certainly due to an AV jumping in to check these new files,
-      // I mean, why would I be able to create the files but not delete them?
-      // just try again later - can't do that synchronously though
-      PromiseBB.delay(100)
-        .then(() => fs.removeAsync(canary + ".link"))
-        .then(() => fs.removeAsync(canary))
-        .catch((err) => {
-          log(
-            "error",
-            "failed to clean up canary file. This indicates we were able to create " +
-              "a file in the target directory but not delete it",
-            { installationPath, message: getErrorMessageOrDefault(err) },
-          );
-        });
-    }
-
-    return res;
+    return undefined;
   }
 
   public finalize(
