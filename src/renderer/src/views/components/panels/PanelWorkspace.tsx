@@ -13,7 +13,15 @@ import { usePagesContext } from "@/contexts";
 import type { IMainPage } from "@/types/IMainPage";
 import { Typography } from "@/ui/components/typography/Typography";
 import { joinClasses } from "@/ui/utils/joinClasses";
-import { activePage, panelIds, type IPanel, type PanelNode } from "@/util/panelLayout";
+import {
+  activePage,
+  fitSplitRatio,
+  MIN_SPLIT_PANE_WIDTH,
+  panelIds,
+  SPLIT_GUTTER_WIDTH,
+  type IPanel,
+  type PanelNode,
+} from "@/util/panelLayout";
 import { isReduceMotionActive } from "@/util/reduceMotion";
 
 import { DNDContainer } from "../../DNDContainer";
@@ -22,9 +30,6 @@ import { PageHeaderActionsContext } from "../Page/PageHeader";
 import { PanelChooser } from "./PanelChooser";
 import { usePanels } from "./PanelContext";
 import { SplitViewButton } from "./SplitViewButton";
-
-const MIN_SPLIT_PANE_WIDTH = 440;
-const SPLIT_GUTTER_WIDTH = 12;
 
 /** Move a stable portal container, rather than remounting a page when a panel moves. */
 function PanelPageHost({
@@ -159,10 +164,12 @@ function PanelFrame({
 function SplitTree({
   node,
   opening,
+  availableWidth,
   registerSlot,
 }: {
   node: Extract<PanelNode, { kind: "split" }>;
   opening: boolean;
+  availableWidth: number;
   registerSlot: (id: string, element: HTMLDivElement | null) => void;
 }) {
   const { t } = useTranslation();
@@ -171,7 +178,7 @@ function SplitTree({
   const [dragRatio, setDragRatio] = useState<number>();
   const first = node.first.kind === "panel" ? node.first.id : undefined;
   const second = node.second.kind === "panel" ? node.second.id : undefined;
-  const ratio = closing || opening ? 100 : (dragRatio ?? node.ratio);
+  const ratio = closing || opening ? 100 : fitSplitRatio(dragRatio ?? node.ratio, availableWidth);
 
   useEffect(() => {
     if (!closing) return;
@@ -194,7 +201,7 @@ function SplitTree({
     setDragRatio(undefined);
     if (ratioAtRelease <= 5) collapse(second);
     else if (ratioAtRelease >= 95) collapse(first);
-    else resize(node.id, Math.max(20, Math.min(80, ratioAtRelease)));
+    else resize(node.id, fitSplitRatio(ratioAtRelease, availableWidth));
   };
   // Animate the pane's width with the same transition used by the sidebar.
   // The first pane simply fills the remaining space, so neither page reflows
@@ -241,7 +248,10 @@ function SplitTree({
             collapse(first);
           } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
             event.preventDefault();
-            resize(node.id, node.ratio + (event.key === "ArrowLeft" ? -5 : 5));
+            resize(
+              node.id,
+              fitSplitRatio(node.ratio + (event.key === "ArrowLeft" ? -5 : 5), availableWidth),
+            );
           }
         }}
       >
@@ -273,8 +283,9 @@ function SplitTree({
 export function PanelWorkspace() {
   const { t } = useTranslation();
   const { mainPages } = usePagesContext();
-  const { workspace, closing, layoutIdentity, toggleSplit } = usePanels();
+  const { workspace, closing, layoutIdentity, toggleSplit, resize } = usePanels();
   const workspaceRef = useRef<HTMLDivElement>(null);
+  const [workspaceWidth, setWorkspaceWidth] = useState(0);
   const [canSplit, setCanSplit] = useState(false);
   const previousLayout = useRef({ identity: layoutIdentity, root: workspace.root });
   const [openingSplitId, setOpeningSplitId] = useState<string>();
@@ -293,11 +304,16 @@ export function PanelWorkspace() {
     const element = workspaceRef.current;
     if (!element) return;
     const measure = () => {
-      const fits =
-        element.getBoundingClientRect().width >= MIN_SPLIT_PANE_WIDTH * 2 + SPLIT_GUTTER_WIDTH;
+      const width = element.getBoundingClientRect().width;
+      setWorkspaceWidth(width);
+      const fits = width >= MIN_SPLIT_PANE_WIDTH * 2 + SPLIT_GUTTER_WIDTH;
       setCanSplit(fits);
       if (!fits && workspace.root.kind === "split" && !closing)
         toggleSplit(workspace.root.first.id);
+      else if (fits && workspace.root.kind === "split" && !closing) {
+        const fitted = fitSplitRatio(workspace.root.ratio, width);
+        if (fitted !== workspace.root.ratio) resize(workspace.root.id, fitted);
+      }
     };
     measure();
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
@@ -307,7 +323,7 @@ export function PanelWorkspace() {
       observer?.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, [workspace.root, closing, toggleSplit]);
+  }, [workspace.root, closing, toggleSplit, resize]);
   useLayoutEffect(() => {
     const previous = previousLayout.current;
     const current = workspace.root;
@@ -373,6 +389,7 @@ export function PanelWorkspace() {
             <SplitTree
               node={workspace.root}
               opening={openingSplitId === workspace.root.id}
+              availableWidth={workspaceWidth}
               registerSlot={registerSlot}
             />
           )}

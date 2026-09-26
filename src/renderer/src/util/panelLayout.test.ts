@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   collapseToPanel,
   createWorkspace,
+  fitSplitRatio,
   initialPanelWorkspace,
   isPanelWorkspace,
   normalizeSidebarWorkspace,
@@ -64,5 +65,12 @@ describe("sidebar split workspaces", () => {
     expect(
       isPanelWorkspace({ ...state, panels: { ...state.panels, "panel-1": { id: "panel-1" } } }),
     ).toBe(false);
+  });
+
+  it("keeps both panes at least 440px wide when the divider moves", () => {
+    expect(fitSplitRatio(80, 1200)).toBeCloseTo(100 - (440 / 1188) * 100);
+    expect(fitSplitRatio(20, 1200)).toBeCloseTo((440 / 1188) * 100);
+    expect(fitSplitRatio(80, 892)).toBe(50);
+    expect(fitSplitRatio(80, 2400)).toBe(80);
   });
 });

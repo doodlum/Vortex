@@ -30,7 +30,9 @@ is wide enough again.
 
 The 12px divider resizes the two columns. Dragging it to the right edge closes
 the partner; dragging to the left edge navigates to the partner's sidebar page
-and loads that page's own workspace. Arrow keys adjust its ratio; Home/End
+and loads that page's own workspace. Intermediate positions keep each pane at
+least 440px wide, including when a saved split opens in a narrower window.
+Arrow keys adjust its ratio; Home/End
 collapse a side, and double click restores 50/50.
 
 ## Navigation and state

@@ -23,6 +23,19 @@ export interface IPanelSettings {
   layouts: Record<string, Record<string, IPanelWorkspace>>;
 }
 
+export const MIN_SPLIT_PANE_WIDTH = 440;
+export const SPLIT_GUTTER_WIDTH = 12;
+
+/** Keep both panes usable at the current content width. */
+export function fitSplitRatio(ratio: number, width: number): number {
+  const bounded = Math.max(20, Math.min(80, ratio));
+  if (!Number.isFinite(width) || width < MIN_SPLIT_PANE_WIDTH * 2 + SPLIT_GUTTER_WIDTH)
+    return bounded;
+  const minimum = Math.max(20, (MIN_SPLIT_PANE_WIDTH / (width - SPLIT_GUTTER_WIDTH)) * 100);
+  const maximum = Math.min(80, 100 - minimum);
+  return Math.max(minimum, Math.min(maximum, bounded));
+}
+
 export const panelIds = (node: PanelNode): string[] =>
   node.kind === "panel" ? [node.id] : [node.first.id, node.second.id];
 
