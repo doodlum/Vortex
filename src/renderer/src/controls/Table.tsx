@@ -187,6 +187,7 @@ class SuperTable extends ComponentEx<IProps, IComponentState> {
   private mProxyHeaderRef: HTMLElement;
   private mVisibleHeaderRef: HTMLElement;
   private mHeaderUpdateDebouncer: Debouncer;
+  private mHeaderResizeObserver: ResizeObserver | undefined;
   private mUpdateCalculatedDebouncer: Debouncer;
   private mColumnReportDebouncer: Debouncer;
   private mColumnReportWaits: number = 0;
@@ -279,6 +280,8 @@ class SuperTable extends ComponentEx<IProps, IComponentState> {
     this.detachScrollListeners();
     this.mMounted = false;
     this.mColumnReportDebouncer.clear();
+    this.mHeaderUpdateDebouncer.clear();
+    this.mHeaderResizeObserver?.disconnect();
   }
 
   public UNSAFE_componentWillReceiveProps(newProps: IProps) {
@@ -1169,7 +1172,14 @@ class SuperTable extends ComponentEx<IProps, IComponentState> {
   };
 
   private setProxyHeaderRef = (ref) => {
+    this.mHeaderResizeObserver?.disconnect();
     this.mProxyHeaderRef = ref;
+    if (ref) {
+      // Switching tabs and resizing panels change table size without resizing the main window.
+      // ResizeObserver runs before paint, avoiding the debounced collapsed header flash.
+      this.mHeaderResizeObserver = new ResizeObserver(() => this.updateColumnWidth());
+      this.mHeaderResizeObserver.observe(ref);
+    }
     this.mHeaderUpdateDebouncer.schedule();
   };
 
@@ -1184,6 +1194,8 @@ class SuperTable extends ComponentEx<IProps, IComponentState> {
     if (!truthy(this.mProxyHeaderRef) || !truthy(this.mVisibleHeaderRef)) {
       return;
     }
+    // A parked/hidden tab has no layout. Keep its last real measurements until visible.
+    if (this.mProxyHeaderRef.clientWidth === 0) return;
 
     this.mProxyHeaderRef.childNodes.forEach((node, index) => {
       (this.mVisibleHeaderRef.childNodes.item(index) as HTMLElement).style.minWidth = (

@@ -57,6 +57,8 @@ Project and coding documentation. To set up and build Vortex, start with
 
 ## Research
 
+- [design-system/panels.md](design-system/panels.md) - Figma panel system, tabs, placement, focus and persistence in the modern layout.
+
 These describe other products, as prior art. They are not documentation of
 Vortex itself.
 
