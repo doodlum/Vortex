@@ -17,15 +17,12 @@ export const usePageRendering = () => {
     mainPage ? [mainPage] : [],
   );
 
-  // A page can be opened in either pane before it has ever been visited.
+  // Track mainPage changes and add to loadedPages if needed
   useEffect(() => {
     if (mainPage) {
       setLoadedPages(mainPage);
     }
-    if (secondaryPage) {
-      setLoadedPages(secondaryPage);
-    }
-  }, [mainPage, secondaryPage]);
+  }, [mainPage]);
 
   const renderPage = useCallback(
     (page: IMainPage) => {

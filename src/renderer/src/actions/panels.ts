@@ -10,3 +10,8 @@ export const setPanelWorkspace = createAction(
     workspace,
   }),
 );
+
+export const removePanelWorkspace = createAction(
+  "REMOVE_PANEL_WORKSPACE",
+  (scope: string, layoutKey: string) => ({ scope, layoutKey }),
+);

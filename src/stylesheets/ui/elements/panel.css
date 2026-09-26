@@ -1,5 +1,0 @@
-@layer utilities {
-    [data-panel-id]:has([data-panel-header-actions]) > [data-panel-plain-actions] {
-        display: none;
-    }
-}

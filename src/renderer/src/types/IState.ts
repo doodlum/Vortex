@@ -322,14 +322,8 @@ export interface ISettingsWorkarounds {
   userSymlinks: boolean;
 }
 
-export interface ISettingsSplitView {
-  /** Game ID, then primary page ID, to the saved secondary page ID. */
-  pairs: Record<string, Record<string, string>>;
-}
-
 export interface ISettings {
   panels?: IPanelSettings;
-  splitView?: ISettingsSplitView;
   interface: ISettingsInterface;
   automation: ISettingsAutomation;
   gameMode: ISettingsGameMode;

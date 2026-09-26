@@ -7,6 +7,15 @@ export const panelsReducer = actionsToReducerSpec(
   defaults,
   actions,
   {
+    removePanelWorkspace: (state, { scope, layoutKey }) => {
+      if (!state.layouts[scope]?.[layoutKey]) return state;
+      const layouts = { ...state.layouts };
+      const scopeLayouts = { ...layouts[scope] };
+      delete scopeLayouts[layoutKey];
+      if (Object.keys(scopeLayouts).length) layouts[scope] = scopeLayouts;
+      else delete layouts[scope];
+      return { ...state, layouts };
+    },
     setPanelWorkspace: (state, { scope, layoutKey, workspace }) => {
       if (!scope || !layoutKey || !isPanelWorkspace(workspace)) return state;
       const next = { ...state };

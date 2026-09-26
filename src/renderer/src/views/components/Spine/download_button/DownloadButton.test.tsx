@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import type * as ReactRedux from "react-redux";
@@ -13,17 +13,12 @@ import type { SpineSelection } from "../SpineContext";
 // maths under test instead of stubbing it out.
 // Annotated rather than asserted so `selection` stays checked against the real union.
 const mocks = vi.hoisted(
-  (): { openPage: Mock; selectDownloads: Mock; selection: SpineSelection; state: IState } => ({
+  (): { selectDownloads: Mock; selection: SpineSelection; state: IState } => ({
     state: { persistent: { downloads: { files: {}, speed: 0 } } } as unknown as IState,
     selectDownloads: vi.fn(),
-    openPage: vi.fn(),
     selection: { type: "home" },
   }),
 );
-
-vi.mock("../../panels/PanelContext", () => ({
-  usePanels: () => ({ navigate: mocks.openPage }),
-}));
 
 vi.mock("react-redux", async (importOriginal) => ({
   ...(await importOriginal<typeof ReactRedux>()),
@@ -91,12 +86,6 @@ beforeEach(() => {
 // --- Tests ---
 
 describe("DownloadButton", () => {
-  it("Ctrl+click opens Downloads as secondary without switching the spine context", () => {
-    const { button } = renderComponent();
-    fireEvent.click(button, { ctrlKey: true });
-    expect(mocks.openPage).toHaveBeenCalledWith("Downloads", "panel");
-    expect(mocks.selectDownloads).not.toHaveBeenCalled();
-  });
   describe("idle", () => {
     it("shows the download icon and no progress ring", () => {
       const { container, hasRing } = renderComponent();

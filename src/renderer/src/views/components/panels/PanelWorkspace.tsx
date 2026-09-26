@@ -1,7 +1,5 @@
-import { mdiViewSplitVertical } from "@mdi/js";
-import {
+import React, {
   useEffect,
-  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -13,19 +11,20 @@ import { useTranslation } from "react-i18next";
 
 import { usePagesContext } from "@/contexts";
 import type { IMainPage } from "@/types/IMainPage";
-import { Button } from "@/ui/components/button/Button";
 import { Typography } from "@/ui/components/typography/Typography";
 import { joinClasses } from "@/ui/utils/joinClasses";
 import { activePage, panelIds, type IPanel, type PanelNode } from "@/util/panelLayout";
+import { isReduceMotionActive } from "@/util/reduceMotion";
 
 import { DNDContainer } from "../../DNDContainer";
 import { MainPageContainer } from "../../MainPageContainer";
-import { getIconPath } from "../iconMap";
 import { PageHeaderActionsContext } from "../Page/PageHeader";
 import { PanelChooser } from "./PanelChooser";
-import { PanelCloseButton } from "./PanelCloseButton";
 import { usePanels } from "./PanelContext";
-import { usePanelActivation } from "./usePanelActivation";
+import { SplitViewButton } from "./SplitViewButton";
+
+const MIN_SPLIT_PANE_WIDTH = 440;
+const SPLIT_GUTTER_WIDTH = 12;
 
 /** Move a stable portal container, rather than remounting a page when a panel moves. */
 function PanelPageHost({
@@ -34,18 +33,23 @@ function PanelPageHost({
   active,
   secondary,
   panelId,
-  hasMultiplePanels,
-  closePanel,
+  showSplitButton,
+  isSplit,
+  closePageName,
+  closing,
+  toggleSplit,
 }: {
   page: IMainPage;
   target: HTMLElement | undefined;
   active: boolean;
   secondary: boolean;
   panelId: string | undefined;
-  hasMultiplePanels: boolean;
-  closePanel: (panelId: string) => void;
+  showSplitButton: boolean;
+  isSplit: boolean;
+  closePageName: string;
+  closing: boolean;
+  toggleSplit: (panelId: string) => void;
 }) {
-  const { t } = useTranslation();
   const container = useMemo(() => {
     const node = document.createElement("div");
     node.className =
@@ -53,14 +57,53 @@ function PanelPageHost({
     node.dataset.panelPage = page.id;
     return node;
   }, [page.id]);
+  const [buttonMounted, setButtonMounted] = useState(showSplitButton);
+  const [buttonShown, setButtonShown] = useState(showSplitButton);
+  useEffect(() => {
+    // A page opened on the right never carries the left page's split control.
+    if (secondary || !panelId) {
+      setButtonMounted(false);
+      setButtonShown(false);
+      return;
+    }
+    if (showSplitButton) {
+      setButtonMounted(true);
+      if (isReduceMotionActive()) {
+        setButtonShown(true);
+        return;
+      }
+      const frame = requestAnimationFrame(() => setButtonShown(true));
+      return () => cancelAnimationFrame(frame);
+    }
+    setButtonShown(false);
+    if (isReduceMotionActive()) {
+      setButtonMounted(false);
+      return;
+    }
+    const timeout = window.setTimeout(() => setButtonMounted(false), 150);
+    return () => window.clearTimeout(timeout);
+  }, [showSplitButton, secondary, panelId]);
   useLayoutEffect(() => {
     if (target && container.parentElement !== target) target.appendChild(container);
   }, [target, container]);
   useEffect(() => () => container.remove(), [container]);
-  const closeLabel = t("Close {{page}} panel", { page: t(page.title, { ns: page.namespace }) });
   const headerActions =
-    panelId && hasMultiplePanels ? (
-      <PanelCloseButton label={closeLabel} onClick={() => closePanel(panelId)} />
+    panelId && !secondary && buttonMounted ? (
+      <div
+        data-responsive-split-button=""
+        aria-hidden={!buttonShown}
+        className={joinClasses([
+          "transition-opacity duration-150",
+          buttonShown ? "opacity-100" : "pointer-events-none opacity-0",
+        ])}
+      >
+        <SplitViewButton
+          disabled={closing || !showSplitButton}
+          isSplit={isSplit}
+          closePageName={closePageName}
+          onClick={() => toggleSplit(panelId)}
+        />
+      </div>
     ) : null;
   return createPortal(
     <PageHeaderActionsContext.Provider value={headerActions}>
@@ -68,22 +111,6 @@ function PanelPageHost({
     </PageHeaderActionsContext.Provider>,
     container,
     page.id,
-  );
-}
-
-/** Give legacy page glyphs the same pale-to-lavender finish as modern pictograms. */
-function PanelPageIcon({ path }: { path: string }) {
-  const gradientId = `panel-page-icon-${useId().replaceAll(":", "")}`;
-  return (
-    <svg className="size-7 shrink-0" role="presentation" viewBox="0 0 24 24">
-      <defs>
-        <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#fff" />
-          <stop offset="100%" stopColor="#9099f0" />
-        </linearGradient>
-      </defs>
-      <path d={path} fill={`url(#${gradientId})`} />
-    </svg>
   );
 }
 
@@ -95,48 +122,16 @@ function PanelFrame({
   registerSlot: (id: string, node: HTMLDivElement | null) => void;
 }) {
   const { t } = useTranslation();
-  const { workspace, pages, focus, close } = usePanels();
-  const frame = usePanelActivation(panel.id, focus);
+  const { pages } = usePanels();
   const pageId = activePage(panel);
   const page = pages.find((entry) => entry.id === pageId);
   const label = page ? t(page.title, { ns: page.namespace }) : pageId || t("New panel");
-  const multi = Object.keys(workspace.panels).length > 1;
-  const showPlainActions = page?.newLayout !== true;
-  const iconPath = page ? (page.mdi ?? getIconPath(page.icon)) : mdiViewSplitVertical;
   return (
     <section
-      ref={frame}
       data-panel-id={panel.id}
-      data-panel-focused={workspace.focusedPanel === panel.id}
       aria-label={t("{{page}} panel", { page: label })}
-      className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg bg-surface-low p-0.5"
+      className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg bg-surface-low"
     >
-      {showPlainActions && (
-        <div
-          data-panel-plain-actions=""
-          className="mt-0.5 flex shrink-0 items-center justify-between border-b border-stroke-weak bg-surface-low py-3 pr-3.5 pl-6"
-        >
-          <div className="flex min-w-0 items-center gap-2">
-            <PanelPageIcon path={iconPath} />
-            <Typography
-              as="h2"
-              appearance="subdued"
-              typographyType="heading-xs"
-              className="min-w-0 truncate"
-            >
-              {label}
-            </Typography>
-          </div>
-          {multi && (
-            <div data-panel-plain-header-actions="" className="shrink-0">
-              <PanelCloseButton
-                label={pageId ? t("Close {{page}} panel", { page: label }) : t("Close new panel")}
-                onClick={() => close(panel.id)}
-              />
-            </div>
-          )}
-        </div>
-      )}
       <div
         id={`panel-content-${panel.id}`}
         role="region"
@@ -157,102 +152,96 @@ function PanelFrame({
           />
         )}
       </div>
-      <div
-        data-panel-outline=""
-        aria-hidden="true"
-        className={joinClasses([
-          "pointer-events-none absolute inset-0 z-10 rounded-lg",
-          workspace.focusedPanel === panel.id
-            ? "border-2 border-neutral-600"
-            : "border border-surface-low",
-        ])}
-      />
     </section>
   );
 }
 
-function PanelTree({
+function SplitTree({
   node,
+  opening,
   registerSlot,
 }: {
-  node: PanelNode;
-  registerSlot: (id: string, node: HTMLDivElement | null) => void;
+  node: Extract<PanelNode, { kind: "split" }>;
+  opening: boolean;
+  registerSlot: (id: string, element: HTMLDivElement | null) => void;
 }) {
   const { t } = useTranslation();
-  const { workspace, resize } = usePanels();
+  const { workspace, resize, collapse, closing, completeClose } = usePanels();
   const root = useRef<HTMLDivElement>(null);
-  if (node.kind === "panel")
-    return <PanelFrame panel={workspace.panels[node.id]} registerSlot={registerSlot} />;
-  const horizontal = node.axis === "x";
-  const clamp = (ratio: number) => {
+  const [dragRatio, setDragRatio] = useState<number>();
+  const first = node.first.kind === "panel" ? node.first.id : undefined;
+  const second = node.second.kind === "panel" ? node.second.id : undefined;
+  const ratio = closing || opening ? 100 : (dragRatio ?? node.ratio);
+
+  useEffect(() => {
+    if (!closing) return;
+    if (isReduceMotionActive()) {
+      completeClose();
+      return;
+    }
+    const fallback = window.setTimeout(completeClose, 300);
+    return () => window.clearTimeout(fallback);
+  }, [closing, completeClose]);
+
+  if (!first || !second) return null;
+  const pointerRatio = (clientX: number) => {
     const bounds = root.current?.getBoundingClientRect();
-    const minimum = bounds
-      ? Math.min(45, Math.max(20, (horizontal ? 280 / bounds.width : 160 / bounds.height) * 100))
-      : 20;
-    return Math.max(minimum, Math.min(100 - minimum, ratio));
+    return bounds
+      ? Math.max(0, Math.min(100, ((clientX - bounds.left) / bounds.width) * 100))
+      : node.ratio;
   };
+  const finishDrag = (ratioAtRelease: number) => {
+    setDragRatio(undefined);
+    if (ratioAtRelease <= 5) collapse(second);
+    else if (ratioAtRelease >= 95) collapse(first);
+    else resize(node.id, Math.max(20, Math.min(80, ratioAtRelease)));
+  };
+  // Animate the pane's width with the same transition used by the sidebar.
+  // The first pane simply fills the remaining space, so neither page reflows
+  // because its flex-grow value is changing during focus or open/close.
+  const gutterWidth = opening || closing ? 0 : SPLIT_GUTTER_WIDTH;
+  const secondWidth = `calc(${100 - ratio}% - ${(gutterWidth * (100 - ratio)) / 100}px)`;
   return (
-    <div
-      ref={root}
-      data-panel-split={node.id}
-      className={joinClasses([
-        "flex h-full min-h-0 min-w-0 flex-1",
-        horizontal ? "flex-row" : "flex-col",
-      ])}
-    >
-      <div className="flex min-h-0 min-w-0 overflow-hidden" style={{ flex: `${node.ratio} 1 0%` }}>
-        <PanelTree node={node.first} registerSlot={registerSlot} />
+    <div ref={root} data-panel-split={node.id} className="flex h-full min-h-0 min-w-0 flex-1">
+      <div data-panel-split-first="" className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+        <PanelFrame panel={workspace.panels[first]} registerSlot={registerSlot} />
       </div>
       <button
         type="button"
         role="separator"
-        aria-label={t(horizontal ? "Resize panel columns" : "Resize panel rows")}
-        aria-orientation={horizontal ? "vertical" : "horizontal"}
-        aria-valuemin={20}
-        aria-valuemax={80}
-        aria-valuenow={Math.round(node.ratio)}
-        className={joinClasses([
-          "flex shrink-0 touch-none items-center justify-center border-0 bg-surface-base text-neutral-weak hover:text-neutral-strong focus-visible:text-neutral-strong",
-          horizontal ? "w-3 cursor-ew-resize" : "h-3 cursor-ns-resize",
-        ])}
+        aria-label={t("Resize panel columns")}
+        aria-orientation="vertical"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(ratio)}
+        className="flex shrink-0 cursor-ew-resize touch-pan-y items-center justify-center overflow-hidden border-0 bg-surface-base text-neutral-weak transition-[width] hover:text-neutral-strong focus-visible:text-neutral-strong"
+        style={{ width: gutterWidth, pointerEvents: closing ? "none" : undefined }}
         onPointerDown={(event) => {
           event.preventDefault();
           event.currentTarget.setPointerCapture(event.pointerId);
+          setDragRatio(pointerRatio(event.clientX));
         }}
         onPointerMove={(event) => {
-          if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-          const bounds = root.current?.getBoundingClientRect();
-          if (bounds)
-            resize(
-              node.id,
-              clamp(
-                100 *
-                  (horizontal
-                    ? (event.clientX - bounds.left) / bounds.width
-                    : (event.clientY - bounds.top) / bounds.height),
-              ),
-            );
+          if (event.currentTarget.hasPointerCapture(event.pointerId))
+            setDragRatio(pointerRatio(event.clientX));
         }}
         onPointerUp={(event) => {
-          if (event.currentTarget.hasPointerCapture(event.pointerId))
-            event.currentTarget.releasePointerCapture(event.pointerId);
+          if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+          event.currentTarget.releasePointerCapture(event.pointerId);
+          finishDrag(pointerRatio(event.clientX));
         }}
+        onPointerCancel={() => setDragRatio(undefined)}
         onDoubleClick={() => resize(node.id, 50)}
         onKeyDown={(event) => {
-          const back = horizontal ? "ArrowLeft" : "ArrowUp";
-          const forward = horizontal ? "ArrowRight" : "ArrowDown";
-          if ([back, forward, "Home", "End"].includes(event.key)) {
+          if (event.key === "Home") {
             event.preventDefault();
-            resize(
-              node.id,
-              clamp(
-                event.key === "Home"
-                  ? 20
-                  : event.key === "End"
-                    ? 80
-                    : node.ratio + (event.key === back ? -5 : 5),
-              ),
-            );
+            collapse(second);
+          } else if (event.key === "End") {
+            event.preventDefault();
+            collapse(first);
+          } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+            event.preventDefault();
+            resize(node.id, node.ratio + (event.key === "ArrowLeft" ? -5 : 5));
           }
         }}
       >
@@ -260,14 +249,22 @@ function PanelTree({
           alt=""
           draggable={false}
           src="assets/panels/drag-handle.svg"
-          className={horizontal ? "pointer-events-none -rotate-90" : "pointer-events-none"}
+          className="pointer-events-none -rotate-90"
         />
       </button>
       <div
-        className="flex min-h-0 min-w-0 overflow-hidden"
-        style={{ flex: `${100 - node.ratio} 1 0%` }}
+        data-panel-split-second=""
+        className={joinClasses([
+          "flex min-h-0 min-w-0 shrink-0 overflow-hidden",
+          !opening && dragRatio === undefined ? "transition-[width]" : "",
+        ])}
+        style={{ width: secondWidth }}
+        onTransitionEnd={(event) => {
+          if (closing && event.target === event.currentTarget && event.propertyName === "width")
+            completeClose();
+        }}
       >
-        <PanelTree node={node.second} registerSlot={registerSlot} />
+        <PanelFrame panel={workspace.panels[second]} registerSlot={registerSlot} />
       </div>
     </div>
   );
@@ -276,9 +273,11 @@ function PanelTree({
 export function PanelWorkspace() {
   const { t } = useTranslation();
   const { mainPages } = usePagesContext();
-  const { workspace, focus, close, setOrientation } = usePanels();
-  const root = useRef<HTMLDivElement>(null);
-  const [compact, setCompact] = useState(false);
+  const { workspace, closing, layoutIdentity, toggleSplit } = usePanels();
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const [canSplit, setCanSplit] = useState(false);
+  const previousLayout = useRef({ identity: layoutIdentity, root: workspace.root });
+  const [openingSplitId, setOpeningSplitId] = useState<string>();
   const [slots, setSlots] = useState<Record<string, HTMLDivElement>>({});
   const slotRefs = useRef<Record<string, HTMLDivElement>>({});
   const [parking, setParking] = useState<HTMLDivElement | null>(null);
@@ -290,18 +289,49 @@ export function PanelWorkspace() {
   useEffect(() => {
     setLoaded((current) => [...new Set([...current, ...pagesKey.split("\n").filter(Boolean)])]);
   }, [pagesKey]);
-  useEffect(() => {
-    const node = root.current;
-    if (!node) return;
+  useLayoutEffect(() => {
+    const element = workspaceRef.current;
+    if (!element) return;
     const measure = () => {
-      setCompact(node.clientWidth < 720 || node.clientHeight < 360);
-      setOrientation(node.clientWidth > node.clientHeight);
+      const fits =
+        element.getBoundingClientRect().width >= MIN_SPLIT_PANE_WIDTH * 2 + SPLIT_GUTTER_WIDTH;
+      setCanSplit(fits);
+      if (!fits && workspace.root.kind === "split" && !closing)
+        toggleSplit(workspace.root.first.id);
     };
-    const observer = new ResizeObserver(measure);
-    observer.observe(node);
     measure();
-    return () => observer.disconnect();
-  }, []);
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(element);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [workspace.root, closing, toggleSplit]);
+  useLayoutEffect(() => {
+    const previous = previousLayout.current;
+    const current = workspace.root;
+    previousLayout.current = { identity: layoutIdentity, root: current };
+    if (
+      previous.identity === layoutIdentity &&
+      previous.root.kind === "panel" &&
+      current.kind === "split" &&
+      !isReduceMotionActive()
+    ) {
+      setOpeningSplitId(current.id);
+      // Let the collapsed state paint before setting the target width. A
+      // single frame can be batched with React's layout-effect update.
+      let nextFrame = 0;
+      const firstFrame = requestAnimationFrame(() => {
+        nextFrame = requestAnimationFrame(() => setOpeningSplitId(undefined));
+      });
+      return () => {
+        cancelAnimationFrame(firstFrame);
+        cancelAnimationFrame(nextFrame);
+      };
+    }
+    if (current.kind === "panel") setOpeningSplitId(undefined);
+  }, [workspace.root, layoutIdentity]);
   // Callback refs are collected during commit, then published together before paint.
   useLayoutEffect(() => {
     const entries = Object.entries(slotRefs.current);
@@ -316,8 +346,12 @@ export function PanelWorkspace() {
     else delete slotRefs.current[id];
   };
   const ids = panelIds(workspace.root);
-  const visibleId = workspace.focusedPanel;
-  const visibleTree: PanelNode = compact ? { kind: "panel", id: visibleId } : workspace.root;
+  const partnerId = workspace.root.kind === "split" ? workspace.root.second.id : undefined;
+  const partnerPageId = partnerId ? workspace.panels[partnerId]?.pageId : undefined;
+  const partnerPage = mainPages.find((page) => page.id === partnerPageId);
+  const closePageName = partnerPage
+    ? t(partnerPage.title, { ns: partnerPage.namespace })
+    : partnerPageId || t("new panel");
   const hostStyle: CSSProperties = {
     display: "flex",
     flexDirection: "column",
@@ -327,38 +361,21 @@ export function PanelWorkspace() {
   };
   return (
     <div
-      ref={root}
+      ref={workspaceRef}
       data-panel-workspace=""
       className="mr-3 mb-3 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
     >
-      {compact && ids.length > 1 && (
-        <div
-          role="group"
-          aria-label={t("Visible panel")}
-          className="mb-2 flex shrink-0 flex-wrap gap-1"
-        >
-          {ids.map((id, index) => {
-            const page = mainPages.find((entry) => entry.id === activePage(workspace.panels[id]));
-            return (
-              <Button
-                key={id}
-                size="sm"
-                brand="neutral"
-                appearance={id === visibleId ? "subdued" : "weak"}
-                aria-pressed={id === visibleId}
-                onClick={() => focus(id)}
-              >
-                {page
-                  ? t(page.title, { ns: page.namespace })
-                  : t("Panel {{number}}", { number: index + 1 })}
-              </Button>
-            );
-          })}
-        </div>
-      )}
       <div className="min-h-0 flex-1">
         <DNDContainer style={hostStyle}>
-          <PanelTree node={visibleTree} registerSlot={registerSlot} />
+          {workspace.root.kind === "panel" ? (
+            <PanelFrame panel={workspace.panels[workspace.root.id]} registerSlot={registerSlot} />
+          ) : (
+            <SplitTree
+              node={workspace.root}
+              opening={openingSplitId === workspace.root.id}
+              registerSlot={registerSlot}
+            />
+          )}
         </DNDContainer>
       </div>
       <div ref={setParking} style={{ display: "none" }} aria-hidden="true" />
@@ -375,14 +392,16 @@ export function PanelWorkspace() {
               page={page}
               target={target ?? parking ?? undefined}
               active={!!target}
-              secondary={owner?.id !== panelIds(workspace.root)[0]}
+              secondary={!!owner && owner.id !== ids[0]}
               panelId={owner?.id}
-              hasMultiplePanels={ids.length > 1}
-              closePanel={close}
+              showSplitButton={canSplit && owner?.id === ids[0]}
+              isSplit={workspace.root.kind === "split"}
+              closePageName={closePageName}
+              closing={closing}
+              toggleSplit={toggleSplit}
             />
           );
         })}
     </div>
   );
 }
-import React from "react";

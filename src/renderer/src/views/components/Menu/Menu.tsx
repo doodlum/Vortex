@@ -1,12 +1,16 @@
 import React, { useState, type FC, useRef, useEffect } from "react";
+import { useTranslation } from "react-i18next";
+import { useDispatch } from "react-redux";
 
-import { useWindowContext } from "@/contexts";
+import { setOpenMainPage } from "@/actions";
+import { usePagesContext, useWindowContext } from "@/contexts";
 import { TooltipDelayGroup } from "@/ui/components/tooltip/TooltipDelayGroup";
 import { joinClasses } from "@/ui/utils/joinClasses";
 
+import { getIconPath } from "../iconMap";
 import { useSpineContext } from "../Spine/SpineContext";
 import { DownloadsMenuContent } from "./DownloadsMenuContent";
-import { PanelNavigationItem } from "./PanelNavigationItem";
+import { MenuButton } from "./MenuButton";
 import { ToolsProvider, useToolsContext } from "./ToolsContext";
 import { ToolsSection } from "./ToolsSection";
 
@@ -19,10 +23,13 @@ const toolPadding = {
 };
 
 const MenuContent: FC<React.PropsWithChildren<unknown>> = () => {
+  const { t } = useTranslation();
   const { menuIsCollapsed } = useWindowContext();
   const { selection, visiblePages } = useSpineContext();
+  const dispatch = useDispatch();
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  const { mainPage } = usePagesContext();
   const { visibleTools } = useToolsContext();
   const toolCount = visibleTools.length;
   const [canScrollUp, setCanScrollUp] = useState(false);
@@ -61,7 +68,23 @@ const MenuContent: FC<React.PropsWithChildren<unknown>> = () => {
           {selection.type === "downloads" ? (
             <DownloadsMenuContent />
           ) : (
-            visiblePages.map((page) => <PanelNavigationItem key={page.id} page={page} />)
+            visiblePages.map((page) => (
+              <MenuButton
+                Badge={page.menuBadge}
+                iconPath={page.mdi ?? getIconPath(page.icon)}
+                isActive={mainPage === page.id}
+                key={page.id}
+                onClick={() => {
+                  if (mainPage === page.id) {
+                    page.onReset?.();
+                  } else {
+                    dispatch(setOpenMainPage(page.id, false));
+                  }
+                }}
+              >
+                {t(page.title, { ns: page.namespace })}
+              </MenuButton>
+            ))
           )}
         </div>
 

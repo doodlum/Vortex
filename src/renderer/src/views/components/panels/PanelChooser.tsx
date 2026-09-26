@@ -21,9 +21,9 @@ export function PanelChooser({ panelId }: { panelId: string }) {
     <div
       ref={root}
       data-panel-chooser="panel"
-      className="min-h-0 flex-1 overflow-auto bg-surface-base p-3"
+      className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-surface-base p-3"
     >
-      <div className="flex w-49 flex-col gap-y-0.5 pt-1">
+      <div className="m-auto flex w-49 flex-col gap-y-0.5">
         {availablePages.map((page) => (
           <NavigationButton
             key={page.id}
@@ -35,10 +35,10 @@ export function PanelChooser({ panelId }: { panelId: string }) {
             {t(page.title, { ns: page.namespace })}
           </NavigationButton>
         ))}
+        {!availablePages.length && (
+          <Typography appearance="subdued">{t("All pages are already open.")}</Typography>
+        )}
       </div>
-      {!availablePages.length && (
-        <Typography appearance="subdued">{t("All pages are already open.")}</Typography>
-      )}
     </div>
   );
 }

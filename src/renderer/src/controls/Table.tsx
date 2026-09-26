@@ -1175,7 +1175,7 @@ class SuperTable extends ComponentEx<IProps, IComponentState> {
     this.mHeaderResizeObserver?.disconnect();
     this.mProxyHeaderRef = ref;
     if (ref) {
-      // Switching tabs and resizing panels change table size without resizing the main window.
+      // Switching sidebar pages and resizing panels change table size without resizing the main window.
       // ResizeObserver runs before paint, avoiding the debounced collapsed header flash.
       this.mHeaderResizeObserver = new ResizeObserver(() => this.updateColumnWidth());
       this.mHeaderResizeObserver.observe(ref);
@@ -1194,7 +1194,7 @@ class SuperTable extends ComponentEx<IProps, IComponentState> {
     if (!truthy(this.mProxyHeaderRef) || !truthy(this.mVisibleHeaderRef)) {
       return;
     }
-    // A parked/hidden tab has no layout. Keep its last real measurements until visible.
+    // A parked page has no layout. Keep its last real measurements until visible.
     if (this.mProxyHeaderRef.clientWidth === 0) return;
 
     this.mProxyHeaderRef.childNodes.forEach((node, index) => {

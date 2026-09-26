@@ -32,7 +32,6 @@ export type IPopoverPanel = (props: { close: () => void; dismiss: () => void }) 
 interface IMenuActionBase {
   label: string;
   iconPath?: string;
-  icon?: ReactNode;
   disabled?: boolean;
   isLoading?: boolean;
   panelRole?: "dialog" | "menu";
@@ -78,10 +77,9 @@ const PopoverMenuItemContent = ({
   hasFocus: boolean;
 }) => (
   <>
-    {action.icon ??
-      (!!action.iconPath && (
-        <Icon className="nxm-dropdown-item-icon" path={action.iconPath} size="none" />
-      ))}
+    {!!action.iconPath && (
+      <Icon className="nxm-dropdown-item-icon" path={action.iconPath} size="none" />
+    )}
 
     <span className="nxm-dropdown-item-label">{action.label}</span>
 
