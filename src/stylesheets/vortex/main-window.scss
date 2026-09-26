@@ -325,6 +325,14 @@
     }
 }
 
+// Extension-owned legacy toolbars may be wider than a split pane. Keep every
+// action reachable without requiring changes in each extension page.
+[data-panel-workspace] [data-panel-split-first] .mainpage-header,
+[data-panel-workspace] [data-panel-split-second] .mainpage-header {
+    min-width: 0;
+    overflow-x: auto;
+}
+
 .mainpage-header-container {
     background-color: $brand-clickable;
 
