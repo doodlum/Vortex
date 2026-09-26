@@ -1,9 +1,10 @@
 import React, { type FC } from "react";
 
 import { useSwitchingProfile } from "../../hooks";
-import { ModernContentPane } from "../components/ContentPane";
 import { Header } from "../components/Header/Header";
 import { Menu } from "../components/Menu/Menu";
+import { PanelProvider } from "../components/panels/PanelContext";
+import { PanelWorkspace } from "../components/panels/PanelWorkspace";
 import { Spine } from "../components/Spine/Spine";
 import { SpineProvider } from "../components/Spine/SpineContext";
 import { DialogLayer } from "./DialogLayer";
@@ -17,31 +18,33 @@ export const ModernLayout: FC<React.PropsWithChildren<unknown>> = () => {
 
   return (
     <SpineProvider>
-      <LayoutContainer className="flex h-full bg-surface-base">
-        <Spine />
+      <PanelProvider>
+        <LayoutContainer className="flex h-full bg-surface-base">
+          <Spine />
 
-        <div className="flex min-w-0 grow flex-col">
-          <Header />
+          <div className="flex min-w-0 grow flex-col">
+            <Header />
 
-          <div className="flex min-h-0 grow">
-            {switchingProfile ? (
-              <ProfileSwitcher />
-            ) : (
-              <>
-                <Menu />
+            <div className="flex min-h-0 grow">
+              {switchingProfile ? (
+                <ProfileSwitcher />
+              ) : (
+                <>
+                  <Menu />
 
-                <ModernContentPane />
-              </>
-            )}
+                  <PanelWorkspace />
+                </>
+              )}
 
-            <DialogLayer />
+              <DialogLayer />
 
-            <ToastContainer />
+              <ToastContainer />
+            </div>
           </div>
-        </div>
-      </LayoutContainer>
+        </LayoutContainer>
 
-      <UIBlocker />
+        <UIBlocker />
+      </PanelProvider>
     </SpineProvider>
   );
 };

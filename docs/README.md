@@ -57,6 +57,8 @@ Project and coding documentation. To set up and build Vortex, start with
 
 ## Research
 
+- [design-system/panels.md](design-system/panels.md) - The modern right-hand split view, per-sidebar persistence, animation, and navigation.
+
 These describe other products, as prior art. They are not documentation of
 Vortex itself.
 
