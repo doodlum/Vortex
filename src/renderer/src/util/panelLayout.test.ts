@@ -1,20 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  activePage,
   addPanel,
-  addTab,
   closePanel,
-  closeTab,
   createWorkspace,
   defaultPlacement,
   initialPanelWorkspace,
   isPanelWorkspace,
-  MAX_TABS,
+  migratePanelWorkspace,
   navigatePage,
   PANEL_LAYOUT_KEY,
-  panelIds,
   panelBounds,
+  panelIds,
   panelPlacements,
   previewPanelPlacement,
   resizePanel,
@@ -22,63 +19,75 @@ import {
 } from "./panelLayout";
 
 describe("panel workspace", () => {
-  it("migrates the current page layout once and then uses one saved game layout", () => {
+  it("migrates selected pages from tabbed panels without changing geometry", () => {
+    const base = resizePanel(createWorkspace("Mods", "Plugins"), "split-panel-2", 63);
+    const legacy = {
+      ...base,
+      panels: {
+        "panel-1": {
+          id: "panel-1",
+          tabs: [
+            { id: "tab-1", pageId: "Mods" },
+            { id: "tab-3", pageId: "Tools" },
+          ],
+          activeTab: "tab-3",
+        },
+        "panel-2": {
+          id: "panel-2",
+          placement: "right",
+          tabs: [{ id: "tab-2", pageId: "Plugins" }],
+          activeTab: "tab-2",
+        },
+      },
+    };
+    const migrated = migratePanelWorkspace(legacy)!;
+    expect(migrated.root).toEqual(base.root);
+    expect(migrated.focusedPanel).toBe(base.focusedPanel);
+    expect(migrated.panels).toEqual({
+      "panel-1": { id: "panel-1", pageId: "Tools" },
+      "panel-2": { id: "panel-2", placement: "right", pageId: "Plugins" },
+    });
+    expect(initialPanelWorkspace({ [PANEL_LAYOUT_KEY]: legacy } as never, "Mods")).toEqual(
+      migrated,
+    );
+    expect(initialPanelWorkspace({ Mods: legacy } as never, "Mods")).toEqual(migrated);
+    expect(
+      migratePanelWorkspace({
+        ...legacy,
+        panels: {
+          ...legacy.panels,
+          "panel-1": { ...legacy.panels["panel-1"], activeTab: "missing" },
+        },
+      }),
+    ).toBeUndefined();
+  });
+  it("uses one saved workspace per game", () => {
     const mods = createWorkspace("Mods", "Plugins");
     const tools = createWorkspace("Tools");
-    const oldLayouts = { Mods: mods, Tools: tools };
-    expect(initialPanelWorkspace(oldLayouts, "Mods")).toBe(mods);
-    expect(initialPanelWorkspace(oldLayouts, "Tools")).toBe(tools);
-    const shared = { ...oldLayouts, [PANEL_LAYOUT_KEY]: mods };
-    expect(initialPanelWorkspace(shared, "Tools")).toBe(mods);
-    expect(initialPanelWorkspace(shared, "Health check")).toBe(mods);
+    expect(initialPanelWorkspace({ Mods: mods, Tools: tools }, "Mods")).toBe(mods);
+    expect(initialPanelWorkspace({ Mods: mods, Tools: tools }, "Tools")).toBe(tools);
+    expect(initialPanelWorkspace({ Mods: mods, [PANEL_LAYOUT_KEY]: tools }, "Mods")).toBe(tools);
   });
-  it("activates an existing inactive tab in place", () => {
-    let state = addTab(createWorkspace("Mods"));
-    state = selectPage(state, "panel-1", state.panels["panel-1"].activeTab, "Plugins");
-    state = addPanel(state, "right", "Save games");
-    const before = state.panels["panel-1"].tabs;
-    const next = navigatePage(state, "Mods");
-    expect(next.root).toBe(state.root);
-    expect(next.panels["panel-1"].tabs).toBe(before);
-    expect(next.panels["panel-1"].activeTab).toBe("tab-1");
-    expect(next.focusedPanel).toBe("panel-1");
-    expect(activePage(next.panels["panel-1"])).toBe("Mods");
+  it("focuses an open page and replaces only the focused panel for a new page", () => {
+    const state = addPanel(createWorkspace("Mods"), "right", "Plugins");
+    const mods = navigatePage(state, "Mods");
+    expect(mods.root).toBe(state.root);
+    expect(mods.focusedPanel).toBe("panel-1");
+    const tools = navigatePage(mods, "Tools");
+    expect(tools.panels["panel-1"].pageId).toBe("Tools");
+    expect(tools.panels["panel-2"].pageId).toBe("Plugins");
+    expect(tools.root).toBe(state.root);
   });
-  it("replaces the active tab in the focused panel even when it is shorter", () => {
-    let state = addPanel(createWorkspace("Mods"), "right", "Plugins");
-    state = addPanel(state, "bottom-right", "Save games");
-    state = addTab(state, "panel-1");
-    state = selectPage(state, "panel-1", state.panels["panel-1"].activeTab, "Collections");
-    const narrowPanel = Object.values(state.panels).find((panel) =>
-      panel.tabs.some((tab) => tab.pageId === "Save games"),
-    )!;
-    state = selectPage(state, narrowPanel.id, narrowPanel.activeTab, "Save games");
-    const next = navigatePage(state, "Tools");
-    expect(next.root).toBe(state.root);
-    expect(next.focusedPanel).toBe(narrowPanel.id);
-    expect(next.panels["panel-1"].tabs.map((tab) => tab.pageId)).toEqual(["Mods", "Collections"]);
-    expect(activePage(next.panels[narrowPanel.id])).toBe("Tools");
+  it("fills a blank panel or cancels it when choosing an existing page", () => {
+    const blank = addPanel(createWorkspace("Mods", "Plugins"));
+    const chosen = selectPage(blank, blank.focusedPanel, "Tools");
+    expect(chosen.panels[chosen.focusedPanel].pageId).toBe("Tools");
+    const existing = selectPage(blank, blank.focusedPanel, "Mods");
+    expect(panelIds(existing.root)).toHaveLength(2);
+    expect(existing.focusedPanel).toBe("panel-1");
+    expect(isPanelWorkspace(existing)).toBe(true);
   });
-  it("replaces the focused panel even when another panel is wider", () => {
-    let state = addPanel(createWorkspace("Mods"), "right", "Plugins");
-    state = resizePanel(state, state.root.id, 70);
-    const next = navigatePage(state, "Health check");
-    expect(next.focusedPanel).toBe(state.focusedPanel);
-    expect(activePage(next.panels["panel-1"])).toBe("Mods");
-    expect(activePage(next.panels[state.focusedPanel])).toBe("Health check");
-  });
-  it("migrates saved game/page partners and adds with a four-panel limit", () => {
-    let state = createWorkspace("Mods", "Plugins");
-    expect(panelIds(state.root)).toHaveLength(2);
-    expect(defaultPlacement(state.root)).toBe("bottom-right");
-    state = addPanel(state, undefined, "Downloads");
-    expect(defaultPlacement(state.root)).toBe("bottom-left");
-    state = addPanel(state, undefined, "Settings");
-    expect(panelPlacements(state.root)).toEqual([]);
-    expect(addPanel(state)).toBe(state);
-    expect(isPanelWorkspace(state)).toBe(true);
-  });
-  it("supports every legal placement and closing any leaf without losing the others", () => {
+  it("supports every placement and closing any leaf up to four panels", () => {
     const explore = (state: ReturnType<typeof createWorkspace>) => {
       expect(isPanelWorkspace(state)).toBe(true);
       for (const id of panelIds(state.root)) {
@@ -93,7 +102,7 @@ describe("panel workspace", () => {
     };
     explore(createWorkspace("Mods"));
   });
-  it("uses Nexus-style orientation and grid ordering for the next panel", () => {
+  it("uses orientation and grid shape for placement", () => {
     const columns = addPanel(createWorkspace("Mods"), "right", "Plugins");
     const rows = addPanel(createWorkspace("Mods"), "bottom", "Plugins");
     expect(defaultPlacement(createWorkspace("Mods").root, true)).toBe("right");
@@ -103,7 +112,7 @@ describe("panel workspace", () => {
     expect(defaultPlacement(rows.root, true)).toBe("top-right");
     expect(defaultPlacement(rows.root, false)).toBe("bottom-right");
   });
-  it("draws the candidate from resized bounds and aligns the fourth-panel divider", () => {
+  it("uses resized geometry in the icon preview and aligns the fourth divider", () => {
     let state = addPanel(createWorkspace("Mods"), "right", "Plugins");
     state = resizePanel(state, state.root.id, 65);
     const choice = panelPlacements(state.root).find((item) => item.position === "bottom-right")!;
@@ -112,62 +121,24 @@ describe("panel workspace", () => {
     expect(preview.find((panel) => panel.id === "__new-panel")?.x).toBeCloseTo(0.65);
     state = addPanel(state, "bottom-right", "Save games");
     const right = state.root.kind === "split" ? state.root.second : undefined;
-    expect(right?.kind).toBe("split");
     state = resizePanel(state, right!.id, 60);
     state = addPanel(state, "bottom-left", "Tools");
     const left = state.root.kind === "split" ? state.root.first : undefined;
     expect(left).toMatchObject({ kind: "split", ratio: 60 });
-    expect(isPanelWorkspace(state)).toBe(true);
   });
-  it("moves the pending panel instead of creating extra blank panels", () => {
+  it("moves an unfilled panel and rejects corrupt layouts", () => {
     const state = addPanel(createWorkspace("Mods"));
     const moved = addPanel(state, "bottom");
     expect(panelIds(moved.root)).toHaveLength(2);
     expect(moved.root).toMatchObject({ kind: "split", axis: "y" });
-    expect(isPanelWorkspace(moved)).toBe(true);
-  });
-  it("focuses a single page instance and cancels the chooser", () => {
-    const state = addPanel(createWorkspace("Mods", "Plugins"));
-    const selected = selectPage(
-      state,
-      state.focusedPanel,
-      state.panels[state.focusedPanel].activeTab,
-      "Mods",
-    );
-    expect(panelIds(selected.root)).toHaveLength(2);
-    expect(selected.focusedPanel).toBe("panel-1");
-    expect(isPanelWorkspace(selected)).toBe(true);
-  });
-  it("keeps tab selection valid after closing and enforces the tab limit", () => {
-    let state = createWorkspace("Mods");
-    for (let index = 1; index < MAX_TABS; index++) {
-      state = addTab(state);
-      state = selectPage(
-        state,
-        state.focusedPanel,
-        state.panels[state.focusedPanel].activeTab,
-        `page-${index}`,
-      );
-    }
-    expect(addTab(state)).toBe(state);
-    const panel = state.panels[state.focusedPanel];
-    state = closeTab(state, panel.id, panel.activeTab);
-    expect(activePage(state.panels[panel.id])).toBe("page-14");
-    expect(isPanelWorkspace(state)).toBe(true);
-  });
-  it("bounds resize ratios and rejects corrupt persisted trees", () => {
-    const state = createWorkspace("Mods", "Plugins");
-    expect(resizePanel(state, state.root.id, 200).root).toMatchObject({ ratio: 80 });
-    expect(resizePanel(state, state.root.id, NaN)).toBe(state);
-    expect(isPanelWorkspace({ ...state, panels: {} })).toBe(false);
-    expect(isPanelWorkspace({ ...state, root: { ...state.root, ratio: null } })).toBe(false);
-    expect(isPanelWorkspace({ ...state, nextId: 0 })).toBe(false);
-    expect(isPanelWorkspace({ ...state, focusedPanel: "missing" })).toBe(false);
+    expect(resizePanel(moved, moved.root.id, 200).root).toMatchObject({ ratio: 80 });
+    expect(resizePanel(moved, moved.root.id, NaN)).toBe(moved);
+    expect(isPanelWorkspace({ ...moved, panels: {} })).toBe(false);
+    expect(isPanelWorkspace({ ...moved, root: { ...moved.root, ratio: null } })).toBe(false);
+    expect(isPanelWorkspace({ ...moved, nextId: 0 })).toBe(false);
+    expect(isPanelWorkspace({ ...moved, focusedPanel: "missing" })).toBe(false);
     expect(
-      isPanelWorkspace({
-        ...state,
-        panels: { ...state.panels, "panel-1": { ...state.panels["panel-1"], tabs: [null] } },
-      }),
+      isPanelWorkspace({ ...moved, panels: { ...moved.panels, "panel-1": { id: "panel-1" } } }),
     ).toBe(false);
   });
 });

@@ -1,8 +1,8 @@
-import { mdiTabPlus, mdiViewSplitVertical } from "@mdi/js";
+import { mdiViewSplitVertical } from "@mdi/js";
 import { useTranslation } from "react-i18next";
 
 import type { IMainPage } from "@/types/IMainPage";
-import { activePage, MAX_PANELS, MAX_TABS } from "@/util/panelLayout";
+import { activePage, MAX_PANELS } from "@/util/panelLayout";
 
 import { getIconPath } from "../iconMap";
 import { PanelActionMenu } from "../panels/PanelActionMenu";
@@ -11,10 +11,8 @@ import { MenuButton } from "./MenuButton";
 
 export function PanelNavigationItem({ page }: { page: IMainPage }) {
   const { t } = useTranslation();
-  const { workspace, navigate, showTabs } = usePanels();
-  const open = Object.values(workspace.panels).some((panel) =>
-    panel.tabs.some((tab) => tab.pageId === page.id),
-  );
+  const { workspace, navigate } = usePanels();
+  const open = Object.values(workspace.panels).some((panel) => panel.pageId === page.id);
   const focused = activePage(workspace.panels[workspace.focusedPanel]) === page.id;
   const label = t(page.title, { ns: page.namespace });
   return (
@@ -29,16 +27,6 @@ export function PanelNavigationItem({ page }: { page: IMainPage }) {
               disabled: Object.keys(workspace.panels).length >= MAX_PANELS,
               onClick: () => navigate(page.id, "panel"),
             },
-            ...(showTabs
-              ? [
-                  {
-                    label: t("Open in new tab"),
-                    iconPath: mdiTabPlus,
-                    disabled: workspace.panels[workspace.focusedPanel].tabs.length >= MAX_TABS,
-                    onClick: () => navigate(page.id, "tab"),
-                  },
-                ]
-              : []),
           ],
         ]}
       >
@@ -50,12 +38,7 @@ export function PanelNavigationItem({ page }: { page: IMainPage }) {
             isActive={open}
             aria-current={focused ? "page" : undefined}
             className={focused ? "w-full ring-1 ring-stroke-moderate ring-inset" : "w-full"}
-            onClick={(event) =>
-              navigate(
-                page.id,
-                event.ctrlKey ? "panel" : event.shiftKey && showTabs ? "tab" : "current",
-              )
-            }
+            onClick={(event) => navigate(page.id, event.ctrlKey ? "panel" : "current")}
           >
             {label}
           </MenuButton>

@@ -1,5 +1,4 @@
 import { PopoverButton } from "@headlessui/react";
-import { mdiTab } from "@mdi/js";
 import React, { useRef } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -70,11 +69,9 @@ export function PositionIcon({
 
 export function PanelToolbar() {
   const { t } = useTranslation();
-  const { workspace, add, showTabs, toggleTabs, isHorizontal } = usePanels();
+  const { workspace, add, isHorizontal } = usePanels();
   const trigger = useRef<HTMLButtonElement>(null);
-  const pending = Object.values(workspace.panels).find(
-    (panel) => panel.tabs.length === 1 && !panel.tabs[0].pageId,
-  );
+  const pending = Object.values(workspace.panels).find((panel) => !panel.pageId);
   const root = pending ? closePanel(workspace, pending.id).root : workspace.root;
   const placements = panelPlacements(root);
   const position = pending?.placement ?? defaultPlacement(root, isHorizontal);
@@ -140,13 +137,6 @@ export function PanelToolbar() {
                   icon: <PositionIcon root={previewPanelPlacement(root, placement)} size="sm" />,
                   onClick: () => add(placement.position),
                 })),
-                [
-                  {
-                    label: t(showTabs ? "Hide panel tabs" : "Show panel tabs"),
-                    iconPath: mdiTab,
-                    onClick: toggleTabs,
-                  },
-                ],
               ]}
               onSelect={() => close()}
             />

@@ -1,13 +1,8 @@
-/** Persisted panel layout. Pages are singletons because extension pages share IDs and state. */
-export interface IPanelTab {
-  id: string;
-  pageId: string;
-}
+/** Persisted panel layout. Each panel owns one singleton extension page. */
 export interface IPanel {
   id: string;
   placement?: PanelPosition;
-  tabs: IPanelTab[];
-  activeTab: string;
+  pageId: string;
 }
 export type PanelNode =
   | { kind: "panel"; id: string }
@@ -29,7 +24,6 @@ export interface IPanelWorkspace {
 }
 export interface IPanelSettings {
   layouts: Record<string, Record<string, IPanelWorkspace>>;
-  showTabs?: boolean;
 }
 export type PanelPosition =
   | "right"
@@ -54,7 +48,6 @@ export interface IPanelBounds {
   height: number;
 }
 export const MAX_PANELS = 4;
-export const MAX_TABS = 16;
 export const PANEL_LAYOUT_KEY = "__workspace";
 
 export const panelIds = (node: PanelNode): string[] =>
@@ -63,12 +56,35 @@ export const panelIds = (node: PanelNode): string[] =>
 export function createWorkspace(pageId: string, partner?: string): IPanelWorkspace {
   const initial: IPanelWorkspace = {
     root: { kind: "panel", id: "panel-1" },
-    panels: { "panel-1": { id: "panel-1", tabs: [{ id: "tab-1", pageId }], activeTab: "tab-1" } },
+    panels: { "panel-1": { id: "panel-1", pageId } },
     focusedPanel: "panel-1",
     nextId: 2,
     recent: pageId ? [pageId] : [],
   };
   return partner && partner !== pageId ? addPanel(initial, "right", partner) : initial;
+}
+
+/** Retain each panel's visible page and geometry when upgrading a tabbed layout. */
+export function migratePanelWorkspace(value: unknown): IPanelWorkspace | undefined {
+  if (isPanelWorkspace(value)) return value;
+  if (!value || typeof value !== "object") return undefined;
+  const legacy = value as IPanelWorkspace & {
+    panels: Record<
+      string,
+      IPanel & { tabs?: { id: string; pageId: string }[]; activeTab?: string }
+    >;
+  };
+  if (!legacy.panels || typeof legacy.panels !== "object") return undefined;
+  const panels: Record<string, IPanel> = {};
+  for (const [id, panel] of Object.entries(legacy.panels)) {
+    if (!panel || !Array.isArray(panel.tabs) || typeof panel.activeTab !== "string")
+      return undefined;
+    const activeTab = panel.tabs.find((tab) => tab?.id === panel.activeTab);
+    if (!activeTab || typeof activeTab.pageId !== "string") return undefined;
+    panels[id] = { id: panel.id, placement: panel.placement, pageId: activeTab.pageId };
+  }
+  const migrated = { ...legacy, panels };
+  return isPanelWorkspace(migrated) ? migrated : undefined;
 }
 
 /** Move from page-specific layouts once, then keep one workspace for this game or context. */
@@ -78,10 +94,16 @@ export function initialPanelWorkspace(
   partner?: string,
 ): IPanelWorkspace {
   const shared = layouts?.[PANEL_LAYOUT_KEY];
-  if (isPanelWorkspace(shared)) return shared;
+  const migratedShared = migratePanelWorkspace(shared);
+  if (migratedShared) return migratedShared;
   const previous = layouts?.[pageId];
-  if (isPanelWorkspace(previous)) return previous;
-  return Object.values(layouts ?? {}).find(isPanelWorkspace) ?? createWorkspace(pageId, partner);
+  const migratedPrevious = migratePanelWorkspace(previous);
+  if (migratedPrevious) return migratedPrevious;
+  return (
+    Object.values(layouts ?? {})
+      .map(migratePanelWorkspace)
+      .find((workspace) => workspace !== undefined) ?? createWorkspace(pageId, partner)
+  );
 }
 
 export function replaceNode(root: PanelNode, id: string, replacement: PanelNode): PanelNode {
@@ -233,8 +255,7 @@ export function previewPanelPlacement(
   return replaceNode(root, target.id, split);
 }
 
-export const activePage = (panel: IPanel) =>
-  panel.tabs.find((tab) => tab.id === panel.activeTab)?.pageId ?? "";
+export const activePage = (panel: IPanel) => panel.pageId;
 
 export function closePanel(workspace: IPanelWorkspace, id: string): IPanelWorkspace {
   const root = removeNode(workspace.root, id);
@@ -256,21 +277,15 @@ export function addPanel(
   isHorizontal = true,
 ): IPanelWorkspace {
   const existing =
-    pageId &&
-    Object.values(workspace.panels).find((panel) =>
-      panel.tabs.some((tab) => tab.pageId === pageId),
-    );
-  if (existing) return selectPage(workspace, existing.id, existing.activeTab, pageId);
-  const pending = Object.values(workspace.panels).find(
-    (panel) => panel.tabs.length === 1 && !panel.tabs[0].pageId,
-  );
+    pageId && Object.values(workspace.panels).find((panel) => panel.pageId === pageId);
+  if (existing) return selectPage(workspace, existing.id, pageId);
+  const pending = Object.values(workspace.panels).find((panel) => !panel.pageId);
   const base = pending ? closePanel(workspace, pending.id) : workspace;
   const choice = panelPlacements(base.root).find(
     (item) => item.position === (position ?? defaultPlacement(base.root, isHorizontal)),
   );
   if (!choice) return workspace;
   const id = `panel-${base.nextId}`;
-  const tabId = `tab-${base.nextId}`;
   return {
     ...base,
     root: previewPanelPlacement(base.root, choice, id),
@@ -278,7 +293,7 @@ export function addPanel(
     focusedPanel: id,
     panels: {
       ...base.panels,
-      [id]: { id, placement: choice.position, tabs: [{ id: tabId, pageId }], activeTab: tabId },
+      [id]: { id, placement: choice.position, pageId },
     },
     recent: pageId
       ? [pageId, ...base.recent.filter((item) => item !== pageId)].slice(0, 8)
@@ -286,76 +301,21 @@ export function addPanel(
   };
 }
 
-export function addTab(
-  workspace: IPanelWorkspace,
-  panelId = workspace.focusedPanel,
-): IPanelWorkspace {
-  const panel = workspace.panels[panelId];
-  if (!panel || panel.tabs.length >= MAX_TABS) return workspace;
-  const pending = panel.tabs.find((tab) => !tab.pageId);
-  const id = pending?.id ?? `tab-${workspace.nextId}`;
-  return {
-    ...workspace,
-    nextId: workspace.nextId + (pending ? 0 : 1),
-    focusedPanel: panelId,
-    panels: {
-      ...workspace.panels,
-      [panelId]: {
-        ...panel,
-        activeTab: id,
-        tabs: pending ? panel.tabs : [...panel.tabs, { id, pageId: "" }],
-      },
-    },
-  };
-}
-
-export function closeTab(
-  workspace: IPanelWorkspace,
-  panelId: string,
-  tabId: string,
-): IPanelWorkspace {
-  const panel = workspace.panels[panelId];
-  if (!panel) return workspace;
-  if (panel.tabs.length === 1) return closePanel(workspace, panelId);
-  const index = panel.tabs.findIndex((tab) => tab.id === tabId);
-  const tabs = panel.tabs.filter((tab) => tab.id !== tabId);
-  return {
-    ...workspace,
-    panels: {
-      ...workspace.panels,
-      [panelId]: {
-        ...panel,
-        tabs,
-        activeTab: panel.activeTab === tabId ? tabs[Math.max(0, index - 1)].id : panel.activeTab,
-      },
-    },
-  };
-}
-
 export function selectPage(
   workspace: IPanelWorkspace,
   panelId: string,
-  tabId: string,
   pageId: string,
 ): IPanelWorkspace {
-  const existing = Object.values(workspace.panels)
-    .flatMap((panel) => panel.tabs.map((tab) => ({ panel, tab })))
-    .find((item) => item.tab.pageId === pageId && !!pageId);
+  const existing = Object.values(workspace.panels).find(
+    (panel) => panel.pageId === pageId && !!pageId,
+  );
   if (existing) {
     // Choosing an already-open extension page focuses its single instance and cancels the blank chooser.
-    const target = workspace.panels[panelId]?.tabs.find((tab) => tab.id === tabId);
     const base =
-      target && !target.pageId && target.id !== existing.tab.id
-        ? closeTab(workspace, panelId, tabId)
+      workspace.panels[panelId] && !workspace.panels[panelId].pageId && panelId !== existing.id
+        ? closePanel(workspace, panelId)
         : workspace;
-    return {
-      ...base,
-      focusedPanel: existing.panel.id,
-      panels: {
-        ...base.panels,
-        [existing.panel.id]: { ...base.panels[existing.panel.id], activeTab: existing.tab.id },
-      },
-    };
+    return { ...base, focusedPanel: existing.id };
   }
   const panel = workspace.panels[panelId];
   if (!panel) return workspace;
@@ -369,22 +329,20 @@ export function selectPage(
       ...workspace.panels,
       [panelId]: {
         ...panel,
-        activeTab: tabId,
-        tabs: panel.tabs.map((tab) => (tab.id === tabId ? { ...tab, pageId } : tab)),
+        pageId,
       },
     },
   };
 }
 
-/** Sidebar navigation activates an existing tab or replaces the focused panel's active tab. */
+/** Sidebar navigation focuses an open page or replaces the focused panel's page. */
 export function navigatePage(workspace: IPanelWorkspace, pageId: string): IPanelWorkspace {
   if (!pageId) return workspace;
   for (const panelId of panelIds(workspace.root)) {
-    const tab = workspace.panels[panelId].tabs.find((entry) => entry.pageId === pageId);
-    if (tab) return selectPage(workspace, panelId, tab.id, pageId);
+    if (workspace.panels[panelId].pageId === pageId) return selectPage(workspace, panelId, pageId);
   }
   const panelId = workspace.focusedPanel;
-  return selectPage(workspace, panelId, workspace.panels[panelId].activeTab, pageId);
+  return selectPage(workspace, panelId, pageId);
 }
 
 export function resizePanel(
@@ -404,7 +362,7 @@ export function resizePanel(
   return Number.isFinite(ratio) ? { ...workspace, root: resize(workspace.root) } : workspace;
 }
 
-/** Validate persisted trees before rendering: bounded depth, references, unique pages and tabs. */
+/** Validate persisted trees before rendering: bounded depth, references and unique pages. */
 export function isPanelWorkspace(value: unknown): value is IPanelWorkspace {
   if (!value || typeof value !== "object") return false;
   const workspace = value as IPanelWorkspace;
@@ -443,28 +401,15 @@ export function isPanelWorkspace(value: unknown): value is IPanelWorkspace {
   )
     return false;
   const pages = new Set<string>();
-  const tabs = new Set<string>();
   return leaves.every((id) => {
     const panel = workspace.panels[id];
-    return (
-      panel?.id === id &&
-      Array.isArray(panel.tabs) &&
-      panel.tabs.length > 0 &&
-      panel.tabs.length <= MAX_TABS &&
-      panel.tabs.some((tab) => tab && tab.id === panel.activeTab) &&
-      panel.tabs.every((tab) => {
-        if (
-          !tab ||
-          typeof tab.id !== "string" ||
-          tabs.has(tab.id) ||
-          typeof tab.pageId !== "string" ||
-          (tab.pageId && pages.has(tab.pageId))
-        )
-          return false;
-        tabs.add(tab.id);
-        if (tab.pageId) pages.add(tab.pageId);
-        return true;
-      })
-    );
+    if (
+      panel?.id !== id ||
+      typeof panel.pageId !== "string" ||
+      (panel.pageId && pages.has(panel.pageId))
+    )
+      return false;
+    if (panel.pageId) pages.add(panel.pageId);
+    return true;
   });
 }

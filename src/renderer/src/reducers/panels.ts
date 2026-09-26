@@ -2,25 +2,22 @@ import * as actions from "../actions/panels";
 import { isPanelWorkspace, type IPanelSettings } from "../util/panelLayout";
 import { actionsToReducerSpec } from "./builder";
 
-const defaults: IPanelSettings = { layouts: {}, showTabs: true };
+const defaults: IPanelSettings = { layouts: {} };
 export const panelsReducer = actionsToReducerSpec(
   defaults,
   actions,
   {
-    setPanelTabsVisible: (state, { visible }) => ({ ...state, showTabs: visible }),
     setPanelWorkspace: (state, { scope, layoutKey, workspace }) => {
       if (!scope || !layoutKey || !isPanelWorkspace(workspace)) return state;
+      const next = { ...state };
+      delete (next as IPanelSettings & { showTabs?: boolean }).showTabs;
       return {
-        ...state,
+        ...next,
         layouts: { ...state.layouts, [scope]: { ...state.layouts[scope], [layoutKey]: workspace } },
       };
     },
   },
   {
-    showTabs: {
-      type: "boolean",
-      description: () => "Resetting invalid panel tab visibility",
-    },
     layouts: {
       type: "object",
       noNull: true,

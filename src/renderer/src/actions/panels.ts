@@ -10,7 +10,3 @@ export const setPanelWorkspace = createAction(
     workspace,
   }),
 );
-
-export const setPanelTabsVisible = createAction("SET_PANEL_TABS_VISIBLE", (visible: boolean) => ({
-  visible,
-}));

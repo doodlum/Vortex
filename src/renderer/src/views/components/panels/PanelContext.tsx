@@ -10,19 +10,16 @@ import {
 } from "react";
 import { useDispatch, useSelector } from "react-redux";
 
-import { setPanelTabsVisible, setPanelWorkspace } from "@/actions/panels";
+import { setPanelWorkspace } from "@/actions/panels";
 import { setOpenMainPage } from "@/actions/session";
 import { usePagesContext } from "@/contexts";
 import type { IMainPage } from "@/types/IMainPage";
 import type { IState } from "@/types/IState";
 import {
   addPanel,
-  addTab,
   closePanel,
-  closeTab,
   initialPanelWorkspace,
   isPanelWorkspace,
-  MAX_TABS,
   navigatePage,
   PANEL_LAYOUT_KEY,
   resizePanel,
@@ -35,21 +32,17 @@ import { activeGameId, secondaryPage as selectSecondaryPage } from "@/util/selec
 
 import { useSpineContext } from "../Spine/SpineContext";
 
-export type PanelOpenMode = "current" | "panel" | "tab";
+export type PanelOpenMode = "current" | "panel";
 interface IPanelContext {
   workspace: IPanelWorkspace;
   pages: IMainPage[];
   navigationPages: IMainPage[];
-  showTabs: boolean;
-  toggleTabs: () => void;
   isHorizontal: boolean;
   setOrientation: (horizontal: boolean) => void;
   navigate: (pageId: string, mode?: PanelOpenMode) => void;
   add: (position?: PanelPosition) => void;
-  newTab: (panelId?: string) => void;
-  select: (panelId: string, tabId: string, pageId: string) => void;
-  activate: (panelId: string, tabId: string) => void;
-  close: (panelId: string, tabId?: string) => void;
+  select: (panelId: string, pageId: string) => void;
+  close: (panelId: string) => void;
   focus: (panelId: string) => void;
   resize: (id: string, ratio: number) => void;
   dismissHint: () => void;
@@ -71,7 +64,9 @@ export function PanelProvider({ children }: PropsWithChildren) {
     mainPages[0]?.id ??
     "Dashboard";
   const layouts = useSelector((state: IState) => state.settings.panels?.layouts?.[scope]);
-  const showTabs = useSelector((state: IState) => state.settings.panels?.showTabs !== false);
+  const legacyTabPreference = useSelector(
+    (state: IState) => state.settings.panels !== undefined && "showTabs" in state.settings.panels,
+  );
   const saved = layouts?.[PANEL_LAYOUT_KEY];
   const legacy = useSelector((state: IState) => state.settings.splitView?.pairs?.[scope]?.[anchor]);
   const fallback = useMemo(
@@ -118,8 +113,9 @@ export function PanelProvider({ children }: PropsWithChildren) {
   );
 
   useEffect(() => {
-    if (!isPanelWorkspace(saved)) dispatch(setPanelWorkspace(scope, PANEL_LAYOUT_KEY, fallback));
-  }, [saved, scope, fallback, dispatch]);
+    if (!isPanelWorkspace(saved) || legacyTabPreference)
+      dispatch(setPanelWorkspace(scope, PANEL_LAYOUT_KEY, workspace));
+  }, [saved, scope, workspace, legacyTabPreference, dispatch]);
 
   // External show-main-page requests navigate this game's workspace without replacing it.
   const previousSession = useRef({ scope, mainPage });
@@ -152,60 +148,28 @@ export function PanelProvider({ children }: PropsWithChildren) {
         commit(addPanel(current, undefined, pageId, isHorizontal));
         return;
       }
-      if (mode === "current") {
-        if (activePage(current.panels[current.focusedPanel]) === pageId)
-          mainPages.find((page) => page.id === pageId)?.onReset?.();
-        commit(navigatePage(current, pageId));
-      } else if (
-        Object.values(current.panels).some((panel) =>
-          panel.tabs.some((tab) => tab.pageId === pageId),
-        )
-      ) {
-        commit(navigatePage(current, pageId));
-      } else if (mode === "tab") {
-        if (current.panels[current.focusedPanel].tabs.length >= MAX_TABS) return;
-        const next = addTab(current);
-        commit(
-          selectPage(next, next.focusedPanel, next.panels[next.focusedPanel].activeTab, pageId),
-        );
-      }
+      if (activePage(current.panels[current.focusedPanel]) === pageId)
+        mainPages.find((page) => page.id === pageId)?.onReset?.();
+      commit(navigatePage(current, pageId));
     },
-    [commit, dispatch, mainPages, isHorizontal],
+    [commit, mainPages, isHorizontal],
   );
 
   const value: IPanelContext = {
     workspace,
     pages,
     navigationPages: visiblePages,
-    showTabs,
-    toggleTabs: () => dispatch(setPanelTabsVisible(!showTabs)),
     isHorizontal,
     setOrientation,
     navigate,
     dismissHint: () => commit({ ...latest.current, hintDismissed: true }),
     add: (position) => commit(addPanel(latest.current, position, "", isHorizontal)),
-    newTab: (panelId = latest.current.focusedPanel) => commit(addTab(latest.current, panelId)),
-    select: (panelId, tabId, pageId) => commit(selectPage(latest.current, panelId, tabId, pageId)),
-    activate: (panelId, tabId) => {
-      const current = latest.current;
-      const panel = current.panels[panelId];
-      if (panel && (current.focusedPanel !== panelId || panel.activeTab !== tabId))
-        commit({
-          ...current,
-          focusedPanel: panelId,
-          panels: { ...current.panels, [panelId]: { ...panel, activeTab: tabId } },
-        });
-    },
+    select: (panelId, pageId) => commit(selectPage(latest.current, panelId, pageId)),
     focus: (panelId) => {
       if (latest.current.focusedPanel !== panelId)
         commit({ ...latest.current, focusedPanel: panelId });
     },
-    close: (panelId, tabId) => {
-      const next = tabId
-        ? closeTab(latest.current, panelId, tabId)
-        : closePanel(latest.current, panelId);
-      commit(next);
-    },
+    close: (panelId) => commit(closePanel(latest.current, panelId)),
     resize: (id, ratio) => commit(resizePanel(latest.current, id, ratio)),
   };
   return <PanelContext.Provider value={value}>{children}</PanelContext.Provider>;
