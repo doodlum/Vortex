@@ -156,8 +156,9 @@ export const MainPageContainer: React.FC<React.PropsWithChildren<IBaseProps>> = 
     () => ({
       headerPortal: () => headerRef,
       page: page.id,
+      active,
     }),
-    [headerRef, page.id],
+    [headerRef, page.id, active],
   );
 
   const handleHeaderRef = useCallback((ref: HTMLElement | null) => {

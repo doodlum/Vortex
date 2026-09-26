@@ -37,7 +37,7 @@ export function PanelNavigationItem({ page }: { page: IMainPage }) {
             iconPath={page.mdi ?? getIconPath(page.icon)}
             isActive={open}
             aria-current={focused ? "page" : undefined}
-            className={focused ? "w-full ring-1 ring-stroke-moderate ring-inset" : "w-full"}
+            className={focused ? "w-full ring-2 ring-neutral-600 ring-inset" : "w-full"}
             onClick={(event) => navigate(page.id, event.ctrlKey ? "panel" : "current")}
           >
             {label}

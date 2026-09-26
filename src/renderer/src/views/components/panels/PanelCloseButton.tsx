@@ -7,7 +7,7 @@ export function PanelCloseButton({ label, onClick }: { label: string; onClick: (
   return (
     <Tooltip content={label}>
       <Button
-        appearance="weak"
+        appearance="subdued"
         brand="neutral"
         aria-label={label}
         className="size-7 p-0"

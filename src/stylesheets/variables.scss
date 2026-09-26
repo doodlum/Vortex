@@ -11,9 +11,10 @@ $white: #f4f4f5;
 $black: #09090b;
 $gray-darker: #d4d4d8;
 $gray-dark: #a1a1aa;
-$gray: #3f3f46;
-$gray-light: #27272a;
-$gray-lighter: #18181b;
+// Keep legacy Sass surfaces aligned with the modern high, mid, and low tokens.
+$gray: #3e3e47;
+$gray-light: #29292e;
+$gray-lighter: #1d1d21;
 
 $brand-primary: #c87b28;
 $brand-highlight: #1d4ed8;

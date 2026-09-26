@@ -1,12 +1,19 @@
 import { mdiViewSplitVertical } from "@mdi/js";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 
 import { usePagesContext } from "@/contexts";
 import type { IMainPage } from "@/types/IMainPage";
 import { Button } from "@/ui/components/button/Button";
-import { Icon } from "@/ui/components/icon/Icon";
 import { Typography } from "@/ui/components/typography/Typography";
 import { joinClasses } from "@/ui/utils/joinClasses";
 import { activePage, panelIds, type IPanel, type PanelNode } from "@/util/panelLayout";
@@ -64,6 +71,22 @@ function PanelPageHost({
   );
 }
 
+/** Give legacy page glyphs the same pale-to-lavender finish as modern pictograms. */
+function PanelPageIcon({ path }: { path: string }) {
+  const gradientId = `panel-page-icon-${useId().replaceAll(":", "")}`;
+  return (
+    <svg className="size-7 shrink-0" role="presentation" viewBox="0 0 24 24">
+      <defs>
+        <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#fff" />
+          <stop offset="100%" stopColor="#9099f0" />
+        </linearGradient>
+      </defs>
+      <path d={path} fill={`url(#${gradientId})`} />
+    </svg>
+  );
+}
+
 function PanelFrame({
   panel,
   registerSlot,
@@ -79,47 +102,39 @@ function PanelFrame({
   const label = page ? t(page.title, { ns: page.namespace }) : pageId || t("New panel");
   const multi = Object.keys(workspace.panels).length > 1;
   const showPlainActions = page?.newLayout !== true;
+  const iconPath = page ? (page.mdi ?? getIconPath(page.icon)) : mdiViewSplitVertical;
   return (
     <section
       ref={frame}
       data-panel-id={panel.id}
       data-panel-focused={workspace.focusedPanel === panel.id}
       aria-label={t("{{page}} panel", { page: label })}
-      className={joinClasses([
-        "relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border bg-surface-low",
-        multi && workspace.focusedPanel === panel.id
-          ? "border-stroke-moderate"
-          : "border-stroke-weak",
-      ])}
+      className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg bg-surface-low p-0.5"
     >
       {showPlainActions && (
         <div
           data-panel-plain-actions=""
-          className="flex h-10 shrink-0 items-center justify-between border-b border-stroke-weak bg-surface-low px-3"
+          className="mt-0.5 flex shrink-0 items-center justify-between border-b border-stroke-weak bg-surface-low py-3 pr-3.5 pl-6"
         >
-          <div className="flex min-w-0 items-center gap-3">
-            {page ? (
-              <Icon path={page.mdi ?? getIconPath(page.icon)} size="sm" />
-            ) : (
-              <Icon path={mdiViewSplitVertical} size="sm" />
-            )}
+          <div className="flex min-w-0 items-center gap-2">
+            <PanelPageIcon path={iconPath} />
             <Typography
-              as="span"
-              brand="none"
-              typographyType="body-sm"
-              className="block truncate font-semibold"
+              as="h2"
+              appearance="subdued"
+              typographyType="heading-xs"
+              className="min-w-0 truncate"
             >
               {label}
             </Typography>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
-            {multi && (
+          {multi && (
+            <div data-panel-plain-header-actions="" className="shrink-0">
               <PanelCloseButton
                 label={pageId ? t("Close {{page}} panel", { page: label }) : t("Close new panel")}
                 onClick={() => close(panel.id)}
               />
-            )}
-          </div>
+            </div>
+          )}
         </div>
       )}
       <div
@@ -142,6 +157,16 @@ function PanelFrame({
           />
         )}
       </div>
+      <div
+        data-panel-outline=""
+        aria-hidden="true"
+        className={joinClasses([
+          "pointer-events-none absolute inset-0 z-10 rounded-lg",
+          workspace.focusedPanel === panel.id
+            ? "border-2 border-neutral-600"
+            : "border border-surface-low",
+        ])}
+      />
     </section>
   );
 }

@@ -85,7 +85,7 @@ export function PanelToolbar() {
     (a, b) => Number(b.position === position) - Number(a.position === position),
   );
   return (
-    <Popover className="relative flex h-10 shrink-0" style={{ WebkitAppRegion: "no-drag" }}>
+    <Popover className="relative flex h-7 shrink-0" style={{ WebkitAppRegion: "no-drag" }}>
       {({ close }) => (
         <>
           <Tooltip
@@ -100,8 +100,8 @@ export function PanelToolbar() {
               aria-pressed={!!pending}
               aria-disabled={!placements.length || !!pending}
               data-panel-next-position={position ?? "full"}
-              className="h-10 rounded-r-none border border-stroke-weak px-2"
-              customContent={<PositionIcon root={preview} newPanelId={pending?.id} />}
+              className="h-7 w-7 rounded-l-md rounded-r-none border border-stroke-weak p-0 hover:bg-surface-low"
+              customContent={<PositionIcon root={preview} newPanelId={pending?.id} size="sm" />}
               onClick={() => {
                 if (!pending) add();
               }}
@@ -121,9 +121,20 @@ export function PanelToolbar() {
             ref={trigger}
             aria-label={t("Choose panel position")}
             aria-haspopup="menu"
-            className="flex h-10 w-6.5 items-center justify-center rounded-r-lg border-y border-r border-stroke-weak hover:bg-surface-mid disabled:opacity-40"
+            className="group flex h-7 w-4.5 items-center justify-center rounded-r-md border-y border-r border-stroke-weak hover:border-transparent hover:bg-surface-low disabled:opacity-40 data-[open]:border-transparent data-[open]:bg-surface-low"
           >
-            <img alt="" draggable={false} src="assets/panels/layout-chevron.svg" />
+            <span
+              aria-hidden="true"
+              className="h-1 w-2 bg-neutral-subdued group-hover:bg-neutral-strong"
+              style={{
+                WebkitMaskImage: 'url("assets/panels/layout-chevron.svg")',
+                maskImage: 'url("assets/panels/layout-chevron.svg")',
+                WebkitMaskSize: "contain",
+                maskSize: "contain",
+                WebkitMaskRepeat: "no-repeat",
+                maskRepeat: "no-repeat",
+              }}
+            />
           </PopoverButton>
           <PopoverPanel
             anchor={{ to: "bottom end", gap: 4 }}

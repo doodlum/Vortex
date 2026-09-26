@@ -12,7 +12,14 @@ each panel holds one page, and the sidebar is the page switcher.
   single-panel workspace adds a right column; a tall one adds a bottom row.
   The adjacent dropdown offers every legal position. Right click or Shift+F10
   on the button opens that dropdown too. The button and menu icons reflect
-  current divider ratios and the proposed panel bounds.
+  current divider ratios and the proposed panel bounds. The two-part control
+  scales with the profile button: 28px high in Vortex's 44px title bar, with
+  a 28px primary segment and an 18px dropdown segment.
+- The adjacent profile control is also 46×28px, with a circular avatar and
+  dropdown chevron inside one outlined button. The title-bar order is Panels,
+  Profile, Premium status, divider, Version, divider, then window controls.
+  When signed out, the Help menu occupies the profile slot; when no Premium
+  status is shown, its divider disappears with it.
 - Up to four panels form columns, rows, or a two-by-two layout. A pending
   unfilled panel moves when another position is chosen, rather than creating
   a second empty panel. A fourth panel aligns its new divider with its neighbor.
@@ -22,13 +29,26 @@ each panel holds one page, and the sidebar is the page switcher.
 - A sidebar page that is already open focuses its panel. An unopened page
   replaces the page in the active panel. Ctrl+click or the sidebar context menu
   opens the page in a new panel. Open pages have the sidebar selection
-  background; only the focused panel's page has the outline.
-- Modern pages place the panel close control after the page toolbar. Older
-  pages and the empty chooser use a small action row with page icon and title.
-  The row uses the page background color. A single panel has no close control.
-- Clicking anywhere inside a panel focuses it. Its border remains visible when
-  there is only one panel. Drag a 12px gutter to resize; arrow keys, Home/End,
-  and double click also adjust or reset a divider.
+  background; only the focused panel's page has the 2px neutral-600 outline.
+- Modern pages pin the panel close button to the header's top-right corner,
+  including when their toolbar wraps or the header expands. Headers do not add
+  a separator beside it. Every panel X uses the shared 28px neutral subdued
+  button with a 1px outline and transparent resting background. A wrapped
+  toolbar reaches the normal right content margin without a reserved close-button
+  gap. Older pages and the empty chooser use a temporary header matching the
+  compact modern header: 28px pale-to-lavender gradient icon, 18px subdued
+  semibold title, 12px vertical padding, and matching close-button spacing.
+  Legacy page toolbars stay visible below it in every open panel, even when
+  another panel has focus. A single panel has no close control. Legacy Sass surface
+  shades track the modern low, mid, and high tokens, while the broad legacy
+  page body uses surface-low and its toolbar uses surface-mid until those pages
+  are migrated.
+- Clicking anywhere inside a panel focuses it. The edge overlays a fixed 2px
+  inset so focus changes never resize or shift the page. The focused edge is
+  2px Figma neutral-600 (#52525b), including when it is the only panel; the
+  unfocused edge is 1px surface-low, matching the Mods background. Drag a 12px
+  gutter to resize; arrow keys, Home/End, and double click also adjust or reset
+  a divider.
 
 ## State and responsive behavior
 

@@ -81,7 +81,7 @@ describe("PageHeader", () => {
 
     expect(screen.getByTestId("header")).toHaveClass("shadow-md");
   });
-  it("places panel controls after the page toolbar with a divider", () => {
+  it("places panel controls after the page toolbar without a divider", () => {
     render(
       <PageHeaderActionsContext.Provider value={<button>Close panel</button>}>
         <Page scrollable={false}>
@@ -95,7 +95,8 @@ describe("PageHeader", () => {
     const header = screen.getByTestId("header");
     const actions = header.querySelector("[data-panel-header-actions]") as HTMLElement;
     expect(actions).toContainElement(screen.getByRole("button", { name: "Close panel" }));
-    expect(actions.querySelector("span[aria-hidden='true']")).toHaveClass("w-px");
+    expect(actions.querySelector("span[aria-hidden='true']")).toBeNull();
+    expect(header.querySelector(".max-w-8xl")).toHaveClass("pr-14");
     expect(screen.getByRole("button", { name: "Page toolbar" })).toBeVisible();
   });
 });
