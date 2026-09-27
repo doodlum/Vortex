@@ -3,7 +3,7 @@ import update from "immutability-helper";
 import type { IReducerSpec } from "@/types/IExtensionContext";
 
 import * as actions from "../actions/interface";
-import { resolveDeployDesign } from "../deployDesigns";
+import { resolveDeployDesign, resolvePlayGate } from "../deployDesigns";
 
 /**
  * reducer for changes to interface settings
@@ -34,6 +34,8 @@ const settingsReducer: IReducerSpec = {
     // Absent too: unset means the recommended design. A removed design becomes that.
     [actions.setDeployButtonStyle as any]: (state, payload) =>
       update(state, { deployButtonStyle: { $set: resolveDeployDesign(payload) } }),
+    [actions.setPlayWhilePending as any]: (state, payload) =>
+      update(state, { playWhilePending: { $set: resolvePlayGate(payload) } }),
   },
   defaults: {
     language: "en",

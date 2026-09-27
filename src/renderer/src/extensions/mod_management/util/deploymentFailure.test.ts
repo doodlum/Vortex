@@ -11,6 +11,7 @@ vi.mock("../../../util/log", () => ({ log: vi.fn() }));
 import { sessionReducer } from "../reducers/session";
 import {
   clearDeploymentFailure,
+  clearDeploymentFailures,
   deploysWithoutNotifications,
   reportDeploymentFailure,
 } from "./deploymentFailure";
@@ -22,8 +23,12 @@ const apiFor = (useModernLayout: boolean | undefined, failure: unknown = null) =
     api: {
       getState: () => ({
         settings: { window: { useModernLayout } },
-        session: { mods: { deploymentFailure: { fallout4: failure } } },
+        session: {
+          mods: { deploymentFailure: { fallout4: failure, skyrimse: null } },
+          extensions: { available: [] },
+        },
       }),
+      getLoadedExtensions: () => [],
       store: { dispatch },
     } as never,
   };
@@ -101,21 +106,46 @@ describe("reportDeploymentFailure", () => {
     expect(failure.warning).toBe(true);
   });
 
-  it("keeps what the dialog needs to offer: the cycles, the fix", () => {
+  it("keeps what the dialog needs to offer: the fix, and a passing cause", () => {
     const { api, dispatch } = apiFor(true);
 
     reportDeploymentFailure(
       api,
       "fallout4",
-      { title: "Mod rules contain cycles", cycles: [["a", "b"]], fix: "deployment-method" },
+      { title: "Can't deploy", fix: "deployment-method", cause: "tools-running" },
       vi.fn(),
     );
 
     const failure = reduce(dispatch.mock.calls[0][0]).deploymentFailure.fallout4;
-    expect(failure.cycles).toEqual([["a", "b"]]);
     expect(failure.fix).toBe("deployment-method");
+    expect(failure.cause).toBe("tools-running");
   });
 
+  // What api.showErrorNotification would have added: Report goes to the extension's
+  // tracker, and the text says whom to report it to.
+  it("finds the extension an error names, as showErrorNotification does", () => {
+    const { api, dispatch } = apiFor(true);
+    const extension = {
+      name: "some-extension",
+      info: {
+        name: "Some Extension",
+        author: "someone",
+        issueTrackerURL: "https://example.invalid",
+      },
+    };
+    Object.assign(api as object, { getLoadedExtensions: () => [extension] });
+    const err = Object.assign(new Error("broke"), { extension: "some-extension" });
+
+    reportDeploymentFailure(
+      api,
+      "fallout4",
+      { title: "Failed to deploy mods", details: err },
+      vi.fn(),
+    );
+
+    const failure = reduce(dispatch.mock.calls[0][0]).deploymentFailure.fallout4;
+    expect(failure.reportURL).toBe("https://example.invalid");
+  });
   // Nowhere to show it without a game, so the notification it always was.
   it("notifies when there's no game to keep it for", () => {
     const { api, dispatch } = apiFor(true);
@@ -141,6 +171,25 @@ describe("clearDeploymentFailure", () => {
     const { api, dispatch } = apiFor(true);
 
     clearDeploymentFailure(api, "fallout4");
+
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("clearDeploymentFailures", () => {
+  // "Can't deploy while the game or a tool is running" stops being true when they exit.
+  it("clears the failures a passing cause left", () => {
+    const { api, dispatch } = apiFor(true, { title: "Can't deploy", cause: "tools-running" });
+
+    clearDeploymentFailures(api, "tools-running");
+
+    expect(reduce(dispatch.mock.calls[0][0]).deploymentFailure.fallout4).toBeNull();
+  });
+
+  it("leaves other failures until a deployment succeeds", () => {
+    const { api, dispatch } = apiFor(true, { title: "Failed to deploy mods" });
+
+    clearDeploymentFailures(api, "tools-running");
 
     expect(dispatch).not.toHaveBeenCalled();
   });

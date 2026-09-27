@@ -117,9 +117,9 @@ import BlacklistSet from "./util/BlacklistSet";
 import { genSubDirFunc, purgeMods, purgeModsInPath } from "./util/deploy";
 import {
   clearDeploymentFailure,
+  clearDeploymentFailures,
   deploysWithoutNotifications,
   reportDeploymentFailure,
-  showCycles,
   showDeploymentNecessary,
 } from "./util/deploymentFailure";
 import {
@@ -647,7 +647,11 @@ function genUpdateModDeployment(installManager: InstallManager) {
       reportDeploymentFailure(
         api,
         profile?.gameId,
-        { title: "Can't deploy while the game or a tool is running", warning: true },
+        {
+          title: "Can't deploy while the game or a tool is running",
+          warning: true,
+          cause: "tools-running",
+        },
         () =>
           api.sendNotification({
             type: "info",
@@ -719,7 +723,8 @@ function genUpdateModDeployment(installManager: InstallManager) {
           reportDeploymentFailure(
             api,
             gameId,
-            { title: "Deployment not possible", details: reason, warning: true },
+            // the warning had no title, only this; the fix is a method that supports them
+            { title: reason, warning: true, fix: "deployment-method" },
             () =>
               api.sendNotification({
                 type: "warning",
@@ -938,26 +943,6 @@ function genUpdateModDeployment(installManager: InstallManager) {
                     err.message,
                     { allowReport: false },
                   ),
-              );
-            } else if (err instanceof CycleError) {
-              reportDeploymentFailure(
-                api,
-                gameId,
-                { title: "Mod rules contain cycles", warning: true, cycles: err.cycles },
-                () =>
-                  api.sendNotification({
-                    id: "mod-cycle-warning",
-                    type: "warning",
-                    message: "Mod rules contain cycles",
-                    actions: [
-                      {
-                        title: "Show",
-                        action: () => {
-                          showCycles(api, err.cycles, profile.gameId);
-                        },
-                      },
-                    ],
-                  }),
               );
             } else {
               if (err["code"] === undefined && err["errno"] !== undefined) {
@@ -1634,6 +1619,13 @@ function once(api: IExtensionApi) {
   api.onStateChange(["persistent", "mods"], (previous, current) =>
     onModsChanged(api, previous, current),
   );
+
+  // "Can't deploy while the game or a tool is running" stops being true once they exit
+  api.onStateChange(["session", "base", "toolsRunning"], (previous, current) => {
+    if (Object.keys(current ?? {}).length === 0) {
+      clearDeploymentFailures(api, "tools-running");
+    }
+  });
 
   api.onStateChange(["persistent", "deployment", "needToDeploy"], (previous, current) => {
     const gameMode = activeGameId(store.getState());

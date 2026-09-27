@@ -13,7 +13,6 @@ import * as selectors from "@/util/selectors";
 import {
   type IDeploymentFailure,
   reportDeploymentFailure,
-  showCycles,
   showDeploymentNecessary,
 } from "../util/deploymentFailure";
 import { getAllActivators } from "../util/deploymentMethods";
@@ -240,10 +239,7 @@ export const useDeployMods = (): IDeployMods => {
     }
 
     const extra: IDialogAction[] = [];
-    if (failure.cycles !== undefined) {
-      const cycles = failure.cycles;
-      extra.push({ label: "Show", action: () => void showCycles(api, cycles, gameId) });
-    }
+
     if (failure.fix === "deployment-method") {
       extra.push({
         label: "Fix",

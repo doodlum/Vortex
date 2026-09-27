@@ -262,30 +262,6 @@ describe("useDeployMods", () => {
     );
   });
 
-  it("offers to show the cycles that stopped it", () => {
-    const { result } = render({
-      failure: {
-        title: "Mod rules contain cycles",
-        content: { text: "Mod rules contain cycles" },
-        cycles: [["a", "b"]],
-        warning: true,
-      },
-    });
-
-    result.current.showFailure();
-
-    const [type, , , actions] = api.showDialog.mock.calls[0] as unknown as [
-      string,
-      string,
-      unknown,
-      Array<{ label: string }>,
-    ];
-    expect(type).toBe("info");
-    // the notification's own button
-    expect(actions.map((action) => action.label)).toContain("Show");
-  });
-
-  // "Mods deployed", which was a 3 second notification.
   it("says Mods deployed for as long as its notification showed", () => {
     vi.useFakeTimers();
     try {

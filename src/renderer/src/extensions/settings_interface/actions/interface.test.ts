@@ -61,3 +61,13 @@ describe("setDeployButtonStyle", () => {
     });
   });
 });
+
+describe("setPlayWhilePending", () => {
+  it("creates the correct action", () => {
+    expect(interfaceActions.setPlayWhilePending(2)).toEqual({
+      error: false,
+      type: "SET_PLAY_WHILE_PENDING",
+      payload: 2,
+    });
+  });
+});

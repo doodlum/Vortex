@@ -5,7 +5,7 @@ import type { DeployStatus } from "@/extensions/mod_management/hooks/useDeployMo
 import { Typography } from "@/ui/components/typography/Typography";
 import { joinClasses } from "@/ui/utils/joinClasses";
 
-import { percentText, rowText } from "./deployCopy";
+import { rowText } from "./deployCopy";
 import { StatusIcon, StatusRowButton } from "./statusRowParts";
 import type { IDeployControlProps } from "./types";
 
@@ -19,14 +19,12 @@ const TINT: Record<DeployStatus, string> = {
 
 /**
  * Status row 5, Tint: the whole row takes the state's colour - quiet when everything is
- * deployed - with the state's icon, the status in words, and the percent on the right
- * while it deploys. Collapsed, a tinted square with the icon.
+ * deployed - with the state's icon and the short status. Collapsed, a tinted square with the icon.
  */
 export const StatusRowTint = (props: IDeployControlProps) => {
   const { t } = useTranslation();
   const { deploy, play } = props;
   const { status } = deploy;
-  const percent = status === "deploying" ? percentText(deploy.progressPercent) : undefined;
 
   return (
     <StatusRowButton
@@ -49,19 +47,8 @@ export const StatusRowTint = (props: IDeployControlProps) => {
             className="grow truncate text-left font-semibold"
             typographyType="body-sm"
           >
-            {status === "deploying" ? (deploy.progressText ?? t("Deploying")) : rowText(t, deploy)}
+            {rowText(t, deploy)}
           </Typography>
-
-          {!!percent && (
-            <Typography
-              as="span"
-              brand="none"
-              className="shrink-0 font-semibold tabular-nums"
-              typographyType="body-xs"
-            >
-              {percent}
-            </Typography>
-          )}
         </>
       )}
     </StatusRowButton>

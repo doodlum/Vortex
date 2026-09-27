@@ -13,7 +13,8 @@
 @layer utilities {
     [data-reduce-motion="true"] {
         .animate-pulse,
-        .animate-rocket-lift {
+        .animate-rocket-lift,
+        .animate-deploy-attention {
             animation: none;
         }
     }

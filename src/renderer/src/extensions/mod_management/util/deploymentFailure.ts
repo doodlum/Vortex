@@ -1,7 +1,6 @@
-import shortid from "shortid";
-
 import type { IErrorOptions, IExtensionApi } from "../../../types/IExtensionContext";
 import type { IState } from "../../../types/IState";
+import { extensionErrorOptions } from "../../../util/extensionErrorOptions";
 import { describeError, type IErrorDescription } from "../../../util/message";
 import { setAutoDeployment } from "../../settings_interface/actions/automation";
 import { setDeploymentFailure } from "../actions/session";
@@ -13,10 +12,10 @@ import { setDeploymentFailure } from "../actions/session";
 export interface IDeploymentFailure extends IErrorDescription {
   /** Something that stopped the deployment rather than broke it, such as a running tool. */
   warning?: boolean;
-  /** Rule cycles to offer to show, for a deployment the mod rules made impossible. */
-  cycles?: string[][];
   /** Offer to take the user to the setting that has to change first. */
   fix?: "deployment-method";
+  /** A passing reason, cleared when it passes rather than at the next deployment. */
+  cause?: "tools-running";
 }
 
 export interface IDeploymentFailureInput {
@@ -24,8 +23,8 @@ export interface IDeploymentFailureInput {
   details?: unknown;
   options?: IErrorOptions;
   warning?: boolean;
-  cycles?: string[][];
   fix?: IDeploymentFailure["fix"];
+  cause?: IDeploymentFailure["cause"];
 }
 
 /**
@@ -51,19 +50,37 @@ export function reportDeploymentFailure(
     return;
   }
 
-  const description = describeError(input.title, input.details ?? input.title, {
-    ...input.options,
-    warning: input.warning,
-  });
+  const details = input.details ?? input.title;
+  // what api.showErrorNotification adds: the extension the error came from, for its Report
+  const options = extensionErrorOptions(
+    api.extension,
+    () => api.getLoadedExtensions(),
+    api.getState(),
+    details,
+    { ...input.options, warning: input.warning },
+  );
+  const description = describeError(input.title, details, options);
 
   api.store.dispatch(
     setDeploymentFailure(gameId, {
       ...description,
       warning: input.warning,
-      cycles: input.cycles,
       fix: input.fix,
+      cause: input.cause,
     }),
   );
+}
+
+/** Clears every game's failure of this cause, once the cause has passed. */
+export function clearDeploymentFailures(api: IExtensionApi, cause: IDeploymentFailure["cause"]) {
+  const state = api.getState() as IState & {
+    session: { mods?: { deploymentFailure?: Record<string, IDeploymentFailure | null> } };
+  };
+  Object.entries(state.session.mods?.deploymentFailure ?? {}).forEach(([gameId, failure]) => {
+    if (failure?.cause === cause) {
+      api.store.dispatch(setDeploymentFailure(gameId, null));
+    }
+  });
 }
 
 /** Clears a failure the control shows, once a deployment starts or succeeds. */
@@ -74,31 +91,6 @@ export function clearDeploymentFailure(api: IExtensionApi, gameId: string): void
   if (state.session.mods?.deploymentFailure?.[gameId] != null) {
     api.store.dispatch(setDeploymentFailure(gameId, null));
   }
-}
-
-/** Lists the cycles in the mod rules, each one a link to the editor that can break it. */
-export function showCycles(api: IExtensionApi, cycles: string[][], gameId: string) {
-  const id = shortid();
-  return api.showDialog(
-    "error",
-    "Cycles",
-    {
-      text:
-        "Dependency rules between your mods contain cycles, " +
-        'like "A after B" and "B after A". You need to remove one of the ' +
-        "rules causing the cycle, otherwise your mods can't be " +
-        "applied in the right order.",
-      links: cycles.map((cycle) => ({
-        label: cycle.join(", "),
-        action: () => {
-          api.closeDialog(id);
-          api.events.emit("edit-mod-cycle", gameId, cycle);
-        },
-      })),
-    },
-    [{ label: "Close" }],
-    id,
-  );
 }
 
 /**

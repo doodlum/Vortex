@@ -1,18 +1,16 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
 
-import type { DeployStatus } from "@/extensions/mod_management/hooks/useDeployMods.hook";
 import { Typography } from "@/ui/components/typography/Typography";
 import { joinClasses } from "@/ui/utils/joinClasses";
 
-import { deployCopy, progressLabel } from "./deployCopy";
+import { deployCopy } from "./deployCopy";
 import { STATE_TEXT, StatusIcon, StatusRowButton } from "./statusRowParts";
 import type { IDeployControlProps } from "./types";
 
 /**
- * Status row 2, Two lines: a small state icon, the status on the first line, and under
- * it what the notification said - the running step and percent, why a deployment is
- * necessary, the failure's headline. Collapsed, the icon alone.
+ * Status row 2, Two lines: a small state icon, the short status on the first line, and
+ * under it one short sentence - the running step, why, or the failure. Collapsed, the icon.
  */
 export const StatusRowTwoLine = (props: IDeployControlProps) => {
   const { t } = useTranslation();
@@ -20,21 +18,9 @@ export const StatusRowTwoLine = (props: IDeployControlProps) => {
   const { status } = deploy;
   const copy = deployCopy(t, deploy);
 
-  const heading: Record<DeployStatus, string> = {
-    idle: t("Up to date"),
-    deployed: t("Mods deployed"),
-    needed: t("Deployment necessary"),
-    deploying: t("Deploying"),
-    failed: t("Deployment failed"),
-  };
-
-  const detail: Record<DeployStatus, string | undefined> = {
-    idle: undefined,
-    deployed: undefined,
-    needed: copy.lines[0],
-    deploying: progressLabel(t, deploy),
-    failed: deploy.failure !== null ? t(deploy.failure.title) : undefined,
-  };
+  // the short status, and under it the one short sentence the tooltip has
+  const heading = copy.title;
+  const detail = copy.lines[0];
 
   return (
     <StatusRowButton
@@ -56,17 +42,17 @@ export const StatusRowTwoLine = (props: IDeployControlProps) => {
             })}
             typographyType="body-sm"
           >
-            {heading[status]}
+            {heading}
           </Typography>
 
-          {!!detail[status] && (
+          {!!detail && (
             <Typography
               appearance="subdued"
               as="span"
               className="truncate"
               typographyType="body-xs"
             >
-              {detail[status]}
+              {detail}
             </Typography>
           )}
         </span>

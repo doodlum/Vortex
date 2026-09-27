@@ -51,7 +51,7 @@ interface IPositionedAction {
  * Categories, Manage Rules, Purge — comes from these and from the positions passed to
  * `registerAction` elsewhere, so a change here moves the action in the overflow menu
  * too. Purge keeps the position it had as a component, which puts it at the end of the
- * row. Deploy is not here: it sits above Play in the menu, see `DeployButton`.
+ * row. Deploy is not here: it sits above Play in the menu, see `DeployControl`.
  */
 const POSITION = {
   installFromFile: 25,

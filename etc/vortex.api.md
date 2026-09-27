@@ -3625,6 +3625,8 @@ interface ISettingsInterface {
         [gameId: string]: string;
     };
     // (undocumented)
+    playWhilePending?: number;
+    // (undocumented)
     profilesVisible: boolean;
     // (undocumented)
     reduceMotion?: boolean;

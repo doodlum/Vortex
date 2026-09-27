@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { resolveDeployDesign } from "../deployDesigns";
+import { resolveDeployDesign, resolvePlayGate } from "../deployDesigns";
 import settingsReducer from "./interface";
 
 describe("setLanguage", () => {
@@ -59,16 +59,16 @@ describe("setReduceMotion", () => {
 
 describe("setDeployButtonStyle", () => {
   it("records the variation picked", () => {
-    const result = settingsReducer.reducers.SET_DEPLOY_BUTTON_STYLE({ deployButtonStyle: 6 }, 8);
-    expect(result).toEqual({ deployButtonStyle: 8 });
+    const result = settingsReducer.reducers.SET_DEPLOY_BUTTON_STYLE({ deployButtonStyle: 6 }, 10);
+    expect(result).toEqual({ deployButtonStyle: 10 });
   });
 
   it("has no default, so an untouched setting shows the first variation", () => {
     expect(settingsReducer.defaults).not.toHaveProperty("deployButtonStyle");
   });
 
-  // 1 to 5 were the earlier designs, all removed.
-  it.each([1, 2, 3, 4, 5, 42])("records the first variation for removed design %i", (style) => {
+  // 1 to 5 were earlier designs, 8 the Progress line row and 9 the Chip row, all removed.
+  it.each([1, 2, 3, 4, 5, 8, 9, 42])("records Dot for removed design %i", (style) => {
     const result = settingsReducer.reducers.SET_DEPLOY_BUTTON_STYLE(
       { deployButtonStyle: 7 },
       style,
@@ -78,12 +78,36 @@ describe("setDeployButtonStyle", () => {
 });
 
 describe("resolveDeployDesign", () => {
-  it.each([6, 7, 8, 9, 10])("keeps variation %i", (style) => {
+  it.each([6, 7, 10, 11])("keeps variation %i", (style) => {
     expect(resolveDeployDesign(style)).toBe(style);
   });
 
-  // A stored choice from before the change, read back from disk.
-  it.each([1, 2, 3, 4, 5, undefined])("reads %s as the first variation", (style) => {
+  // A stored choice from before a removal, read back from disk.
+  it.each([1, 2, 3, 4, 5, 8, 9, undefined])("reads %s as Dot", (style) => {
     expect(resolveDeployDesign(style)).toBe(6);
+  });
+});
+
+describe("setPlayWhilePending", () => {
+  it.each([1, 2, 3])("records gate %i", (style) => {
+    expect(settingsReducer.reducers.SET_PLAY_WHILE_PENDING({}, style)).toEqual({
+      playWhilePending: style,
+    });
+  });
+
+  it("records the default for one that doesn't exist", () => {
+    expect(settingsReducer.reducers.SET_PLAY_WHILE_PENDING({ playWhilePending: 3 }, 9)).toEqual({
+      playWhilePending: 1,
+    });
+  });
+
+  it("has no default", () => {
+    expect(settingsReducer.defaults).not.toHaveProperty("playWhilePending");
+  });
+});
+
+describe("resolvePlayGate", () => {
+  it.each([undefined, 0, 4])("reads %s as Disabled", (style) => {
+    expect(resolvePlayGate(style)).toBe(1);
   });
 });

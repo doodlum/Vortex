@@ -30,18 +30,17 @@
         }
     }
 
-    /* A status row's progress line before the deployment gives a percent: a third of the
-       line crossing it. Progress is information, so it keeps its own duration and
-       reduced motion leaves it running, as it does spinners. */
-    --animate-deploy-progress: deploy-progress 1.4s ease-in-out infinite;
+    /* A pulse of the primary ring round the Deploy row, when a locked Play sends the user
+       to it. Decorative - focus moves either way - so motion.css switches it off. */
+    --animate-deploy-attention: deploy-attention 0.7s ease-out;
 
-    @keyframes deploy-progress {
+    @keyframes deploy-attention {
         from {
-            translate: -100% 0;
+            box-shadow: 0 0 0 0 var(--color-primary-moderate);
         }
 
         to {
-            translate: 300% 0;
+            box-shadow: 0 0 0 8px transparent;
         }
     }
 }

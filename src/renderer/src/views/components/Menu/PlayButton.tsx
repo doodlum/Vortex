@@ -1,7 +1,7 @@
 import { pathToFileURL } from "url";
 
 import { mdiPlay } from "@mdi/js";
-import React, { type FC, useMemo } from "react";
+import React, { type FC, type ReactNode, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/ui/components/button/Button";
@@ -15,12 +15,32 @@ import StarterInfo from "@/util/StarterInfo";
 
 import { formatGameDisplayName } from "../Spine/utils";
 
-/** Play, as ToolsSection has always drawn it; the Deploy control draws its status row above. */ export interface IPlayButtonProps {
+/**
+ * How Play is held back while a deployment is pending - see `playGate.ts`. Play keeps its
+ * size and place; what it says, shows and does on a click change.
+ */
+export interface IPlayGate {
+  /** Why, for the tooltip and for screen readers: the pending deployment's messages. */
+  reason: ReactNode;
+  /** Its name while held back, which says why. */
+  ariaLabel: string;
+  /** Looks and announces as unavailable (`aria-disabled`); focus and the tooltip remain. */
+  inert?: boolean;
+  label?: string;
+  iconPath?: string;
+  busy?: boolean;
+  /** Replaces Play's own action; absent, a click does nothing. */
+  onClick?: () => void;
+}
+
+/** Play, as ToolsSection has always drawn it; the Deploy control draws its status row above. */
+export interface IPlayButtonProps {
   primaryStarter: IStarterInfo | undefined;
   gameName: string | undefined;
   isPrimaryRunning: boolean;
   isCollapsed: boolean;
   disabled: boolean;
+  gate?: IPlayGate;
   onClick: () => void;
 }
 
@@ -30,6 +50,7 @@ export const PlayButton: FC<React.PropsWithChildren<IPlayButtonProps>> = ({
   isPrimaryRunning,
   isCollapsed,
   disabled,
+  gate,
   onClick,
 }) => {
   const { t } = useTranslation();
@@ -47,7 +68,7 @@ export const PlayButton: FC<React.PropsWithChildren<IPlayButtonProps>> = ({
     return undefined;
   }, [primaryStarter]);
 
-  const label = isPrimaryRunning ? t("Running...") : t("Play");
+  const label = gate?.label ?? (isPrimaryRunning ? t("Running...") : t("Play"));
 
   /** What the button says it will do, for the tooltip's first line and the aria-label. */
   const playLabel = isPrimaryRunning
@@ -61,14 +82,16 @@ export const PlayButton: FC<React.PropsWithChildren<IPlayButtonProps>> = ({
       <Tooltip
         customContent={
           <div className="space-y-1 px-4 py-3">
-            <Typography
-              appearance="moderate"
-              as="p"
-              className="font-semibold"
-              typographyType="body-sm"
-            >
-              {playLabel}
-            </Typography>
+            {gate?.reason ?? (
+              <Typography
+                appearance="moderate"
+                as="p"
+                className="font-semibold"
+                typographyType="body-sm"
+              >
+                {playLabel}
+              </Typography>
+            )}
 
             {!!primaryStarter && (
               <>
@@ -97,12 +120,14 @@ export const PlayButton: FC<React.PropsWithChildren<IPlayButtonProps>> = ({
         placement="right"
       >
         <Button
-          aria-label={isCollapsed ? playLabel : undefined}
+          aria-busy={gate?.busy || undefined}
+          aria-disabled={gate?.inert || undefined}
+          aria-label={gate !== undefined ? gate.ariaLabel : isCollapsed ? playLabel : undefined}
           brand="neutral"
           className={joinClasses(["w-full transition-all", isCollapsed ? "h-10" : "h-12"])}
           customContent={
             <>
-              <Icon className="nxm-button-icon" path={mdiPlay} size="lg" />
+              <Icon className="nxm-button-icon" path={gate?.iconPath ?? mdiPlay} size="lg" />
 
               {!isCollapsed && (
                 <Typography
@@ -116,8 +141,9 @@ export const PlayButton: FC<React.PropsWithChildren<IPlayButtonProps>> = ({
               )}
             </>
           }
+          data-play-gate={gate === undefined ? undefined : gate.inert ? "inert" : "active"}
           disabled={disabled}
-          onClick={onClick}
+          onClick={gate !== undefined ? gate.onClick : onClick}
         />
       </Tooltip>
     </div>

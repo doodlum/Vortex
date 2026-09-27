@@ -5,13 +5,16 @@ import type {
 import type { TFunction } from "@/util/i18n";
 
 export interface IDeployCopy {
-  /** What the control says it does or is doing: a tooltip's first line, an aria-label. */
+  /** The short status: a tooltip's first line, the collapsed row's name, the row's text. */
   title: string;
-  /** The tooltip's further lines: what the notification in this state said. */
+  /** At most one short sentence under it. */
   lines: string[];
-  /** The short text on the control itself. */
+  /** The short text on the control itself; the same as the title. */
   label: string;
-  /** A button in the tooltip, as the notification had one: "Deployment necessary"'s More. */
+  /**
+   * The button to the full story: "Deployment necessary"'s More, whose dialog keeps the
+   * notification's original text and automatic deployment offer.
+   */
   more?: { label: string; action: () => void };
 }
 
@@ -19,90 +22,55 @@ export interface IDeployCopy {
 export const percentText = (percent: number | undefined): string | undefined =>
   percent === undefined ? undefined : `${Math.round(percent)}%`;
 
-/**
- * What every design of the Deploy control says in each state, so they say the same. The
- * strings are the ones the deploy notifications used, so their translations carry over:
- * the modern layout shows them here instead of in the notification centre.
- */
-export const deployCopy = (t: TFunction, deploy: IDeployMods): IDeployCopy => {
-  const percent = percentText(deploy.progressPercent);
-
-  const copy: Record<DeployStatus, IDeployCopy> = {
-    idle: {
-      title: t("Deploy Mods"),
-      lines: [],
-      label: t("Deploy"),
-    },
-    // the toolbar's success notification
-    deployed: {
-      title: t("Mods deployed"),
-      lines: [],
-      label: t("Mods deployed"),
-    },
-    // "deployment-necessary", and its More dialog's text
-    needed: {
-      title: t("Deployment necessary"),
-      lines: [
-        t(
-          "Recent changes to the active mods are currently pending, " +
-            "a deployment must be run to apply the latest changes to your game.",
-        ),
-      ],
-      label: t("Deploy"),
-      more: deploy.autoDeploy ? undefined : { label: t("More"), action: deploy.showNecessary },
-    },
-    // the "Deploying" activity notification: its message, its progress text and percent
-    deploying: {
-      title: t("Deploying"),
-      lines: deploy.isWaiting
-        ? [t("Waiting for other operations to complete")]
-        : [
-            t("Deploying mods"),
-            ...(deploy.progressText !== undefined ? [deploy.progressText] : []),
-            ...(percent !== undefined ? [percent] : []),
-          ],
-      label: t("Deploying..."),
-    },
-    // whichever notification the failure replaced, whose details the dialog holds
-    failed: {
-      title: t("Deployment failed"),
-      lines: deploy.failure !== null ? [t(deploy.failure.title), t("Click for details.")] : [],
-      label: t("Deploy failed"),
-    },
-  };
-
-  return copy[deploy.status];
-};
-
-/** What a running deployment's text on the control says: its step and how far along. */
+/** "Applying... 42%", or "Waiting..." for a deployment that hasn't started yet. */
 export const progressLabel = (t: TFunction, deploy: IDeployMods): string => {
   if (deploy.isWaiting) {
-    return t("Waiting for other operations to complete");
+    return t("Waiting...");
   }
   const percent = percentText(deploy.progressPercent);
-  const step = deploy.progressText ?? t("Deploying mods");
-  return percent === undefined ? step : `${step} ${percent}`;
+  return percent === undefined ? t("Applying...") : `${t("Applying...")} ${percent}`;
 };
 
 /**
- * The status a row says in words: the notifications' own strings where one said it, so
- * "Deployment necessary", the running step and percent, "Mods deployed", the failure's
- * headline. "Up to date" is the row's own, as nothing was said when nothing was pending.
+ * What every row style says in each state, and Play with it: short, action-first labels.
+ * The notifications' full wording is kept where the user asks for it - the "Deployment
+ * necessary" dialog behind More, and a failure's details dialog behind a click.
  */
-export const rowText = (t: TFunction, deploy: IDeployMods): string => {
+export const deployCopy = (t: TFunction, deploy: IDeployMods): IDeployCopy => {
+  const short = (title: string, line?: string): IDeployCopy => ({
+    title,
+    label: title,
+    lines: line !== undefined ? [line] : [],
+  });
+
   switch (deploy.status) {
     case "idle":
-      return t("Up to date");
+      return short(t("Up to date"));
     case "deployed":
-      return t("Mods deployed");
+      return short(t("Changes applied"));
     case "needed":
-      return t("Deployment necessary");
+      return {
+        ...short(t("Apply changes"), t("Mods changed since the last deploy.")),
+        more: deploy.autoDeploy ? undefined : { label: t("More"), action: deploy.showNecessary },
+      };
     case "deploying":
-      return progressLabel(t, deploy);
+      // the running step, as the handler says it ("Deploying: <mod>")
+      return short(
+        progressLabel(t, deploy),
+        deploy.isWaiting
+          ? t("Waiting for other operations to complete")
+          : (deploy.progressText ?? undefined),
+      );
     case "failed":
-      return deploy.failure !== null ? t(deploy.failure.title) : t("Deployment failed");
+      return short(
+        t("Couldn't apply"),
+        deploy.failure !== null ? t(deploy.failure.title) : undefined,
+      );
   }
 };
+
+/** The row's text: the short status. */
+export const rowText = (t: TFunction, deploy: IDeployMods): string => deployCopy(t, deploy).title;
 
 /** What clicking the control does in each state: nothing while it deploys. */
 export const deployAction = (deploy: IDeployMods): (() => void) | undefined => {

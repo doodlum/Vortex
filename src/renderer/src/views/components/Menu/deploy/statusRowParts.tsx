@@ -1,5 +1,5 @@
 import { mdiAlertCircleOutline, mdiCheck, mdiCircleOutline, mdiLoading } from "@mdi/js";
-import React, { type CSSProperties, type ReactNode } from "react";
+import React, { type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { DeployStatus } from "@/extensions/mod_management/hooks/useDeployMods.hook";
@@ -57,27 +57,6 @@ export const StatusIcon = ({ size = "sm", status }: { size?: IIconSize; status: 
         : getIconPath("deploy");
   return <Icon className={joinClasses(["shrink-0", STATE_TEXT[status]])} path={path} size={size} />;
 };
-
-/**
- * A thin line under a row while it deploys: determinate at the deployment's percent once
- * it says one, sliding until then. Its movement is the information, so it keeps moving
- * under reduced motion, as spinners do.
- */
-export const ProgressLine = ({ percent }: { percent: number | undefined }) => (
-  <span className="relative block h-0.5 w-full overflow-hidden rounded-full bg-info-950">
-    <span
-      className={joinClasses(["absolute inset-y-0 left-0 rounded-full bg-info-moderate"], {
-        "w-1/3 animate-deploy-progress": percent === undefined,
-        "w-(--deploy-progress)": percent !== undefined,
-      })}
-      style={
-        percent === undefined
-          ? undefined
-          : ({ "--deploy-progress": `${Math.min(100, Math.max(0, percent))}%` } as CSSProperties)
-      }
-    />
-  </span>
-);
 
 /**
  * The button every status row is: the shared tooltip, the state for tests and styling,
