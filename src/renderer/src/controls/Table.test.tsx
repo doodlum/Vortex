@@ -216,6 +216,31 @@ describe("SuperTable scroll-to", () => {
     unmount();
   });
 
+  it("scrolls up far enough that the sticky header doesn't cover the row", async () => {
+    const { container, page, unmount } = renderTable(true);
+    layOutRows(page, await rowsOf(container));
+    Object.defineProperty(container.querySelector(".xthead"), "offsetHeight", { value: 60 });
+    page.scrollTop = 2000;
+
+    listeners.get("test-scroll-to")("a");
+
+    // row a starts at 800: a fifth of the view below the header
+    expect(page.scrollTop).toBe(800 - 60 - 100);
+    unmount();
+  });
+
+  it("leaves a sticky-header table's page where it is when the row is in view", async () => {
+    const { container, page, unmount } = renderTable(true);
+    layOutRows(page, await rowsOf(container));
+    Object.defineProperty(container.querySelector(".xthead"), "offsetHeight", { value: 60 });
+    page.scrollTop = 600;
+
+    listeners.get("test-scroll-to")("a");
+
+    expect(page.scrollTop).toBe(600);
+    unmount();
+  });
+
   it("scrolls the pane of any other table to the row", async () => {
     const { container, pane, unmount } = renderTable(false);
     layOutRows(pane, await rowsOf(container));
