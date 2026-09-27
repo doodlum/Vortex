@@ -477,8 +477,10 @@ export class IPCDownloadAdapter {
       try {
         // MD5 is a fallback identifier for collection rule matching and reverse
         // ModDB lookups for files that lack Nexus IDs (e.g. non-NXM downloads).
-        // Hash on a main-process worker_thread so a large file doesn't block the renderer.
-        const { hash } = await window.api.hash.compute("md5", finalPath);
+        // The main process hashes a download while writing it; when it couldn't (a resumed
+        // download, rewritten chunks), hash the file on a main-process worker_thread so a large
+        // file doesn't block the renderer.
+        const hash = wireState.md5 ?? (await window.api.hash.compute("md5", finalPath)).hash;
         this.#api.store.dispatch(setDownloadHash(downloadId, hash));
       } catch (err) {
         log("warn", "failed to compute MD5 for download", { downloadId, err });

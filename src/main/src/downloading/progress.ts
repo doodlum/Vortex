@@ -24,6 +24,8 @@ export class ProgressReporter {
   public size: number | undefined = undefined;
   public etag: string | undefined = undefined;
   public fileName: string | undefined = undefined;
+  /** MD5 of the finished file, when it was computed while downloading */
+  public md5: string | undefined = undefined;
 
   public get isChunked(): boolean {
     return this.#isChunked;
@@ -76,6 +78,7 @@ export class ProgressReporter {
       fileName: this.fileName,
       bytesReceived,
       bytesWritten,
+      ...(this.md5 !== undefined ? { md5: this.md5 } : {}),
     };
 
     if (this.#isChunked) {

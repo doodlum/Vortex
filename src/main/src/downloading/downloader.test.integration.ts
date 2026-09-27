@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { readFile, mkdtemp, mkdir, rm } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -80,7 +80,7 @@ function runDownload(
   url: URL,
   destDir: string,
   opts?: Partial<ReturnType<typeof defaultOptions>>,
-): { promise: Promise<void>; dest: string } {
+): { promise: Promise<{ md5?: string }>; dest: string } {
   const options = { ...defaultOptions(), ...opts };
   const dest = path.join(destDir, options.filename);
   const promise = download(
@@ -1380,6 +1380,106 @@ describe("download", () => {
       expect(get!.method).toBe("GET");
       // Cookie set in HEAD response must appear in the GET request.
       expect(get!.headers.cookie).toContain("probe=seen");
+    });
+  });
+
+  describe("md5 while downloading", () => {
+    const md5 = (data: Buffer) => createHash("md5").update(data).digest("hex");
+    const noChunks = () => [];
+
+    it("matches the MD5 of the file for a streamed download", async () => {
+      using route = server.route(serveFile({ body: LARGE_FILE, acceptRanges: false }));
+      await using tmp = await makeTmpDir();
+      const dest = path.join(tmp.dir, "output");
+      const progressReporter = new ProgressReporter();
+
+      const result = await download(
+        route.url,
+        dest,
+        { resolver: urlResolver, chunker: noChunks },
+        { progressReporter },
+      );
+
+      expect(result.md5).toBe(md5(await readFile(dest)));
+      expect(result.md5).toBe(md5(LARGE_FILE));
+      expect(progressReporter.getProgress().md5).toBe(result.md5);
+    });
+
+    it("matches the MD5 of the file for a chunked download", async () => {
+      using route = server.route(serveFile({ body: LARGE_FILE, acceptRanges: true }));
+      await using tmp = await makeTmpDir();
+      const dest = path.join(tmp.dir, "output");
+
+      const result = await download(route.url, dest, {
+        resolver: urlResolver,
+        chunker: staticChunker(4, 1024),
+      });
+
+      expect(result.md5).toBe(md5(LARGE_FILE));
+    });
+
+    it("matches the MD5 of a small file", async () => {
+      using route = server.route(serveFile({ body: SMALL_FILE, acceptRanges: true }));
+      await using tmp = await makeTmpDir();
+      const dest = path.join(tmp.dir, "output");
+
+      const result = await download(route.url, dest, {
+        resolver: urlResolver,
+        chunker: staticChunker(),
+      });
+
+      expect(result.md5).toBe(md5(SMALL_FILE));
+    });
+
+    it("negative control: leaves the MD5 to a read of the file when a retry rewrote bytes", async () => {
+      const inner = serveFile({ body: LARGE_FILE, acceptRanges: false });
+      let getFailures = 0;
+      const handler: RequestHandler = (ctx) => {
+        if (ctx.req.method !== "GET" || getFailures >= 1) return inner(ctx);
+        getFailures++;
+        // send part of the body, let it reach the client, then drop the connection
+        return new Promise<void>((resolve) => {
+          ctx.res.writeHead(200);
+          ctx.res.write(LARGE_FILE.subarray(0, 3 * 1024 * 1024), () => {
+            setTimeout(() => {
+              ctx.res.socket?.destroy();
+              resolve();
+            }, 200);
+          });
+        });
+      };
+      const progressReporter = new ProgressReporter();
+      using route = server.route(handler);
+      await using tmp = await makeTmpDir();
+      const dest = path.join(tmp.dir, "output");
+
+      const result = await download(
+        route.url,
+        dest,
+        { resolver: urlResolver, chunker: noChunks, retry: defaultRetryStrategy(3, 50, 200) },
+        { progressReporter },
+      );
+
+      expect(getFailures).toBe(1);
+      expect(Buffer.compare(LARGE_FILE, await readFile(dest))).toBe(0);
+      expect(result.md5).toBeUndefined();
+      expect(progressReporter.getProgress().md5).toBeUndefined();
+    });
+
+    it("leaves the MD5 to a read of the file for a resumed download", async () => {
+      using route = server.route(serveFile({ body: LARGE_FILE, acceptRanges: true }));
+      await using tmp = await makeTmpDir();
+      const dest = path.join(tmp.dir, "output");
+      await download(route.url, dest, { resolver: urlResolver, chunker: noChunks });
+
+      const result = await download(
+        route.url,
+        dest,
+        { resolver: urlResolver, chunker: noChunks },
+        { checkpoint: { etag: undefined, completedRanges: [{ start: 0, end: 1024 * 1024 - 1 }] } },
+      );
+
+      expect(result.md5).toBeUndefined();
     });
   });
 });

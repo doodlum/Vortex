@@ -6,7 +6,7 @@ import type {
 } from "../../../types/collections/ICollectionInstallSession";
 import { modRuleId, reconstructModStatus } from "../../../util/collectionInstallSession";
 import type { IDownload } from "../../download_management/types/IDownload";
-import type { IMod, IModRule } from "../../mod_management/types/IMod";
+import type { IMod, IModReference, IModRule } from "../../mod_management/types/IMod";
 import { findDownloadByRef } from "../../mod_management/util/dependencies";
 import { findModByRef } from "../../mod_management/util/findModByRef";
 import { renderModReference } from "../../mod_management/util/modName";
@@ -75,6 +75,66 @@ interface RowIndexes {
   modByMd5: Map<string, IMod>;
   // download id by each reference tag the archive satisfies
   downloadIdByTag: Map<string, string>;
+  // resolves a rule the indexes missed, exactly as findModByRef(reference, mods) would
+  findFallback: (reference: IModReference) => IMod | undefined;
+}
+
+/**
+ * Remembers which rule references the findModByRef fallback failed to resolve against the mods
+ * of the previous rebuild. Pass the same object to every rebuild of one table.
+ *
+ * findModByRef returns the first mod (in key order, after the idHint/md5Hint fast paths) that
+ * matches the reference, and without a source the match is a pure function of the mod object
+ * and the reference. Redux replaces a mod object whenever it changes, so a reference that matched
+ * none of the previous mods can only match a mod whose object is new; searching just those mods,
+ * in the same key order, returns what a search of every mod returns. Members that are not
+ * installed yet miss every time, so this turns the per-rebuild rules x mods scan into
+ * rules x (changed mods).
+ */
+export interface IRowFallbackCache {
+  mods?: Record<string, IMod>;
+  misses: WeakSet<IModReference>;
+}
+
+export function makeRowFallbackCache(): IRowFallbackCache {
+  return { mods: undefined, misses: new WeakSet() };
+}
+
+function makeFallbackFinder(
+  mods: Record<string, IMod>,
+  cache: IRowFallbackCache | undefined,
+): { find: (reference: IModReference) => IMod | undefined; commit: () => void } {
+  if (cache === undefined) {
+    return { find: (reference) => findModByRef(reference, mods), commit: () => undefined };
+  }
+  const previousMods = cache.mods;
+  const previousMisses = cache.misses;
+  const misses = new WeakSet<IModReference>();
+  let changedMods: Record<string, IMod>;
+  const find = (reference: IModReference): IMod | undefined => {
+    let candidates = mods;
+    if (previousMods !== undefined && previousMisses.has(reference)) {
+      if (changedMods === undefined) {
+        changedMods = {};
+        for (const [modId, mod] of Object.entries(mods)) {
+          if (previousMods[modId] !== mod) {
+            changedMods[modId] = mod;
+          }
+        }
+      }
+      candidates = changedMods;
+    }
+    const mod = findModByRef(reference, candidates);
+    if (mod === undefined) {
+      misses.add(reference);
+    }
+    return mod;
+  };
+  const commit = () => {
+    cache.mods = mods;
+    cache.misses = misses;
+  };
+  return { find, commit };
 }
 
 function persistentRow(
@@ -102,7 +162,7 @@ function persistentRow(
   // match reconstructSessionMods uses - so the table agrees with the session rather than showing an
   // installed member as "pending".
   if (mod === undefined) {
-    mod = findModByRef(rule.reference, mods);
+    mod = indexes.findFallback(rule.reference);
   }
   if (mod !== undefined) {
     return {
@@ -168,6 +228,7 @@ export function buildCollectionItemRows(
     sessionMods: Record<string, ICollectionModInstallInfo>;
   },
   previous?: Record<string, ICollectionItemRow>,
+  fallbackCache?: IRowFallbackCache,
 ): Record<string, ICollectionItemRow> {
   const { rules, mods, downloads, modState, sessionMods } = params;
   // keyed by rule id
@@ -178,10 +239,12 @@ export function buildCollectionItemRows(
   // (those per-rule scans dominated render time on large collections). Installed mods are keyed by
   // every reference tag they satisfy and by content hash (fileMD5); downloads by every reference
   // tag. First entry wins on the (rare) duplicate, matching findModByRef's first-match.
+  const fallback = makeFallbackFinder(mods, fallbackCache);
   const indexes: RowIndexes = {
     modByTag: new Map<string, IMod>(),
     modByMd5: new Map<string, IMod>(),
     downloadIdByTag: new Map<string, string>(),
+    findFallback: fallback.find,
   };
   for (const mod of Object.values(mods)) {
     for (const tag of modReferenceTags(mod)) {
@@ -236,6 +299,7 @@ export function buildCollectionItemRows(
       changed = true;
     }
   });
+  fallback.commit();
 
   // nothing changed and no rule was added or removed -> hand back the previous map so an idle
   // dispatch does not even re-render the table container

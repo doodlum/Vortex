@@ -1,7 +1,6 @@
 import * as path from "path";
 
 import * as _ from "lodash";
-import minimatch from "minimatch";
 import * as semver from "semver";
 
 import { truthy } from "../../../util/util";
@@ -18,6 +17,7 @@ import type {
 } from "../types/IMod";
 import { coerceToSemver, safeCoerce } from "./coerceToSemver";
 import { isFuzzyVersion } from "./isFuzzyVersion";
+import { globMatch, sanitizedFileName } from "./matchMemo";
 
 export interface IModLookupInfo {
   id?: string;
@@ -359,8 +359,8 @@ function testRef(
         return false;
       }
     } else {
-      const baseName = sanitizeExpression(mod.fileName);
-      if (baseName !== ref.fileExpression && !minimatch(baseName, ref.fileExpression)) {
+      const baseName = sanitizedFileName(mod.fileName, sanitizeExpression);
+      if (baseName !== ref.fileExpression && !globMatch(baseName, ref.fileExpression)) {
         return false;
       }
     }
@@ -463,7 +463,7 @@ export function testRefByIdentifiers(
     // a glob match against the archive name (without file extension)
     for (const fileName of fileNames) {
       const baseName = sanitizeExpression(fileName);
-      if (baseName === ref.fileExpression || minimatch(baseName, ref.fileExpression)) {
+      if (baseName === ref.fileExpression || globMatch(baseName, ref.fileExpression)) {
         return true;
       }
     }
