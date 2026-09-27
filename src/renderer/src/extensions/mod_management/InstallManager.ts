@@ -7600,7 +7600,11 @@ class InstallManager {
     //  - unlink sources in parallel after successful transfers
     const sorted = copies.slice().sort((a, b) => a.destination.length - b.destination.length);
     const dirs = new Set<string>();
-    const jobs: Array<{ src: string; dst: string; rel: string }> = [];
+    // one job per destination: the files are linked in parallel, so with several instructions for
+    // one destination (a FOMOD installing two variants of a texture to the same path) the winner
+    // was whichever finished last. The last instruction wins, as when files were copied in order.
+    const jobsByDst = new Map<string, { src: string; dst: string; rel: string }>();
+    const dstKey = (dst: string) => (process.platform === "win32" ? dst.toLowerCase() : dst);
     const missingFiles = new Set<string>();
 
     const copyAsyncWrap = async (src: string, dst: string) => {
@@ -7626,7 +7630,18 @@ class InstallManager {
       const src = path.join(tempPath, copy.source);
       const dst = path.join(destinationPath, copy.destination);
       dirs.add(path.dirname(dst));
-      jobs.push({ src, dst, rel: copy.destination });
+      const key = dstKey(dst);
+      // delete first so the replacement also takes the later position
+      jobsByDst.delete(key);
+      jobsByDst.set(key, { src, dst, rel: copy.destination });
+    }
+    const jobs = Array.from(jobsByDst.values());
+    if (jobs.length < sorted.length - folderCopies.length) {
+      log("debug", "installer produced several instructions for the same destination", {
+        archivePath: path.basename(archivePath),
+        instructions: sorted.length - folderCopies.length,
+        destinations: jobs.length,
+      });
     }
     if (folderCopies.length > 0) {
       log("warn", "installer generated copy instructions for directories, these will be skipped", {
