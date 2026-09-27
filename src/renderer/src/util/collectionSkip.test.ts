@@ -10,6 +10,7 @@ import { describe, expect } from "vitest";
 
 import type { IModRule } from "../extensions/mod_management/types/IMod";
 import {
+  makeDeterministicRef,
   makeInstallState,
   makeMod,
   makeModInstallInfo,
@@ -188,6 +189,75 @@ describe("markCollectionMemberSkipped - automatic skip (mod reference)", () => {
       expect(flagged).toEqual(["tag-skipped"]);
     },
   );
+
+  // two fuzzy files from one mod page share a deterministic tag; the skip site's rule id tells
+  // them apart where no marker can
+  test("ignores the member its rule id names when another shares its deterministic tag", ({
+    makeApi,
+  }) => {
+    const page = { repository: "nexus", gameId: GAME_ID, modId: "1234", fileId: "1" };
+    const required = makeRule({
+      type: "requires",
+      reference: makeDeterministicRef({ repo: page, versionMatch: ">=1.0.0+prefer" }),
+    });
+    const optional = makeRule({
+      type: "recommends",
+      reference: makeDeterministicRef({
+        repo: { ...page, fileId: "2" },
+        versionMatch: ">=1.0.0+prefer",
+      }),
+    });
+    expect(optional.reference.tag).toBe(required.reference.tag);
+    const h = makeApi({
+      mods: {
+        [GAME_ID]: {
+          [COLLECTION_ID]: makeMod({ id: COLLECTION_ID, rules: [required, optional] }),
+        },
+      },
+      session: makeInstallState({
+        activeSession: makeSession({
+          sessionId: SESSION_ID,
+          collectionId: COLLECTION_ID,
+          gameId: GAME_ID,
+          mods: {
+            [modRuleId(required)]: makeModInstallInfo({ rule: required, status: "pending" }),
+            [modRuleId(optional)]: makeModInstallInfo({ rule: optional, status: "pending" }),
+          },
+        }),
+      }),
+    });
+
+    const matched = markCollectionMemberSkipped(h.api, {
+      reference: optional.reference,
+      ruleId: modRuleId(optional),
+    });
+
+    expect(matched).toBe(true);
+    expect(statusOf(h, optional)).toBe("ignored");
+    expect(statusOf(h, required)).toBe("pending");
+    const rules = h.getState().persistent.mods[GAME_ID][COLLECTION_ID].rules ?? [];
+    expect(rules.filter((rule) => rule.ignored === true).map((rule) => rule.type)).toEqual([
+      "recommends",
+    ]);
+  });
+
+  // a tagged skip that names no member (a sub-dependency, say) must not land on a member that
+  // only shares its logical file name
+  test("does not fall back to the file name for a skip that carries a tag", ({ makeApi }) => {
+    const rule = makeRule({
+      type: "requires",
+      reference: makeReference({ tag: "mod-a", logicalFileName: "Main File" }),
+    });
+    const h = makeApi(ruleOverrides(rule));
+
+    const matched = markCollectionMemberSkipped(h.api, {
+      reference: makeReference({ tag: "not-a-member", logicalFileName: "Main File" }),
+    });
+
+    expect(matched).toBe(false);
+    expect(statusOf(h, rule)).toBe("pending");
+    expect(durableIgnored(h)).toBeUndefined();
+  });
 
   // a session can track a member the collection's current rules no longer carry (the rules were
   // replaced mid-install); the skip settles the session entry without re-adding the old rule

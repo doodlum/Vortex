@@ -12,6 +12,7 @@ import type { IState } from "../../../types/IState";
 import {
   generateCollectionSessionId,
   isTerminalMemberStatus,
+  modRuleId,
 } from "../../../util/collectionInstallSession";
 import {
   getCollectionActiveSession,
@@ -997,7 +998,10 @@ class InstallDriver {
     // rule flag + session status) now that the session exists.
     for (const rule of optional) {
       if (rule.ignored === undefined) {
-        markCollectionMemberSkipped(this.mApi, { reference: rule.reference });
+        markCollectionMemberSkipped(this.mApi, {
+          reference: rule.reference,
+          ruleId: modRuleId(rule),
+        });
       }
     }
 

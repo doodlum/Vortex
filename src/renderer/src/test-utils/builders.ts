@@ -36,6 +36,7 @@ import type {
   ICollectionMod,
   ICollectionModRule,
 } from "../extensions/collections/types/ICollection";
+import { deterministicReferenceTag } from "../extensions/collections/util/deterministicReferenceTag";
 import type InstallDriver from "../extensions/collections/util/InstallDriver";
 import { stateReducer as downloadStateReducer } from "../extensions/download_management/reducers/state";
 import { downloadPathForGame } from "../extensions/download_management/selectors";
@@ -133,6 +134,14 @@ export function makeExactRef(overrides: Partial<IModReference> = {}): IModRefere
 // its stable identity is the mod page (repo.modId) rather than the version-specific fileMD5
 export function makeFuzzyRef(overrides: Partial<IModReference> = {}): IModReference {
   return makeExactRef({ versionMatch: "*", ...overrides });
+}
+
+// A reference tagged the way a deterministic collection tags its members (transformCollection):
+// the tag is derived from the reference, so two fuzzy files from one mod page share it, as they do
+// in real collections. Tests of member identity must use this rather than a hand-picked tag.
+export function makeDeterministicRef(overrides: Partial<IModReference> = {}): IModReference {
+  const reference = makeExactRef({ tag: undefined, ...overrides });
+  return { ...reference, tag: deterministicReferenceTag(reference) };
 }
 
 export function makeRule(overrides: Partial<IModRule> = {}): IModRule {

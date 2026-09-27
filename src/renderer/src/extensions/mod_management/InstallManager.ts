@@ -857,6 +857,22 @@ class InstallManager {
     this.maybeAdvancePhase(collectionId, api);
   }
 
+  /**
+   * Whether a dependency is a member of the collection being installed: it carries the member's
+   * session key, or it belongs to the collection itself rather than to one of its members. A
+   * member's own dependencies are installed with the member as their source and are not members.
+   */
+  private isCollectionMemberDependency(
+    api: IExtensionApi,
+    sourceModId: string,
+    dep: IDependency,
+  ): boolean {
+    return (
+      dep.sessionRuleId !== undefined ||
+      getCollectionActiveSession(api.getState())?.collectionId === sourceModId
+    );
+  }
+
   private handleDownloadSkipped(api: IExtensionApi, sourceModId: string, dep: IDependency) {
     if (!sourceModId || !dep) {
       return;
@@ -882,8 +898,11 @@ class InstallManager {
     }
 
     // Mark the skipped member ignored directly against the active session (collections is core
-    // now, so no event round-trip through the InstallDriver is needed).
-    markCollectionMemberSkipped(api, { reference: dep.reference });
+    // now, so no event round-trip through the InstallDriver is needed). A sub-dependency of a
+    // member is not a member itself, so its skip ignores nothing.
+    if (this.isCollectionMemberDependency(api, sourceModId, dep)) {
+      markCollectionMemberSkipped(api, { reference: dep.reference, ruleId: dep.sessionRuleId });
+    }
 
     // See if we can advance the phase
     this.maybeAdvancePhase(sourceModId, api);
@@ -2720,8 +2739,14 @@ class InstallManager {
           } else {
             this.mDependencyRetryCount.delete(installKey);
             if (recovery.action === "skip") {
-              // same settle the free-user skip performs: durable ignore + session "ignored"
-              markCollectionMemberSkipped(api, { reference: dep.reference });
+              // same settle the free-user skip performs: durable ignore + session "ignored".
+              // A sub-dependency of a member is not a member itself, so its skip ignores nothing.
+              if (this.isCollectionMemberDependency(api, sourceModId, dep)) {
+                markCollectionMemberSkipped(api, {
+                  reference: dep.reference,
+                  ruleId: dep.sessionRuleId,
+                });
+              }
             } else if (recovery.action === "fail") {
               // Retries exhausted: settle the member as failed (terminal) so the collection can
               // still complete and the member is not re-prompted. writeCollectionSession no-ops

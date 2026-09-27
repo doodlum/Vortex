@@ -28,8 +28,9 @@ export type ISkippedDownloadIdentifiers = Omit<IReferenceIdentifiers, "condition
  * ignored - so they share one entry point.
  */
 export type ICollectionSkip =
-  | { reference: IModReference }
-  | { identifiers: ISkippedDownloadIdentifiers };
+  // ruleId: the member's session key (modRuleId), when the skip site has the member's rule. It
+  // names the member exactly; the reference is then only used if the session no longer has it.
+  { reference: IModReference; ruleId?: string } | { identifiers: ISkippedDownloadIdentifiers };
 
 const sanitizeFileName = (fileName: string): string =>
   fileName.toLowerCase().replace(/[^a-z]+/gi, "");
@@ -61,17 +62,19 @@ function fuzzyChainMatch(identifiers: ISkippedDownloadIdentifiers, ref: IModRefe
 }
 
 /**
- * The identity markers a skipped dependency's reference is matched on, most reliable first: the
- * tag names one member, a file hash can be shared by two members installing the same archive, and
- * a logical file name ("Main File") by any number of unrelated ones.
+ * The identity markers a skip without a rule id is matched on, strongest first. None of them is
+ * unique: a deterministic tag is shared by fuzzy files from one mod page, a file hash by members
+ * installing the same archive, and a logical file name ("Main File") by unrelated files. So a skip
+ * carrying a tag never falls back to the file name, and a skip that can name its member's rule
+ * (`ruleId`) is not matched on markers at all.
  */
-const REFERENCE_MARKERS = ["tag", "fileMD5", "logicalFileName"] as const;
+const markersFor = (reference: IModReference) =>
+  reference.tag ? (["tag", "fileMD5"] as const) : (["fileMD5", "logicalFileName"] as const);
 
 /**
- * Find the item a skip names. A reference skip tries each marker against every item before the
- * next, weaker one: accepting any marker on the first item met would ignore whichever member
- * comes first with the skipped member's file hash or logical file name, instead of the member
- * the tag names.
+ * Find the item a skip names by its markers. Each marker is tried against every item before the
+ * next, weaker one, so an earlier member that only shares a weaker marker is never taken for the
+ * one the stronger marker names.
  */
 function findSkipped<T>(
   skip: ICollectionSkip,
@@ -87,7 +90,7 @@ function findSkipped<T>(
       );
     });
   }
-  for (const marker of REFERENCE_MARKERS) {
+  for (const marker of markersFor(skip.reference)) {
     const value = skip.reference[marker];
     if (!value) {
       continue;
@@ -131,12 +134,18 @@ export function markCollectionMemberSkipped(api: IExtensionApi, skip: ICollectio
   );
   // The session is keyed by each member's rule as it was when the install started, so the entry
   // is matched on its own snapshot rather than on the live rule.
+  const namedRuleId =
+    "ruleId" in skip && skip.ruleId !== undefined && session.mods[skip.ruleId] !== undefined
+      ? skip.ruleId
+      : undefined;
   const [sessionRuleId] =
-    findSkipped(skip, Object.entries(session.mods), ([, info]) => info.rule?.reference) ?? [];
+    namedRuleId !== undefined
+      ? [namedRuleId]
+      : (findSkipped(skip, Object.entries(session.mods), ([, info]) => info.rule?.reference) ?? []);
 
-  // The fallback scan relies on members having distinct identities; if two share the matched
-  // identifier (e.g. the same logicalFileName, or two fuzzy rules on one modId), the wrong member
-  // could be ignored.
+  // The marker scan relies on members having distinct identities; if two share the matched
+  // marker (two fuzzy files from one mod page share a deterministic tag), the wrong member could
+  // be ignored. Skip sites that have the member's rule pass its ruleId to avoid the scan.
   const rule =
     (sessionRuleId !== undefined
       ? rules.find((iter) => modRuleId(iter) === sessionRuleId)

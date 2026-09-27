@@ -16,6 +16,7 @@ import { describe, expect, vi } from "vitest";
 
 import {
   makeCollectionModInfo,
+  makeDeterministicRef,
   makeDownload,
   makeFileListItem,
   makeInstallerChoices,
@@ -241,6 +242,48 @@ describe("InstallDriver optional default-skip", () => {
     const rules = h.getState().persistent.mods[GAME_ID]["col-shared"].rules ?? [];
     expect(rules.find((r) => r.reference.tag === "opt-main")?.ignored).toBe(true);
     expect(rules.find((r) => r.reference.tag === "req-main")?.ignored).toBeUndefined();
+  });
+
+  // A deterministic collection tags a fuzzy member by its mod page and install spec, so a required
+  // and an optional file from one page share a tag. Defaulting the optional must still skip it,
+  // not the required member.
+  test("defaults the optional, not a required member sharing its deterministic tag", async ({
+    makeDriver,
+  }) => {
+    const page = { repository: "nexus", gameId: GAME_ID, modId: "1234", fileId: "1" };
+    const sharedReq = makeRule({
+      type: "requires",
+      reference: makeDeterministicRef({
+        repo: page,
+        versionMatch: ">=1.0.0+prefer",
+        logicalFileName: "Main File",
+      }),
+    });
+    const sharedOpt = makeRule({
+      type: "recommends",
+      reference: makeDeterministicRef({
+        repo: { ...page, fileId: "2" },
+        versionMatch: ">=1.0.0+prefer",
+        logicalFileName: "Optional patch",
+      }),
+    });
+    // the fixture models the real rule: both members carry the same tag
+    expect(sharedReq.reference.tag).toBeDefined();
+    expect(sharedOpt.reference.tag).toBe(sharedReq.reference.tag);
+    const fixture = buildCollectionFixture("col-det", [sharedReq, sharedOpt]);
+    const h = makeDriver({
+      mods: { [GAME_ID]: { [fixture.collection.id]: fixture.collection } },
+      downloads: { [fixture.download.id]: fixture.download },
+      profiles: { [profile.id]: profile },
+    });
+    await startWith(h, fixture);
+
+    const session = h.getState().session.collections.activeSession;
+    expect(session?.mods[modRuleId(sharedOpt)].status).toBe("ignored");
+    expect(session?.mods[modRuleId(sharedReq)].status).not.toBe("ignored");
+    const rules = h.getState().persistent.mods[GAME_ID]["col-det"].rules ?? [];
+    expect(rules.find((r) => r.type === "recommends")?.ignored).toBe(true);
+    expect(rules.find((r) => r.type === "requires")?.ignored).toBeUndefined();
   });
 
   test("does not re-default an optional the user already selected (ignored:false)", async ({
