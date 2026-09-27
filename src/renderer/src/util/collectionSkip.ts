@@ -61,28 +61,43 @@ function fuzzyChainMatch(identifiers: ISkippedDownloadIdentifiers, ref: IModRefe
 }
 
 /**
- * Match the skipped dependency's reference against a collection rule. This mirrors the previous
- * `collection-mod-skipped` handler exactly (tag is most reliable, then file hash, then logical
- * file name) so the automatic/premium skip path is behaviourally unchanged.
+ * The identity markers a skipped dependency's reference is matched on, most reliable first: the
+ * tag names one member, a file hash can be shared by two members installing the same archive, and
+ * a logical file name ("Main File") by any number of unrelated ones.
  */
-function matchesReference(reference: IModReference, ruleRef: IModReference): boolean {
-  if (reference.tag && ruleRef.tag === reference.tag) {
-    return true;
-  }
-  if (reference.fileMD5 && ruleRef.fileMD5 === reference.fileMD5) {
-    return true;
-  }
-  if (reference.logicalFileName && ruleRef.logicalFileName === reference.logicalFileName) {
-    return true;
-  }
-  return false;
-}
+const REFERENCE_MARKERS = ["tag", "fileMD5", "logicalFileName"] as const;
 
-function matchesSkip(skip: ICollectionSkip, ref: IModReference): boolean {
-  if ("reference" in skip) {
-    return matchesReference(skip.reference, ref);
+/**
+ * Find the item a skip names. A reference skip tries each marker against every item before the
+ * next, weaker one: accepting any marker on the first item met would ignore whichever member
+ * comes first with the skipped member's file hash or logical file name, instead of the member
+ * the tag names.
+ */
+function findSkipped<T>(
+  skip: ICollectionSkip,
+  items: T[],
+  referenceOf: (item: T) => IModReference | undefined,
+): T | undefined {
+  if (!("reference" in skip)) {
+    return items.find((item) => {
+      const ref = referenceOf(item);
+      return (
+        ref != null &&
+        (testRefByIdentifiers(skip.identifiers, ref) || fuzzyChainMatch(skip.identifiers, ref))
+      );
+    });
   }
-  return testRefByIdentifiers(skip.identifiers, ref) || fuzzyChainMatch(skip.identifiers, ref);
+  for (const marker of REFERENCE_MARKERS) {
+    const value = skip.reference[marker];
+    if (!value) {
+      continue;
+    }
+    const found = items.find((item) => referenceOf(item)?.[marker] === value);
+    if (found !== undefined) {
+      return found;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -117,9 +132,7 @@ export function markCollectionMemberSkipped(api: IExtensionApi, skip: ICollectio
   // The session is keyed by each member's rule as it was when the install started, so the entry
   // is matched on its own snapshot rather than on the live rule.
   const [sessionRuleId] =
-    Object.entries(session.mods).find(([, info]) =>
-      info.rule?.reference != null ? matchesSkip(skip, info.rule.reference) : false,
-    ) ?? [];
+    findSkipped(skip, Object.entries(session.mods), ([, info]) => info.rule?.reference) ?? [];
 
   // The fallback scan relies on members having distinct identities; if two share the matched
   // identifier (e.g. the same logicalFileName, or two fuzzy rules on one modId), the wrong member
@@ -127,7 +140,7 @@ export function markCollectionMemberSkipped(api: IExtensionApi, skip: ICollectio
   const rule =
     (sessionRuleId !== undefined
       ? rules.find((iter) => modRuleId(iter) === sessionRuleId)
-      : undefined) ?? rules.find((iter) => matchesSkip(skip, iter.reference));
+      : undefined) ?? findSkipped(skip, rules, (iter) => iter.reference);
   // Only a rule the session tracks can be settled. A live rule it never saw (the collection
   // gained it after the install started) still carries the decision durably.
   const liveRuleId = rule !== undefined ? modRuleId(rule) : undefined;

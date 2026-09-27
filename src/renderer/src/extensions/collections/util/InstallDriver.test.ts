@@ -212,6 +212,37 @@ describe("InstallDriver optional default-skip", () => {
     expect(rules.find((r) => r.reference.tag === "req-a")?.ignored).toBeUndefined();
   });
 
+  // Nexus file names repeat across unrelated mods ("Main File"), so a required member listed before
+  // an optional can share its logical file name. Defaulting the optional must skip the optional,
+  // not the required member, which would then never be installed, with the collection reported
+  // complete.
+  test("defaults the optional, not a required member with the same file name", async ({
+    makeDriver,
+  }) => {
+    const sharedReq = makeRule({
+      type: "requires",
+      reference: makeReference({ tag: "req-main", logicalFileName: "Main File" }),
+    });
+    const sharedOpt = makeRule({
+      type: "recommends",
+      reference: makeReference({ tag: "opt-main", logicalFileName: "Main File" }),
+    });
+    const fixture = buildCollectionFixture("col-shared", [sharedReq, sharedOpt]);
+    const h = makeDriver({
+      mods: { [GAME_ID]: { [fixture.collection.id]: fixture.collection } },
+      downloads: { [fixture.download.id]: fixture.download },
+      profiles: { [profile.id]: profile },
+    });
+    await startWith(h, fixture);
+
+    const session = h.getState().session.collections.activeSession;
+    expect(session?.mods[modRuleId(sharedOpt)].status).toBe("ignored");
+    expect(session?.mods[modRuleId(sharedReq)].status).not.toBe("ignored");
+    const rules = h.getState().persistent.mods[GAME_ID]["col-shared"].rules ?? [];
+    expect(rules.find((r) => r.reference.tag === "opt-main")?.ignored).toBe(true);
+    expect(rules.find((r) => r.reference.tag === "req-main")?.ignored).toBeUndefined();
+  });
+
   test("does not re-default an optional the user already selected (ignored:false)", async ({
     makeDriver,
   }) => {

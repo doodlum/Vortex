@@ -141,6 +141,54 @@ describe("markCollectionMemberSkipped - automatic skip (mod reference)", () => {
     expect(flagged).toEqual(["tag-x"]);
   });
 
+  // the member the tag names wins over one met earlier that only shares a weaker marker, in the
+  // session scan and in the live-rule scan alike
+  test.for([
+    ["file hash", { fileMD5: "shared-md5" }],
+    ["logical file name", { logicalFileName: "Main File" }],
+  ] as const)(
+    "ignores the tagged member, not an earlier one with the same %s",
+    ([, shared], { makeApi }) => {
+      const earlier = makeRule({
+        type: "requires",
+        reference: makeReference({ tag: "tag-earlier", ...shared }),
+      });
+      const skipped = makeRule({
+        type: "recommends",
+        reference: makeReference({ tag: "tag-skipped", ...shared }),
+      });
+      const h = makeApi({
+        mods: {
+          [GAME_ID]: {
+            [COLLECTION_ID]: makeMod({ id: COLLECTION_ID, rules: [earlier, skipped] }),
+          },
+        },
+        session: makeInstallState({
+          activeSession: makeSession({
+            sessionId: SESSION_ID,
+            collectionId: COLLECTION_ID,
+            gameId: GAME_ID,
+            mods: {
+              [modRuleId(earlier)]: makeModInstallInfo({ rule: earlier, status: "pending" }),
+              [modRuleId(skipped)]: makeModInstallInfo({ rule: skipped, status: "pending" }),
+            },
+          }),
+        }),
+      });
+
+      const matched = markCollectionMemberSkipped(h.api, { reference: skipped.reference });
+
+      expect(matched).toBe(true);
+      expect(statusOf(h, skipped)).toBe("ignored");
+      expect(statusOf(h, earlier)).toBe("pending");
+      const rules = h.getState().persistent.mods[GAME_ID][COLLECTION_ID].rules ?? [];
+      const flagged = rules
+        .filter((rule) => rule.ignored === true)
+        .map((rule) => rule.reference.tag);
+      expect(flagged).toEqual(["tag-skipped"]);
+    },
+  );
+
   // a session can track a member the collection's current rules no longer carry (the rules were
   // replaced mid-install); the skip settles the session entry without re-adding the old rule
   test("settles a member whose rule left the collection without re-adding it", ({ makeApi }) => {
