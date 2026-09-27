@@ -115,6 +115,7 @@ import {
 import allTypesSupported from "./util/allTypesSupported";
 import * as basicInstaller from "./util/basicInstaller";
 import BlacklistSet from "./util/BlacklistSet";
+import { orderCollectionMembers } from "./util/collectionOrder";
 import { genSubDirFunc, purgeMods, purgeModsInPath } from "./util/deploy";
 import {
   getAllActivators,
@@ -454,9 +455,14 @@ function checkIncompatibilities(
 function doSortMods(api: IExtensionApi, profile: IProfile, mods: { [modId: string]: IMod }) {
   // sort (all) mods based on their dependencies so the right files get activated
   const modState: { [id: string]: IProfileMod } = profile !== undefined ? profile.modState : {};
-  const unsorted = Object.keys(mods)
-    .map((key: string) => mods[key])
-    .filter((mod: IMod) => getSafe(modState, [mod.id, "enabled"], false));
+  // collection members in their collection's order, so that an unruled conflict between two of
+  // them doesn't depend on which install started first
+  const unsorted = orderCollectionMembers(
+    Object.keys(mods)
+      .map((key: string) => mods[key])
+      .filter((mod: IMod) => getSafe(modState, [mod.id, "enabled"], false)),
+    mods,
+  );
 
   return sortMods(profile.gameId, unsorted, api).catch((unknownErr) => {
     const err = unknownToError(unknownErr);
