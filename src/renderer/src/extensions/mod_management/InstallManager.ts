@@ -18,6 +18,7 @@ import * as _ from "lodash";
 import type { IHashResult, ILookupResult, IRule } from "modmeta-db";
 import Zip from "node-7z";
 import type * as Redux from "redux";
+import { batch } from "redux-act";
 import { generate as shortid } from "shortid";
 
 /**
@@ -2183,7 +2184,13 @@ class InstallManager {
 
     // a fresh round is a fresh attempt: clear the stalled marker so a retry that succeeds
     // presents as complete (no-op unless modId is the actively-installing collection)
-    api.store.dispatch(markSessionStalled(generateCollectionSessionId(modId, profile.id), false));
+    // The reducer ignores any other session id, so only dispatch when this is the active session:
+    // every collection member passes through here, and a no-op dispatch still runs the whole
+    // middleware and subscriber chain.
+    const stalledSessionId = generateCollectionSessionId(modId, profile.id);
+    if (getCollectionActiveSession(api.getState())?.sessionId === stalledSessionId) {
+      api.store.dispatch(markSessionStalled(stalledSessionId, false));
+    }
 
     const aggregationId = `install-dependencies-${modId}`;
     this.mNotificationAggregator.startAggregation(
@@ -5756,10 +5763,6 @@ class InstallManager {
       return;
     }
 
-    if (extra.type !== undefined) {
-      api.store.dispatch(setModType(gameId, modId, extra.type));
-    }
-
     const attributes = {};
 
     if (extra.name !== undefined) {
@@ -5798,7 +5801,14 @@ class InstallManager {
       attributes["installerChoices"] = extra.installerChoices;
     }
 
-    api.store.dispatch(setModAttributes(gameId, modId, attributes));
+    // One synchronous batch instead of two dispatches: same actions, same order, same final
+    // state, but the subscriber chain runs once per collection member instead of twice.
+    const setAttributes = setModAttributes(gameId, modId, attributes);
+    if (extra.type !== undefined) {
+      api.store.dispatch(batch([setModType(gameId, modId, extra.type), setAttributes]));
+    } else {
+      api.store.dispatch(setAttributes);
+    }
   }
 
   private dropUnfulfilled(
