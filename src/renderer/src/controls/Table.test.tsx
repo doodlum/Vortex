@@ -71,11 +71,13 @@ const attributes = [
   },
 ];
 
-const data = { a: { name: "a" }, b: { name: "b" }, c: { name: "c" } };
-
 const Table = SuperTable as React.ComponentType<any>;
 
-function renderTable(stickyHeader: boolean) {
+const names = (count: number) =>
+  Array.from({ length: count }, (_x, i) => `row${String(i).padStart(2, "0")}`);
+
+function renderTable(stickyHeader: boolean, count = 3) {
+  const data = Object.fromEntries(names(count).map((name) => [name, { name }]));
   // stands in for the page scroll around a sticky-header table
   const page = document.createElement("div");
   page.style.overflowY = "auto";
@@ -111,8 +113,8 @@ function renderTable(stickyHeader: boolean) {
   return { ...result, page, pane };
 }
 
-async function rowsOf(container: HTMLElement): Promise<Element[]> {
-  await waitFor(() => expect(container.querySelectorAll("tr[data-rowid]")).toHaveLength(3));
+async function rowsOf(container: HTMLElement, count = 3): Promise<Element[]> {
+  await waitFor(() => expect(container.querySelectorAll("tr[data-rowid]")).toHaveLength(count));
   return Array.from(container.querySelectorAll("tr[data-rowid]"));
 }
 
@@ -156,5 +158,31 @@ describe("SuperTable row virtualisation", () => {
     updateWidth.mockClear();
     page.dispatchEvent(new Event("scroll"));
     expect(updateWidth).not.toHaveBeenCalled();
+  });
+
+  // A scrollbar drag moves the view further than a screen before an observer can report the
+  // rows it brought into view, so a scroll renders those rows itself, before its frame paints.
+  it("renders the rows a scroll brings into view during the scroll event", async () => {
+    const ROW_HEIGHT = 40;
+    const { container, page, unmount } = renderTable(true, 12);
+    const rows = await rowsOf(container, 12);
+    let scrollTop = 0;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: Element) {
+        // the page shows 100px; the rows are stacked below its top, moved up by the scroll
+        const index = rows.indexOf(this);
+        const top = this === page ? 0 : index * ROW_HEIGHT - scrollTop;
+        const height = this === page ? 100 : index === -1 ? 0 : ROW_HEIGHT;
+        return { top, bottom: top + height, left: 0, right: 100, height, width: 100 } as DOMRect;
+      },
+    );
+    const rendered = () => rows.map((row) => row.textContent.trim() !== "");
+
+    scrollTop = 200;
+    page.dispatchEvent(new Event("scroll"));
+
+    // what shows is 200px to 300px down the list; with 120px on each side, rows 1 to 10
+    expect(rendered()).toEqual(rows.map((_row, index) => index >= 1 && index <= 10));
+    unmount();
   });
 });

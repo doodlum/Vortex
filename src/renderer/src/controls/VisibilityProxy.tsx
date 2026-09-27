@@ -92,6 +92,22 @@ class VisibilityProxy extends React.PureComponent<any, {}> {
     );
   }
 
+  public componentDidUpdate(prevProps: IProps) {
+    // The parent can show the content without a report (a table does, for rows a scroll has
+    // brought into view). Count that as shown, and observe the node afresh: the observer
+    // reports only changes, so without a new first report a row that was already out of view
+    // again would never be hidden.
+    if (this.props.visible && !prevProps.visible && !this.mLastVisible) {
+      this.mLastVisible = true;
+      this.mVisibleTime = Date.now();
+      const { container, node } = this.#observed;
+      VisibilityProxy.unobserve(container, node);
+      VisibilityProxy.observe(container, node, (visible: boolean) =>
+        this.onIntersection(node, visible),
+      );
+    }
+  }
+
   public componentWillUnmount() {
     clearTimeout(this.#hideTimer);
     VisibilityProxy.unobserve(this.#observed.container, this.#observed.node);

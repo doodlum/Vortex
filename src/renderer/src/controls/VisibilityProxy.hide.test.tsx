@@ -169,6 +169,66 @@ describe("VisibilityProxy hiding", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  // A table shows the rows a scroll brought into view itself, without a report. On a fast
+  // drag the row can be out of view again before the observer looks, and the observer, which
+  // already reported it out of view, wouldn't report that again.
+  describe("shown by its parent", () => {
+    function renderShownByParent() {
+      const onSetVisible = vi.fn();
+      let show: (visible: boolean) => void;
+      function Parent() {
+        const [visible, setVisible] = React.useState(false);
+        show = setVisible;
+        return (
+          <VisibilityProxy
+            componentClass="div"
+            container={document.createElement("div")}
+            content={() => <span data-testid="content" />}
+            data-testid="row"
+            placeholder={() => <span data-testid="placeholder" />}
+            visible={visible}
+            setVisible={(value: boolean) => {
+              onSetVisible(value);
+              setVisible(value);
+            }}
+          />
+        );
+      }
+      const utils = render(<Parent />);
+      return {
+        ...utils,
+        onSetVisible,
+        row: utils.getByTestId("row"),
+        show: (visible: boolean) => act(() => show(visible)),
+      };
+    }
+
+    it("hides a row it was showing out of view, once the second has passed", () => {
+      const { onSetVisible, queryByTestId, row, show } = renderShownByParent();
+
+      report(row, false);
+      show(true);
+      expect(queryByTestId("content")).not.toBeNull();
+      report(row, false);
+      act(() => vi.advanceTimersByTime(1000));
+
+      expect(onSetVisible.mock.calls).toEqual([[false]]);
+      expect(queryByTestId("placeholder")).not.toBeNull();
+    });
+
+    it("keeps a row it was showing in view", () => {
+      const { onSetVisible, queryByTestId, row, show } = renderShownByParent();
+
+      report(row, false);
+      show(true);
+      report(row, true);
+      act(() => vi.advanceTimersByTime(5000));
+
+      expect(onSetVisible.mock.calls).toEqual([]);
+      expect(queryByTestId("content")).not.toBeNull();
+    });
+  });
+
   // Without a componentClass the proxy renders its content bare, so the node it observes is
   // whatever the placeholder rendered. ConflictEditor (mod-dependency-manager) renders a <div>
   // for both, which React keeps as the same node.
