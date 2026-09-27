@@ -1273,13 +1273,17 @@ class SuperTable extends ComponentEx<IProps, IComponentState> {
     const itemTop = itemRect.top - viewTop + scroller.scrollTop;
     const itemBottom = itemTop + itemRect.height;
 
+    // a sticky header covers the top of the scroller, so a row under it isn't in view
+    const covered = this.props.stickyHeader
+      ? ((this.mScrollRef.querySelector(".xthead") as HTMLElement)?.offsetHeight ?? 0)
+      : 0;
     const offset = scroller.clientHeight / 5;
-    const topLimit = scroller.scrollTop + offset;
+    const topLimit = scroller.scrollTop + covered + offset;
     const bottomLimit = scroller.scrollTop + scroller.clientHeight - offset;
 
     let targetPos: number;
     if (itemTop < topLimit) {
-      targetPos = Math.max(itemTop - offset, 0);
+      targetPos = Math.max(itemTop - covered - offset, 0);
     } else if (itemBottom > bottomLimit) {
       targetPos = itemBottom - scroller.clientHeight + offset;
     }
