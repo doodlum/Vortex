@@ -9,12 +9,13 @@ import { joinClasses } from "@/ui/utils/joinClasses";
 
 import { getIconPath } from "../../iconMap";
 import { PlayButton } from "../PlayButton";
-import { deployAction, deployCopy } from "./deployCopy";
+import { deployAction, deployCopy, progressLabel } from "./deployCopy";
 import { DeployTooltip } from "./DeployTooltip";
 import type { IDeployControlProps } from "./types";
 
 const DOT: Record<Exclude<DeployStatus, "deploying">, string> = {
   idle: "bg-success-moderate",
+  deployed: "bg-success-moderate",
   needed: "bg-primary-moderate",
   failed: "bg-danger-moderate",
 };
@@ -44,8 +45,9 @@ export const DeployStatusRow = ({ deploy, play }: IDeployControlProps) => {
 
   const text: Record<DeployStatus, string> = {
     idle: t("Up to date"),
+    deployed: t("Mods deployed"),
     needed: t("Deploy changes"),
-    deploying: t("Deploying..."),
+    deploying: progressLabel(t, deploy),
     failed: t("Deployment failed"),
   };
 
@@ -64,6 +66,7 @@ export const DeployStatusRow = ({ deploy, play }: IDeployControlProps) => {
             {
               "text-neutral-subdued hover:text-neutral-moderate": status === "idle",
               "text-neutral-moderate": status === "needed" || status === "deploying",
+              "text-success-moderate": status === "deployed",
               "text-danger-moderate": status === "failed",
               "cursor-progress": status === "deploying",
             },

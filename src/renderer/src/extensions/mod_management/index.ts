@@ -68,7 +68,6 @@ import {
 } from "../profile_management/actions/profiles";
 import { enabledModCountForProfile } from "../profile_management/selectors";
 import type { IProfile, IProfileMod } from "../profile_management/types/IProfile";
-import { setAutoDeployment } from "../settings_interface/actions/automation";
 import { setDeploymentNecessary } from "./actions/deployment";
 import { cacheModReference, removeMod, setModAttribute } from "./actions/mods";
 import { setDeploymentProblem } from "./actions/session";
@@ -121,6 +120,7 @@ import {
   deploysWithoutNotifications,
   reportDeploymentFailure,
   showCycles,
+  showDeploymentNecessary,
 } from "./util/deploymentFailure";
 import {
   getAllActivators,
@@ -699,7 +699,6 @@ function genUpdateModDeployment(installManager: InstallManager) {
               title: "Deployment not possible",
               details: reason,
               options: { allowReport: false },
-              fix: "deployment-method",
             },
             () =>
               api.showErrorNotification("Deployment not possible", reason, {
@@ -1404,33 +1403,10 @@ function onNeedToDeploy(api: IExtensionApi, current: any) {
   const moreAction = {
     title: "More",
     action: (dismiss) => {
-      api
-        .showDialog(
-          "question",
-          "Deployment necessary",
-          {
-            text:
-              "Recent changes to the active mods are currently pending, " +
-              "a deployment must be run to apply the latest changes to your game.",
-            checkboxes: [
-              {
-                id: "enable-auto-deployment",
-                text: "Enable automatic deployment",
-                value: false,
-              },
-            ],
-          },
-          [{ label: "Later" }, { label: "Deploy" }],
-        )
-        .then((res) => {
-          if (res.input["enable-auto-deployment"]) {
-            api.store.dispatch(setAutoDeployment(true));
-          }
-          if (res.action === "Deploy") {
-            dismiss();
-            deploy();
-          }
-        });
+      void showDeploymentNecessary(api, () => {
+        dismiss();
+        deploy();
+      });
     },
   };
   const actions = autoDeploy ? [deployAction] : [deployAction, moreAction];

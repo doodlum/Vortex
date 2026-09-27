@@ -1,4 +1,4 @@
-import { mdiAlertCircleOutline } from "@mdi/js";
+import { mdiAlertCircleOutline, mdiCheck } from "@mdi/js";
 import React from "react";
 import { useTranslation } from "react-i18next";
 
@@ -42,6 +42,8 @@ export const DeploySplit = ({ deploy, play }: IDeployControlProps) => {
             {
               "border-translucent-dark-200 bg-neutral-strong text-neutral-inverted hover:bg-neutral-subdued":
                 status === "idle",
+              "border-translucent-dark-200 bg-success-moderate text-neutral-inverted hover:bg-success-strong":
+                status === "deployed",
               "border-translucent-dark-200 bg-primary-moderate text-neutral-inverted hover:bg-primary-strong":
                 status === "needed",
               "cursor-progress border-translucent-dark-200 bg-neutral-subdued text-neutral-inverted":
@@ -57,7 +59,13 @@ export const DeploySplit = ({ deploy, play }: IDeployControlProps) => {
         >
           <Icon
             className={joinClasses({ "animate-rocket-lift": status === "deploying" })}
-            path={status === "failed" ? mdiAlertCircleOutline : getIconPath("deploy")}
+            path={
+              status === "failed"
+                ? mdiAlertCircleOutline
+                : status === "deployed"
+                  ? mdiCheck
+                  : getIconPath("deploy")
+            }
             size={collapsed ? undefined : "lg"}
           />
         </button>

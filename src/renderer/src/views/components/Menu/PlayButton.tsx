@@ -1,7 +1,7 @@
 import { pathToFileURL } from "url";
 
 import { mdiPlay } from "@mdi/js";
-import React, { type FC, useMemo } from "react";
+import React, { type FC, type ReactNode, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Button, type IButtonBrand } from "@/ui/components/button/Button";
@@ -21,7 +21,9 @@ import { formatGameDisplayName } from "../Spine/utils";
  */
 export interface IPlayOverride {
   label: string;
-  description?: string;
+  /** Replaces the tooltip's first line; `interactive` when it holds a control. */
+  details?: ReactNode;
+  interactive?: boolean;
   brand?: IButtonBrand;
   iconPath?: string;
   iconClassName?: string;
@@ -83,18 +85,14 @@ export const PlayButton: FC<React.PropsWithChildren<IPlayButtonProps>> = ({
       <Tooltip
         customContent={
           <div className="space-y-1 px-4 py-3">
-            <Typography
-              appearance="moderate"
-              as="p"
-              className="font-semibold"
-              typographyType="body-sm"
-            >
-              {playLabel}
-            </Typography>
-
-            {!!override?.description && (
-              <Typography appearance="subdued" as="p" typographyType="body-sm">
-                {override.description}
+            {override?.details ?? (
+              <Typography
+                appearance="moderate"
+                as="p"
+                className="font-semibold"
+                typographyType="body-sm"
+              >
+                {playLabel}
               </Typography>
             )}
 
@@ -122,6 +120,7 @@ export const PlayButton: FC<React.PropsWithChildren<IPlayButtonProps>> = ({
             )}
           </div>
         }
+        interactive={override?.interactive}
         placement="right"
       >
         <Button

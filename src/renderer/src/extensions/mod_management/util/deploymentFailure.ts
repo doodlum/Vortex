@@ -3,6 +3,7 @@ import shortid from "shortid";
 import type { IErrorOptions, IExtensionApi } from "../../../types/IExtensionContext";
 import type { IState } from "../../../types/IState";
 import { describeError, type IErrorDescription } from "../../../util/message";
+import { setAutoDeployment } from "../../settings_interface/actions/automation";
 import { setDeploymentFailure } from "../actions/session";
 
 /**
@@ -98,4 +99,37 @@ export function showCycles(api: IExtensionApi, cycles: string[][], gameId: strin
     [{ label: "Close" }],
     id,
   );
+}
+
+/**
+ * "Deployment necessary"'s More: why a deployment is needed, with the offer to turn on
+ * automatic deployment, and Deploy. `deploy` runs when the user picks Deploy.
+ */
+export function showDeploymentNecessary(api: IExtensionApi, deploy: () => void) {
+  return api
+    .showDialog(
+      "question",
+      "Deployment necessary",
+      {
+        text:
+          "Recent changes to the active mods are currently pending, " +
+          "a deployment must be run to apply the latest changes to your game.",
+        checkboxes: [
+          {
+            id: "enable-auto-deployment",
+            text: "Enable automatic deployment",
+            value: false,
+          },
+        ],
+      },
+      [{ label: "Later" }, { label: "Deploy" }],
+    )
+    .then((res) => {
+      if (res.input["enable-auto-deployment"]) {
+        api.store.dispatch(setAutoDeployment(true));
+      }
+      if (res.action === "Deploy") {
+        deploy();
+      }
+    });
 }

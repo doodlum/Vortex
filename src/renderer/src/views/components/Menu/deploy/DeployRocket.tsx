@@ -1,4 +1,4 @@
-import { mdiAlertCircleOutline } from "@mdi/js";
+import { mdiAlertCircleOutline, mdiCheck } from "@mdi/js";
 import React from "react";
 import { useTranslation } from "react-i18next";
 
@@ -9,7 +9,7 @@ import { joinClasses } from "@/ui/utils/joinClasses";
 
 import { getIconPath } from "../../iconMap";
 import { PlayButton } from "../PlayButton";
-import { deployAction, deployCopy } from "./deployCopy";
+import { deployAction, deployCopy, percentText } from "./deployCopy";
 import { DeployTooltip } from "./DeployTooltip";
 import type { IDeployControlProps } from "./types";
 
@@ -22,6 +22,7 @@ export const DeployRocket = ({ deploy, play }: IDeployControlProps) => {
   const copy = deployCopy(t, deploy);
   const { status } = deploy;
   const collapsed = play.isCollapsed;
+  const percent = percentText(deploy.progressPercent);
 
   return (
     <div className="flex w-full flex-col gap-y-2">
@@ -32,7 +33,15 @@ export const DeployRocket = ({ deploy, play }: IDeployControlProps) => {
           appearance={
             status === "needed" ? undefined : status === "deploying" ? "moderate" : "subdued"
           }
-          brand={status === "failed" ? "danger" : status === "idle" ? "neutral" : undefined}
+          brand={
+            status === "failed"
+              ? "danger"
+              : status === "deployed"
+                ? "success"
+                : status === "idle"
+                  ? "neutral"
+                  : undefined
+          }
           className={joinClasses(["h-10 w-full"], { "cursor-progress": status === "deploying" })}
           customContent={
             <>
@@ -41,7 +50,13 @@ export const DeployRocket = ({ deploy, play }: IDeployControlProps) => {
                   className={joinClasses(["absolute inset-0"], {
                     "animate-rocket-launch": status === "deploying",
                   })}
-                  path={status === "failed" ? mdiAlertCircleOutline : getIconPath("deploy")}
+                  path={
+                    status === "failed"
+                      ? mdiAlertCircleOutline
+                      : status === "deployed"
+                        ? mdiCheck
+                        : getIconPath("deploy")
+                  }
                   size="lg"
                 />
               </span>
@@ -53,7 +68,9 @@ export const DeployRocket = ({ deploy, play }: IDeployControlProps) => {
                   className="font-semibold"
                   typographyType="body-lg"
                 >
-                  {copy.label}
+                  {status === "deploying" && percent !== undefined
+                    ? `${copy.label} ${percent}`
+                    : copy.label}
                 </Typography>
               )}
             </>

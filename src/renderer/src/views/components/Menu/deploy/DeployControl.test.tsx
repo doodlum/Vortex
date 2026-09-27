@@ -22,9 +22,28 @@ vi.mock("@/extensions/mod_management/hooks/useDeployMods.hook", () => ({
   useDeployMods: () => context.deploy,
 }));
 
+// Tooltips drawn in place, so a test can read what each design's tooltip says.
+vi.mock("@/ui/components/tooltip/Tooltip", () => ({
+  Tooltip: ({
+    children,
+    content,
+    customContent,
+  }: {
+    children: React.ReactNode;
+    content?: string;
+    customContent?: React.ReactNode;
+  }) => (
+    <>
+      {children}
+      <div data-testid="tooltip">{customContent ?? content}</div>
+    </>
+  ),
+}));
+
 import { DEPLOY_DESIGNS, DeployControl } from "./DeployControl";
 
 const deployFor = (status: DeployStatus): IDeployMods => ({
+  autoDeploy: false,
   deploy: vi.fn(),
   failure:
     status === "failed"
@@ -33,8 +52,10 @@ const deployFor = (status: DeployStatus): IDeployMods => ({
   isDeploying: status === "deploying",
   isWaiting: false,
   needToDeploy: status !== "idle",
+  progressPercent: undefined,
   progressText: undefined,
   showFailure: vi.fn(),
+  showNecessary: vi.fn(),
   status,
 });
 
@@ -58,7 +79,7 @@ const control = () => {
     : marked.querySelector("button")!;
 };
 
-const STATUSES: DeployStatus[] = ["idle", "needed", "deploying", "failed"];
+const STATUSES: DeployStatus[] = ["idle", "deployed", "needed", "deploying", "failed"];
 
 beforeEach(() => {
   context.design = undefined;
@@ -309,3 +330,98 @@ describe("design 1, NMA's Apply panel", () => {
     expect(screen.queryByRole("progressbar")).toBeNull();
   });
 });
+
+/** Everything the design's tooltips and text say, together. */
+const said = () =>
+  [
+    ...screen.getAllByTestId("tooltip").map((tooltip) => tooltip.textContent),
+    document.body.textContent,
+  ].join("|");
+
+// The deploy notifications' own strings, which the control says in their place. There is
+// no i18n instance in tests, so `t` returns these keys - the source strings themselves.
+describe.each(DEPLOY_DESIGNS.map((design) => [design.id, design.name] as const))(
+  "design %i, %s, keeps the notifications' messages",
+  (id) => {
+    beforeEach(() => {
+      context.design = id;
+    });
+
+    it.each([false, true])("says a deployment is necessary (collapsed: %s)", (collapsed) => {
+      context.deploy = deployFor("needed");
+
+      render(<DeployControl play={play(collapsed)} />);
+
+      expect(said()).toContain("Deployment necessary");
+      expect(said()).toContain(
+        "Recent changes to the active mods are currently pending, " +
+          "a deployment must be run to apply the latest changes to your game.",
+      );
+    });
+
+    // Its More led to the automatic deployment offer.
+    it("offers More, which opens the automatic deployment offer", () => {
+      context.deploy = deployFor("needed");
+
+      render(<DeployControl play={play()} />);
+      fireEvent.click(screen.getByRole("button", { name: "More" }));
+
+      expect(context.deploy.showNecessary).toHaveBeenCalledTimes(1);
+    });
+
+    it("has no More when deployment is automatic, as the notification hadn't", () => {
+      context.deploy = { ...deployFor("needed"), autoDeploy: true };
+
+      render(<DeployControl play={play()} />);
+
+      expect(screen.queryByRole("button", { name: "More" })).toBeNull();
+    });
+
+    it.each([false, true])(
+      "says what the Deploying notification said, with its percent (collapsed: %s)",
+      (collapsed) => {
+        context.deploy = {
+          ...deployFor("deploying"),
+          progressText: "Deploying: Some Mod",
+          progressPercent: 42,
+        };
+
+        render(<DeployControl play={play(collapsed)} />);
+
+        expect(said()).toContain("Deploying");
+        expect(said()).toContain("Deploying mods");
+        expect(said()).toContain("Deploying: Some Mod");
+        expect(said()).toContain("42%");
+      },
+    );
+
+    it("says it is waiting for other operations", () => {
+      context.deploy = {
+        ...deployFor("deploying"),
+        isDeploying: false,
+        isWaiting: true,
+        progressText: "Waiting for other operations to complete",
+      };
+
+      render(<DeployControl play={play()} />);
+
+      expect(said()).toContain("Waiting for other operations to complete");
+    });
+
+    it.each([false, true])("says Mods deployed afterwards (collapsed: %s)", (collapsed) => {
+      context.deploy = deployFor("deployed");
+
+      render(<DeployControl play={play(collapsed)} />);
+
+      expect(said()).toContain("Mods deployed");
+    });
+
+    it.each([false, true])("names the failure it replaced (collapsed: %s)", (collapsed) => {
+      context.deploy = deployFor("failed");
+
+      render(<DeployControl play={play(collapsed)} />);
+
+      expect(said()).toContain("Failed to deploy mods");
+    });
+  },
+);

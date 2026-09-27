@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 
 import { setSettingsPage } from "@/actions";
@@ -14,6 +14,7 @@ import {
   type IDeploymentFailure,
   reportDeploymentFailure,
   showCycles,
+  showDeploymentNecessary,
 } from "../util/deploymentFailure";
 import { getAllActivators } from "../util/deploymentMethods";
 import { NoDeployment } from "../util/exceptions";
@@ -75,7 +76,16 @@ const failureSelector = (state: IState): IDeploymentFailure | null =>
 const progressTextSelector = (state: IState): string | undefined =>
   state.session.base.progress?.["deployment"]?.[selectors.activeGameId(state)]?.text || undefined;
 
-export type DeployStatus = "idle" | "needed" | "deploying" | "failed";
+const progressPercentSelector = (state: IState): number | undefined =>
+  state.session.base.progress?.["deployment"]?.[selectors.activeGameId(state)]?.percent;
+
+const autoDeploySelector = (state: IState): boolean => state.settings.automation?.deploy === true;
+
+/** How long "Mods deployed" stays up, as long as its notification did. */
+export const DEPLOYED_DISPLAY_MS = 3000;
+
+/** "deployed" is the few seconds after a deployment from the control completed. */
+export type DeployStatus = "idle" | "deployed" | "needed" | "deploying" | "failed";
 
 export interface IDeployMods {
   /**
@@ -91,10 +101,16 @@ export interface IDeployMods {
   isWaiting: boolean;
   /** Whether the active game has changes that haven't been deployed yet. */
   needToDeploy: boolean;
+  /** Whether deployment runs by itself, which is when "Deployment necessary" had no More. */
+  autoDeploy: boolean;
   /** What a running deployment says it is doing, when it has said anything. */
   progressText: string | undefined;
+  /** How far along it says it is, 0 to 100. */
+  progressPercent: number | undefined;
   /** Opens the details of {@link failure}, with a way to retry. */
   showFailure: () => void;
+  /** "Deployment necessary"'s More: why, the automatic deployment offer, and Deploy. */
+  showNecessary: () => void;
   /** The one state a control shows, most pressing first. */
   status: DeployStatus;
 }
@@ -103,8 +119,17 @@ export const deployStatus = (
   isDeploying: boolean,
   failure: IDeploymentFailure | null,
   needToDeploy: boolean,
+  justDeployed = false,
 ): DeployStatus =>
-  isDeploying ? "deploying" : failure !== null ? "failed" : needToDeploy ? "needed" : "idle";
+  isDeploying
+    ? "deploying"
+    : failure !== null
+      ? "failed"
+      : needToDeploy
+        ? "needed"
+        : justDeployed
+          ? "deployed"
+          : "idle";
 
 /**
  * Deploy Mods, as the user asks for it from the menu: the `deploy-mods` event for the
@@ -119,6 +144,17 @@ export const useDeployMods = (): IDeployMods => {
   const isDeploying = useSelector(isDeployingSelector);
   const failure = useSelector(failureSelector);
   const progressText = useSelector(progressTextSelector);
+  const progressPercent = useSelector(progressPercentSelector);
+  const autoDeploy = useSelector(autoDeploySelector);
+  const [justDeployed, setJustDeployed] = useState(false);
+
+  useEffect(() => {
+    if (!justDeployed) {
+      return;
+    }
+    const timer = setTimeout(() => setJustDeployed(false), DEPLOYED_DISPLAY_MS);
+    return () => clearTimeout(timer);
+  }, [justDeployed]);
   // Progress without the activity is a deployment that hasn't started yet.
   const isWaiting = !isDeploying && progressText !== undefined;
   const gameId = useSelector(selectors.activeGameId);
@@ -147,8 +183,10 @@ export const useDeployMods = (): IDeployMods => {
         onceCB((err: Error | null) => {
           if (err === null) {
             // the handler reports its own failures rather than passing them on
-            if (onDeployed !== undefined && failureSelector(api.getState()) === null) {
-              onDeployed();
+            if (failureSelector(api.getState()) === null) {
+              // "Mods deployed", on the control instead of a notification
+              setJustDeployed(true);
+              onDeployed?.();
             }
             return;
           }
@@ -164,7 +202,6 @@ export const useDeployMods = (): IDeployMods => {
               {
                 title: "You need to select a deployment method in settings",
                 options: { allowReport: false },
-                fix: "deployment-method",
               },
               () =>
                 api.showErrorNotification(
@@ -201,7 +238,7 @@ export const useDeployMods = (): IDeployMods => {
     const extra: IDialogAction[] = [];
     if (failure.cycles !== undefined) {
       const cycles = failure.cycles;
-      extra.push({ label: "Show cycles", action: () => void showCycles(api, cycles, gameId) });
+      extra.push({ label: "Show", action: () => void showCycles(api, cycles, gameId) });
     }
     if (failure.fix === "deployment-method") {
       extra.push({
@@ -225,17 +262,36 @@ export const useDeployMods = (): IDeployMods => {
     ]);
   }, [api, deploy, dispatch, failure, gameId]);
 
+  const showNecessary = useCallback(() => {
+    void showDeploymentNecessary(api, () => deploy());
+  }, [api, deploy]);
+
   return useMemo(
     () => ({
+      autoDeploy,
       deploy,
       failure,
       isDeploying,
       isWaiting,
       needToDeploy,
+      progressPercent: isDeploying ? progressPercent : undefined,
       progressText,
       showFailure,
-      status: deployStatus(isDeploying || isWaiting, failure, needToDeploy),
+      showNecessary,
+      status: deployStatus(isDeploying || isWaiting, failure, needToDeploy, justDeployed),
     }),
-    [deploy, failure, isDeploying, isWaiting, needToDeploy, progressText, showFailure],
+    [
+      autoDeploy,
+      deploy,
+      failure,
+      isDeploying,
+      isWaiting,
+      justDeployed,
+      needToDeploy,
+      progressPercent,
+      progressText,
+      showFailure,
+      showNecessary,
+    ],
   );
 };

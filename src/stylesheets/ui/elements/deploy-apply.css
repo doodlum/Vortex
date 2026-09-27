@@ -132,6 +132,32 @@
         }
     }
 
+    /* "Mods deployed", laid out as the processing row, with a check for the spinner */
+    .nxm-deploy-apply-result {
+        display: flex;
+        align-items: center;
+        column-gap: var(--nma-spacing-2);
+        margin-bottom: 6px;
+
+        &:focus-visible {
+            outline: 2px solid var(--color-focus-subdued);
+            outline-offset: 2px;
+        }
+
+        .nxm-deploy-apply-collapsed & {
+            justify-content: center;
+            height: var(--nma-control-height);
+            margin-bottom: 0;
+        }
+    }
+
+    .nxm-deploy-apply-result-icon {
+        flex-shrink: 0;
+        width: 16px;
+        height: 16px;
+        color: var(--color-success-moderate);
+    }
+
     /* BodySMNormalTheme in NeutralModerate */
     .nxm-deploy-apply-processing-text {
         overflow: hidden;

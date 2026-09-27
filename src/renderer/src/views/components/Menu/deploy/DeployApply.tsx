@@ -1,4 +1,4 @@
-import { mdiAlertCircleOutline, mdiSync } from "@mdi/js";
+import { mdiAlertCircleOutline, mdiCheck, mdiSync } from "@mdi/js";
 import React from "react";
 import { useTranslation } from "react-i18next";
 
@@ -6,7 +6,7 @@ import { Icon } from "@/ui/components/icon/Icon";
 import { joinClasses } from "@/ui/utils/joinClasses";
 
 import { PlayButton } from "../PlayButton";
-import { deployAction, deployCopy } from "./deployCopy";
+import { deployAction, deployCopy, progressLabel } from "./deployCopy";
 import { DeployTooltip } from "./DeployTooltip";
 import type { IDeployControlProps } from "./types";
 
@@ -17,15 +17,20 @@ import type { IDeployControlProps } from "./types";
 const ApplyProgress = ({
   collapsed,
   label,
+  percent,
   text,
 }: {
   collapsed: boolean;
   label: string;
+  percent: number | undefined;
   text: string;
 }) => (
   <div
     aria-busy
     aria-label={label}
+    aria-valuemax={100}
+    aria-valuemin={0}
+    aria-valuenow={percent}
     aria-valuetext={text}
     className="nxm-deploy-apply-progress"
     data-deploy-state="deploying"
@@ -81,13 +86,25 @@ export const DeployApply = ({ deploy, play }: IDeployControlProps) => {
   const copy = deployCopy(t, deploy);
   const { status } = deploy;
   const collapsed = play.isCollapsed;
+  // no control of its own to carry the state, as NMA shows only Launch then
+  const quiet = status === "idle" || status === "deployed";
 
   return (
     <div
       className={joinClasses(["nxm-deploy-apply"], { "nxm-deploy-apply-collapsed": collapsed })}
-      data-deploy-state={status === "idle" ? "idle" : undefined}
-      data-testid={status === "idle" ? "deploy-mods" : undefined}
+      data-deploy-state={quiet ? status : undefined}
+      data-testid={quiet ? "deploy-mods" : undefined}
     >
+      {status === "deployed" && (
+        <DeployTooltip copy={copy}>
+          <div className="nxm-deploy-apply-result" role="status" tabIndex={0}>
+            <Icon className="nxm-deploy-apply-result-icon" path={mdiCheck} size="none" />
+
+            {!collapsed && <span className="nxm-deploy-apply-processing-text">{copy.label}</span>}
+          </div>
+        </DeployTooltip>
+      )}
+
       {(status === "needed" || status === "failed") && (
         <DeployTooltip copy={copy}>
           <button
@@ -124,7 +141,8 @@ export const DeployApply = ({ deploy, play }: IDeployControlProps) => {
           <ApplyProgress
             collapsed={collapsed}
             label={copy.title}
-            text={deploy.progressText ?? copy.label}
+            percent={deploy.progressPercent}
+            text={progressLabel(t, deploy)}
           />
         </DeployTooltip>
       )}

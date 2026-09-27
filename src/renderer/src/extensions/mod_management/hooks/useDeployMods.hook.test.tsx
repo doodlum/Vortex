@@ -33,7 +33,7 @@ vi.mock("../util/deploymentMethods", () => ({
   getAllActivators: () => [{ id: "hardlink_activator" }],
 }));
 
-import { deployStatus, useDeployMods } from "./useDeployMods.hook";
+import { DEPLOYED_DISPLAY_MS, deployStatus, useDeployMods } from "./useDeployMods.hook";
 
 interface IFixture {
   activator?: string;
@@ -57,6 +57,7 @@ const stateFor = ({
     mods: { activator: { fallout4: activator } },
     profiles: { activeProfileId: "profile-a", lastActiveProfile: { fallout4: "profile-a" } },
     window: { useModernLayout },
+    automation: { deploy: false },
   },
   persistent: {
     profiles: { "profile-a": { id: "profile-a", gameId: "fallout4" } },
@@ -198,13 +199,13 @@ describe("useDeployMods", () => {
     expect(result.current.status).toBe("failed");
   });
 
-  it("offers the settings when there is no deployment method", () => {
+  it("keeps the notification's words when there is no deployment method", () => {
     const { result, store } = render();
 
     result.current.deploy();
     act(() => deployCallback()(new NoDeployment()));
 
-    expect(failureIn(store)?.fix).toBe("deployment-method");
+    expect(failureIn(store)?.title).toBe("You need to select a deployment method in settings");
   });
 
   it("reports a missing deployment method without deploying", () => {
@@ -280,7 +281,90 @@ describe("useDeployMods", () => {
       Array<{ label: string }>,
     ];
     expect(type).toBe("info");
-    expect(actions.map((action) => action.label)).toContain("Show cycles");
+    // the notification's own button
+    expect(actions.map((action) => action.label)).toContain("Show");
+  });
+
+  // "Mods deployed", which was a 3 second notification.
+  it("says Mods deployed for as long as its notification showed", () => {
+    vi.useFakeTimers();
+    try {
+      const { result } = render();
+
+      result.current.deploy();
+      act(() => deployCallback()(null));
+
+      expect(result.current.status).toBe("deployed");
+
+      act(() => vi.advanceTimersByTime(DEPLOYED_DISPLAY_MS));
+
+      expect(result.current.status).toBe("idle");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("doesn't say Mods deployed after a failure", () => {
+    const { result, store } = render();
+
+    result.current.deploy();
+    act(() => {
+      store.dispatch({
+        type: "SET_DEPLOYMENT_FAILURE",
+        payload: { gameId: "fallout4", failure: { title: "Failed", content: {} } },
+      });
+      deployCallback()(null);
+    });
+
+    expect(result.current.status).toBe("failed");
+  });
+
+  it("passes on the running deployment's percent", () => {
+    const { result } = render({
+      activity: ["deployment"],
+      progress: { text: "Deploying: Some Mod", percent: 60 },
+    });
+
+    expect(result.current.progressPercent).toBe(60);
+  });
+
+  // "Deployment necessary"'s More, word for word, with its checkbox.
+  it("opens the Deployment necessary dialog with the automatic deployment offer", async () => {
+    api.showDialog.mockResolvedValueOnce({
+      action: "Deploy",
+      input: { "enable-auto-deployment": true },
+    });
+    const { result, store } = render({ needToDeploy: true });
+    const dispatch = vi.spyOn(store, "dispatch");
+
+    await act(async () => {
+      result.current.showNecessary();
+      await Promise.resolve();
+    });
+
+    expect(api.showDialog).toHaveBeenCalledWith(
+      "question",
+      "Deployment necessary",
+      {
+        text:
+          "Recent changes to the active mods are currently pending, " +
+          "a deployment must be run to apply the latest changes to your game.",
+        checkboxes: [
+          { id: "enable-auto-deployment", text: "Enable automatic deployment", value: false },
+        ],
+      },
+      [{ label: "Later" }, { label: "Deploy" }],
+    );
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "SET_AUTO_DEPLOYMENT", payload: true }),
+    );
+    expect(api.events.emit).toHaveBeenCalledWith(
+      "deploy-mods",
+      expect.any(Function),
+      "profile-a",
+      undefined,
+      { manual: true },
+    );
   });
 
   it("follows whether the game needs deploying", () => {
@@ -361,5 +445,7 @@ describe("deployStatus", () => {
     expect(deployStatus(false, failure, true)).toBe("failed");
     expect(deployStatus(false, null, true)).toBe("needed");
     expect(deployStatus(false, null, false)).toBe("idle");
+    expect(deployStatus(false, null, false, true)).toBe("deployed");
+    expect(deployStatus(false, null, true, true)).toBe("needed");
   });
 });
