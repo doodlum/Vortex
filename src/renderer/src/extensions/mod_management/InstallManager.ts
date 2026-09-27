@@ -105,7 +105,6 @@ import {
   sessionWriteForDependency,
 } from "../../util/collectionSessionWrite";
 import { markCollectionMemberSkipped } from "../../util/collectionSkip";
-import ConcurrencyLimiter from "../../util/ConcurrencyLimiter";
 import {
   DataInvalid,
   NotFound,
@@ -194,10 +193,12 @@ import gatherDependencies, {
 } from "./util/dependencies";
 import filterModInfo from "./util/filterModInfo";
 import { findModByRef } from "./util/findModByRef";
+import { archiveSize, dependencySize, installPriority } from "./util/installOrder";
 import { InstallPhaseTracker, type IDeploymentDetails } from "./util/InstallPhaseTracker";
 import { isFuzzyVersion } from "./util/isFuzzyVersion";
 import metaLookupMatch from "./util/metaLookupMatch";
 import modName, { renderModReference } from "./util/modName";
+import PriorityLimiter from "./util/PriorityLimiter";
 import queryGameId from "./util/queryGameId";
 import { reconcileOrphanedArchive } from "./util/reconcileOrphanedArchive";
 import { selectRequeueCandidates } from "./util/requeueCandidates";
@@ -554,7 +555,8 @@ class InstallManager {
   // fetched ahead while a smaller number install. Must stay a DIFFERENT limiter from mInstallLimit
   // because the orchestration acquires a slot here and then calls this.install() (mInstallLimit) -
   // gating both on one limiter would nest it and deadlock the pipeline.
-  private mDependencyPipelineLimit: ConcurrencyLimiter = new ConcurrencyLimiter(10);
+  // Waiting members start largest archive first (see installPriority).
+  private mDependencyPipelineLimit: PriorityLimiter = new PriorityLimiter(10);
 
   // Queues installations for processing - primarily used to keep track of pending installations
   //  for the current dependency phase if/when concurrent download and installation is disabled.
@@ -582,7 +584,9 @@ class InstallManager {
   // installs - every install routes through this.install(), which acquires a slot here. This is
   // the real install-concurrency cap (MAX_SIMULTANEOUS_INSTALLS); it replaces the old sequential
   // mQueue. Dependency orchestration/look-ahead is bounded separately by mDependencyPipelineLimit.
-  private mInstallLimit: ConcurrencyLimiter = new ConcurrencyLimiter(
+  // Waiting installs start in installPriority order: dependencies largest archive first, so the
+  // longest extractions don't run alone at the end of a collection.
+  private mInstallLimit: PriorityLimiter = new PriorityLimiter(
     InstallManager.MAX_SIMULTANEOUS_INSTALLS,
   );
 
@@ -668,7 +672,7 @@ class InstallManager {
       // Clear the dependency installs map
       this.mDependencyInstalls = {};
 
-      this.mDependencyPipelineLimit = new ConcurrencyLimiter(10);
+      this.mDependencyPipelineLimit = new PriorityLimiter(10);
 
       // Clear all retry counters
       this.mDependencyRetryCount.clear();
@@ -1272,8 +1276,9 @@ class InstallManager {
     const installingReference = modReference;
 
     // Use parallel installation concurrency limiter instead of sequential mQueue
+    const priority = installPriority(sourceModId, archiveSize(api.getState(), archiveId));
     this.mInstallLimit
-      .do(() => {
+      .doAt(priority, () => {
         return new Promise<string>((resolve, reject) => {
           const installationZip = new Zip();
 
@@ -2487,7 +2492,7 @@ class InstallManager {
     // MAX_SIMULTANEOUS_INSTALLS by that inner mInstallLimit; this outer limiter only bounds
     // how many downloaded dependencies are orchestrated/queued ahead.
     this.mDependencyPipelineLimit
-      .do(async () => {
+      .doAt(dependencySize(api.getState(), dep, downloadId), async () => {
         const startTime = Date.now();
 
         // Track this dependency installation
