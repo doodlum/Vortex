@@ -11,4 +11,48 @@
             opacity: 1;
         }
     }
+
+    /*
+     * The deploy rocket taking off along the line it points in, while a deployment runs.
+     * A loop, so it keeps its own duration rather than the transition one - and motion.css
+     * switches it off instead, as it does the skeleton pulse.
+     */
+    --animate-rocket-lift: rocket-lift 1.2s ease-in-out infinite;
+
+    @keyframes rocket-lift {
+        0%,
+        100% {
+            translate: 0 0;
+        }
+
+        50% {
+            translate: 1.5px -2px;
+        }
+    }
+
+    /* The rocket leaving along the line it points in and coming round again, for as long as
+       a deployment runs. Its button clips it, so it flies out of sight. Off with the pulse. */
+    --animate-rocket-launch: rocket-launch 1.4s ease-in infinite;
+
+    @keyframes rocket-launch {
+        0% {
+            translate: 0 0;
+            opacity: 1;
+        }
+
+        45% {
+            translate: 10px -12px;
+            opacity: 0;
+        }
+
+        46% {
+            translate: -10px 12px;
+            opacity: 0;
+        }
+
+        100% {
+            translate: 0 0;
+            opacity: 1;
+        }
+    }
 }

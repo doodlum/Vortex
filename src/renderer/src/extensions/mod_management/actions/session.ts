@@ -2,6 +2,7 @@ import safeCreateAction from "../../../actions/safeCreateAction";
 import { UserCanceled } from "../../../util/CustomErrors";
 import type { IFileChange } from "../types/IDeploymentMethod";
 import type { IFileEntry } from "../types/IFileEntry";
+import type { IDeploymentFailure } from "../util/deploymentFailure";
 import { changeToEntry } from "../util/externalChanges";
 
 export interface IDeploymentProblem {
@@ -23,6 +24,15 @@ export const setUpdatingMods = safeCreateAction(
 export const setDeploymentProblem = safeCreateAction(
   "SET_DEPLOYMENT_PROBLEM",
   (errors: IDeploymentProblem[]) => errors,
+);
+
+/**
+ * why the game's last deployment didn't complete, which the menu's Deploy control shows in
+ * place of a notification until a deployment succeeds. `null` clears it.
+ */
+export const setDeploymentFailure = safeCreateAction(
+  "SET_DEPLOYMENT_FAILURE",
+  (gameId: string, failure: IDeploymentFailure | null) => ({ gameId, failure }),
 );
 
 /**

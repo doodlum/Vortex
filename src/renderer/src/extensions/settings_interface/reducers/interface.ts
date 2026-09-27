@@ -30,6 +30,9 @@ const settingsReducer: IReducerSpec = {
     // Deliberately absent from the defaults below: unset means "follow the OS".
     [actions.setReduceMotion as any]: (state, payload) =>
       update(state, { reduceMotion: { $set: payload } }),
+    // Absent too: unset means the recommended design.
+    [actions.setDeployButtonStyle as any]: (state, payload) =>
+      update(state, { deployButtonStyle: { $set: payload } }),
   },
   defaults: {
     language: "en",

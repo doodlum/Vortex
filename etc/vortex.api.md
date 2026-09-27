@@ -3611,6 +3611,7 @@ interface ISettingsInterface {
     dashletSettings: {
         [dashletId: string]: IDashletSettings;
     };
+    deployButtonStyle?: number;
     // (undocumented)
     desktopNotifications: boolean;
     // (undocumented)

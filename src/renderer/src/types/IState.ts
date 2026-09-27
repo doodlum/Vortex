@@ -228,6 +228,8 @@ export interface ISettingsInterface {
   relativeTimes: boolean;
   alwaysCompactHeaders: boolean;
   reduceMotion?: boolean;
+  /** Design comparison: which menu Deploy control design to show, 1 to 5. */
+  deployButtonStyle?: number;
   dashboardLayout: string[];
   foregroundDL: boolean;
   dashletSettings: { [dashletId: string]: IDashletSettings };

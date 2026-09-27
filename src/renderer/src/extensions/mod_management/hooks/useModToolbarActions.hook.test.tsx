@@ -124,7 +124,14 @@ describe("useModToolbarActions", () => {
       options: {},
     } as unknown as IActionDefinition;
 
-    expect(labels([asComponent])).toHaveLength(4);
+    expect(labels([asComponent])).toHaveLength(3);
+  });
+
+  // Deploy sits above Play in the menu instead; the classic toolbar keeps its own.
+  it("leaves Deploy to the menu", () => {
+    const ids = actionsFor([]).map((action) => action.id);
+
+    expect(ids).toEqual(["install-from-file", "check-versions", "purge"]);
   });
 });
 

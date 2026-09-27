@@ -142,22 +142,26 @@ const hasStringStack = (v: unknown): v is { stack: string } =>
   typeof (v as { stack: unknown }).stack === "string";
 
 /**
- * show an error notification with an optional "more" button that displays further details
- * in a modal dialog.
- *
- * @export
- * @param {Redux.Dispatch<S>} dispatch
- * @param {string} title
- * @param {any} [details] further details about the error (stack and such). The api says we only
- *                        want string or Errors but since some node apis return non-Error objects
- *                        where Errors are expected we have to be a bit more flexible here.
+ * What an error shows the user in its details dialog, worked out once: the dialog's
+ * content, and where a Report button would take them, if anywhere. Plain data, so it can
+ * be kept in the store and the dialog opened later - see {@link errorDialogActions}.
  */
-export function showError(
-  dispatch: ThunkDispatch<IState, null, Redux.Action>,
+export interface IErrorDescription {
+  title: string;
+  content: IDialogContent;
+  /** The third-party extension's issue tracker, when the error came from one. */
+  reportURL?: string;
+}
+
+/**
+ * Logs an error, records it for telemetry when it is reportable, and describes the
+ * details dialog {@link showError} offers for it.
+ */
+export function describeError(
   title: string,
   details?: string | Error | any,
   options?: IErrorOptions,
-) {
+): IErrorDescription {
   if (options === undefined) {
     options = {};
   }
@@ -241,46 +245,85 @@ export function showError(
       "it to the extension author.";
   }
 
-  const actions: IDialogAction[] = [];
+  const canReport = !isOutdated() && !didIgnoreError() && allowReport;
 
-  if (!isOutdated() && !didIgnoreError() && allowReport) {
-    if (extIssueTrackerURL !== undefined) {
-      actions.push({
-        label: "Report",
-        action: () => {
-          dispatch(
-            showDialog(
-              "info",
-              "Reporting to extension author",
-              {
-                bbcode:
-                  "Since this error was very likely caused by a third-party extension, " +
-                  "we will now take you to their issue tracker at [b]{{url}}[/b].<br/><br/>" +
-                  "It usually helps a lot investigating issues if you provide your log files " +
-                  "(found at [url]{{logPath}}[/url]) " +
-                  "but please do keep in mind that those can contain personally identifiable " +
-                  "information (like folder names that include your windows account name) " +
-                  "or stuff like information about mods you are using.",
-                parameters: {
-                  url: extIssueTrackerURL,
-                  logPath: getVortexPath("userData"),
-                },
+  return {
+    title,
+    content,
+    reportURL: canReport ? extIssueTrackerURL : undefined,
+  };
+}
+
+/** The buttons of an error's details dialog: Report, where it can go somewhere, and Close. */
+export function errorDialogActions(
+  dispatch: ThunkDispatch<IState, null, Redux.Action>,
+  description: IErrorDescription,
+): IDialogAction[] {
+  const actions: IDialogAction[] = [];
+  const { reportURL } = description;
+
+  if (reportURL !== undefined) {
+    actions.push({
+      label: "Report",
+      action: () => {
+        dispatch(
+          showDialog(
+            "info",
+            "Reporting to extension author",
+            {
+              bbcode:
+                "Since this error was very likely caused by a third-party extension, " +
+                "we will now take you to their issue tracker at [b]{{url}}[/b].<br/><br/>" +
+                "It usually helps a lot investigating issues if you provide your log files " +
+                "(found at [url]{{logPath}}[/url]) " +
+                "but please do keep in mind that those can contain personally identifiable " +
+                "information (like folder names that include your windows account name) " +
+                "or stuff like information about mods you are using.",
+              parameters: {
+                url: reportURL,
+                logPath: getVortexPath("userData"),
               },
-              [
-                { label: "Cancel" },
-                {
-                  label: "Continue",
-                  action: () => opn(extIssueTrackerURL).catch(() => null),
-                },
-              ],
-            ),
-          );
-        },
-      });
-    }
+            },
+            [
+              { label: "Cancel" },
+              {
+                label: "Continue",
+                action: () => opn(reportURL).catch(() => null),
+              },
+            ],
+          ),
+        );
+      },
+    });
   }
 
   actions.push({ label: "Close", default: true });
+
+  return actions;
+}
+
+/**
+ * show an error notification with an optional "more" button that displays further details
+ * in a modal dialog.
+ *
+ * @export
+ * @param {Redux.Dispatch<S>} dispatch
+ * @param {string} title
+ * @param {any} [details] further details about the error (stack and such). The api says we only
+ *                        want string or Errors but since some node apis return non-Error objects
+ *                        where Errors are expected we have to be a bit more flexible here.
+ */
+export function showError(
+  dispatch: ThunkDispatch<IState, null, Redux.Action>,
+  title: string,
+  details?: string | Error | any,
+  options?: IErrorOptions,
+) {
+  if (options === undefined) {
+    options = {};
+  }
+
+  const description = describeError(title, details, options);
 
   const haveMessage = options.message !== undefined;
 
@@ -299,7 +342,14 @@ export function showError(
               {
                 title: "More",
                 action: (dismiss: () => void) => {
-                  dispatch(showDialog("error", "Error", content, actions));
+                  dispatch(
+                    showDialog(
+                      "error",
+                      "Error",
+                      description.content,
+                      errorDialogActions(dispatch, description),
+                    ),
+                  );
                 },
               },
             ]

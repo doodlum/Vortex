@@ -53,3 +53,12 @@ export const setAlwaysCompactHeaders = safeCreateAction(
  * then the setting is absent and the operating system's preference is followed.
  */
 export const setReduceMotion = safeCreateAction("SET_REDUCE_MOTION", (enabled: boolean) => enabled);
+
+/**
+ * Design comparison, to be reduced to the chosen design before upstreaming: which of the
+ * menu's Deploy control designs to show, 1 to 5.
+ */
+export const setDeployButtonStyle = safeCreateAction(
+  "SET_DEPLOY_BUTTON_STYLE",
+  (style: number) => style,
+);

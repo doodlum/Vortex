@@ -51,3 +51,13 @@ describe("setReduceMotion", () => {
     });
   });
 });
+
+describe("setDeployButtonStyle", () => {
+  it("creates the correct action", () => {
+    expect(interfaceActions.setDeployButtonStyle(2)).toEqual({
+      error: false,
+      type: "SET_DEPLOY_BUTTON_STYLE",
+      payload: 2,
+    });
+  });
+});

@@ -13,7 +13,7 @@ import {
   type ICheckbox,
   updateNotification,
 } from "../../actions/notifications";
-import { setSettingsPage, startActivity, stopActivity } from "../../actions/session";
+import { setProgress, setSettingsPage, startActivity, stopActivity } from "../../actions/session";
 import LazyComponent from "../../controls/LazyComponent";
 import { log } from "../../logging";
 import ReduxProp from "../../ReduxProp";
@@ -117,6 +117,12 @@ import * as basicInstaller from "./util/basicInstaller";
 import BlacklistSet from "./util/BlacklistSet";
 import { genSubDirFunc, purgeMods, purgeModsInPath } from "./util/deploy";
 import {
+  clearDeploymentFailure,
+  deploysWithoutNotifications,
+  reportDeploymentFailure,
+  showCycles,
+} from "./util/deploymentFailure";
+import {
   getAllActivators,
   getCurrentActivator,
   getSelectedActivator,
@@ -218,30 +224,6 @@ function bakeSettings(api: IExtensionApi, profile: IProfile, sortedModList: IMod
   return shouldSuppressUpdate(api)
     ? Promise.resolve()
     : api.emitAndAwait("bake-settings", profile.gameId, sortedModList, profile);
-}
-
-function showCycles(api: IExtensionApi, cycles: string[][], gameId: string) {
-  const id = shortid();
-  return api.showDialog(
-    "error",
-    "Cycles",
-    {
-      text:
-        "Dependency rules between your mods contain cycles, " +
-        'like "A after B" and "B after A". You need to remove one of the ' +
-        "rules causing the cycle, otherwise your mods can't be " +
-        "applied in the right order.",
-      links: cycles.map((cycle, idx) => ({
-        label: cycle.join(", "),
-        action: () => {
-          api.closeDialog(id);
-          api.events.emit("edit-mod-cycle", gameId, cycle);
-        },
-      })),
-    },
-    [{ label: "Close" }],
-    id,
-  );
 }
 
 async function deployModType(
@@ -641,24 +623,39 @@ function genUpdateModDeployment(installManager: InstallManager) {
       message: t("Waiting for other operations to complete"),
       title: t("Deploying"),
     };
+    // The menu's Deploy control shows progress in the modern layout, so no activity
+    // notification is raised there.
+    const quiet = deploysWithoutNotifications(api.getState());
+    // where the control reads that progress instead, once the game is known
+    let progressGameId: string | undefined;
 
     const progress = (text: string, percent: number) => {
       log("debug", "deployment progress", { text, percent });
       if (progressCB !== undefined) {
         progressCB(text, percent);
       }
-      api.store.dispatch(updateNotification(notification.id, percent, text));
+      if (!quiet) {
+        api.store.dispatch(updateNotification(notification.id, percent, text));
+      } else if (progressGameId !== undefined) {
+        api.store.dispatch(setProgress("deployment", progressGameId, text, percent));
+      }
     };
     const state: IState = api.store.getState();
     let profile: IProfile = state.persistent.profiles?.[profileId] ?? activeProfile(state);
 
     if (Object.keys(getSafe(state, ["session", "base", "toolsRunning"], {})).length > 0) {
-      api.sendNotification({
-        type: "info",
-        id: "deployment-not-possible",
-        message: "Can't deploy while the game or a tool is running",
-        displayMS: 5000,
-      });
+      reportDeploymentFailure(
+        api,
+        profile?.gameId,
+        { title: "Can't deploy while the game or a tool is running", warning: true },
+        () =>
+          api.sendNotification({
+            type: "info",
+            id: "deployment-not-possible",
+            message: "Can't deploy while the game or a tool is running",
+            displayMS: 5000,
+          }),
+      );
       return Promise.resolve();
     }
 
@@ -689,33 +686,48 @@ function genUpdateModDeployment(installManager: InstallManager) {
       const err = allTypesSupported(selectedActivator, state, gameId, types);
       if (selectedActivator !== undefined) {
         if (err.errors.length > 0) {
-          api.showErrorNotification(
-            "Deployment not possible",
-            t('Deployment method "{{method}}" not available because: {{reason}}', {
-              replace: {
-                method: selectedActivator.name,
-                reason: err.errors[0].description(t),
-              },
-            }),
-            {
-              id: "deployment-not-possible",
-              allowReport: false,
+          const reason = t('Deployment method "{{method}}" not available because: {{reason}}', {
+            replace: {
+              method: selectedActivator.name,
+              reason: err.errors[0].description(t),
             },
+          });
+          reportDeploymentFailure(
+            api,
+            gameId,
+            {
+              title: "Deployment not possible",
+              details: reason,
+              options: { allowReport: false },
+              fix: "deployment-method",
+            },
+            () =>
+              api.showErrorNotification("Deployment not possible", reason, {
+                id: "deployment-not-possible",
+                allowReport: false,
+              }),
           );
         } else if (err.warnings.length > 0) {
-          api.sendNotification({
-            type: "warning",
-            message: t(
-              'Deployment method "{{method}}" does not support ' + "all mod types: {{reason}}",
-              {
-                replace: {
-                  method: selectedActivator.name,
-                  reason: err.warnings[0].description(t),
-                },
+          const reason = t(
+            'Deployment method "{{method}}" does not support ' + "all mod types: {{reason}}",
+            {
+              replace: {
+                method: selectedActivator.name,
+                reason: err.warnings[0].description(t),
               },
-            ),
-            allowSuppress: true,
-          });
+            },
+          );
+          reportDeploymentFailure(
+            api,
+            gameId,
+            { title: "Deployment not possible", details: reason, warning: true },
+            () =>
+              api.sendNotification({
+                type: "warning",
+                message: reason,
+                allowSuppress: true,
+              }),
+          );
         }
       } // otherwise there should already be a notification
       return Promise.resolve();
@@ -752,7 +764,13 @@ function genUpdateModDeployment(installManager: InstallManager) {
           if (!manual) {
             await userGate();
           }
-          notification.id = api.sendNotification(notification);
+          if (!quiet) {
+            notification.id = api.sendNotification(notification);
+          } else {
+            // what the notification would say while this waits for the activation lock
+            progressGameId = gameId;
+            api.store.dispatch(setProgress("deployment", gameId, notification.message, 0));
+          }
 
           try {
             await withActivationLock(async () => {
@@ -779,7 +797,10 @@ function genUpdateModDeployment(installManager: InstallManager) {
               const lastDeployment: { [typeId: string]: IDeployedFile[] } = {};
               const mods: Record<string, IMod> = state.persistent.mods?.[profile?.gameId] ?? {};
               notification.message = t("Deploying mods");
-              api.sendNotification(notification);
+              if (!quiet) {
+                api.sendNotification(notification);
+              }
+              clearDeploymentFailure(api, gameId);
               api.store.dispatch(startActivity("mods", "deployment"));
               progress(t("Loading deployment manifest"), 0);
 
@@ -892,36 +913,63 @@ function genUpdateModDeployment(installManager: InstallManager) {
             if (err instanceof UserCanceled) {
               // nop
             } else if (err instanceof ProcessCanceled) {
-              api.sendNotification({
-                type: "warning",
-                title: "Deployment interrupted",
-                message: err.message,
-              });
+              reportDeploymentFailure(
+                api,
+                gameId,
+                { title: "Deployment interrupted", details: err.message, warning: true },
+                () =>
+                  api.sendNotification({
+                    type: "warning",
+                    title: "Deployment interrupted",
+                    message: err.message,
+                  }),
+              );
             } else if (err instanceof TemporaryError) {
-              api.showErrorNotification("Failed to deploy mods, please try again", err.message, {
-                allowReport: false,
-              });
+              reportDeploymentFailure(
+                api,
+                gameId,
+                {
+                  title: "Failed to deploy mods, please try again",
+                  details: err.message,
+                  options: { allowReport: false },
+                },
+                () =>
+                  api.showErrorNotification(
+                    "Failed to deploy mods, please try again",
+                    err.message,
+                    { allowReport: false },
+                  ),
+              );
             } else if (err instanceof CycleError) {
-              api.sendNotification({
-                id: "mod-cycle-warning",
-                type: "warning",
-                message: "Mod rules contain cycles",
-                actions: [
-                  {
-                    title: "Show",
-                    action: () => {
-                      showCycles(api, err.cycles, profile.gameId);
-                    },
-                  },
-                ],
-              });
+              reportDeploymentFailure(
+                api,
+                gameId,
+                { title: "Mod rules contain cycles", warning: true, cycles: err.cycles },
+                () =>
+                  api.sendNotification({
+                    id: "mod-cycle-warning",
+                    type: "warning",
+                    message: "Mod rules contain cycles",
+                    actions: [
+                      {
+                        title: "Show",
+                        action: () => {
+                          showCycles(api, err.cycles, profile.gameId);
+                        },
+                      },
+                    ],
+                  }),
+              );
             } else {
               if (err["code"] === undefined && err["errno"] !== undefined) {
                 // unresolved windows error code
-                api.showErrorNotification("Failed to deploy mods", {
-                  error: err,
-                  ErrorCode: err["errno"],
-                });
+                const details = { error: err, ErrorCode: err["errno"] };
+                reportDeploymentFailure(
+                  api,
+                  gameId,
+                  { title: "Failed to deploy mods", details },
+                  () => api.showErrorNotification("Failed to deploy mods", details),
+                );
               } else {
                 // Error codes that we can't debug without a log.
                 const attachLogErrCodes: string[] = ["ELOOP"];
@@ -935,14 +983,26 @@ function genUpdateModDeployment(installManager: InstallManager) {
                     "please try deploying again.\n" +
                     err.message;
                 }
-                api.showErrorNotification("Failed to deploy mods", err, {
+                const options = {
                   allowReport: err["code"] !== "EPERM" && !isFSErr && err["allowReport"] !== false,
-                });
+                };
+                reportDeploymentFailure(
+                  api,
+                  gameId,
+                  { title: "Failed to deploy mods", details: err, options },
+                  () => api.showErrorNotification("Failed to deploy mods", err, options),
+                );
               }
             }
           } finally {
             api.store.dispatch(stopActivity("mods", "deployment"));
-            api.dismissNotification(notification.id);
+            if (progressGameId !== undefined) {
+              api.store.dispatch(setProgress("deployment", progressGameId, "", 0));
+              progressGameId = undefined;
+            }
+            if (notification.id !== undefined) {
+              api.dismissNotification(notification.id);
+            }
           }
         },
       ),
@@ -1374,7 +1434,8 @@ function onNeedToDeploy(api: IExtensionApi, current: any) {
     },
   };
   const actions = autoDeploy ? [deployAction] : [deployAction, moreAction];
-  if (current) {
+  // The menu's Deploy control says a deployment is needed in the modern layout.
+  if (current && !deploysWithoutNotifications(api.getState())) {
     api.sendNotification({
       id: "deployment-necessary",
       type: "info",

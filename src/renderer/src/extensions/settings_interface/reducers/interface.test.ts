@@ -55,3 +55,14 @@ describe("setReduceMotion", () => {
     expect(settingsReducer.defaults).not.toHaveProperty("reduceMotion");
   });
 });
+
+describe("setDeployButtonStyle", () => {
+  it("records the design picked", () => {
+    const result = settingsReducer.reducers.SET_DEPLOY_BUTTON_STYLE({ deployButtonStyle: 1 }, 3);
+    expect(result).toEqual({ deployButtonStyle: 3 });
+  });
+
+  it("has no default, so an untouched setting shows the recommended design", () => {
+    expect(settingsReducer.defaults).not.toHaveProperty("deployButtonStyle");
+  });
+});

@@ -172,8 +172,8 @@ The answer is published as `data-reduce-motion="true"` on `<html>`
   `animationend`.
 - **Keep essential motion.** Spinners (`animate-spin`), and anything whose movement _is_
   the information (a countdown ring, a progress bar's width), have to keep working - a
-  static spinner says nothing. Skeleton shimmer (`animate-pulse`) is not essential and is
-  switched off centrally.
+  static spinner says nothing. Skeleton shimmer (`animate-pulse`) and the deploy rocket (`animate-rocket-lift`) are
+  not essential and are switched off centrally.
 - Only the Tailwind/`nxm-` surface responds so far. The legacy SCSS
   (`src/stylesheets/vortex/**`, bundled Bootstrap) compiles its durations in and is not
   covered yet, so the classic toolbar's flashing buttons still flash.

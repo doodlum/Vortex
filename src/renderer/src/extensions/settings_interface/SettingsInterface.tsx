@@ -24,6 +24,7 @@ import { log } from "@/util/log";
 import { getPreloadApi } from "@/util/preloadAccess";
 import { useReduceMotion } from "@/util/reduceMotion";
 import { truthy } from "@/util/util";
+import { DeployDesignPicker } from "@/views/components/Menu/deploy/DeployDesignPicker";
 
 import { displayBcp47, isValidBcp47 } from "../../bcp47";
 import { ComponentEx, connect, translate } from "../../controls/ComponentEx";
@@ -268,6 +269,10 @@ class SettingsInterfaceImpl extends ComponentEx<IProps, {}> {
               {t("Bring Vortex to foreground when starting downloads in browser")}
             </Toggle>
           </div>
+        </FormGroup>
+
+        <FormGroup controlId="deployDesign">
+          <DeployDesignPicker />
         </FormGroup>
 
         <FormGroup controlId="advanced">

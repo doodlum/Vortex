@@ -31,6 +31,15 @@ vi.mock("./ToolsContext", () => ({
   }),
 }));
 
+const deployControl = vi.hoisted(() => ({ props: undefined as unknown }));
+
+vi.mock("./deploy/DeployControl", () => ({
+  DeployControl: (props: unknown) => {
+    deployControl.props = props;
+    return <div data-testid="deploy-control" />;
+  },
+}));
+
 vi.mock("./ToolButton", () => ({
   ToolButton: () => <button data-testid="tool" type="button" />,
 }));
@@ -85,6 +94,29 @@ describe("ToolsSection", () => {
     await settleTransitions();
   });
 
+  // Play is drawn by the Deploy control, whose designs place the two.
+  it("hands Play to the Deploy control, below the tools", async () => {
+    render(<ToolsSection />);
+
+    expect(screen.getByTestId("menu-tools").nextElementSibling).toBe(
+      screen.getByTestId("deploy-control"),
+    );
+    expect(deployControl.props).toMatchObject({
+      play: { isCollapsed: false, disabled: true, gameName: "Stardew Valley" },
+    });
+
+    await settleTransitions();
+  });
+
+  it("tells the Deploy control when the menu is collapsed", async () => {
+    context.menuIsCollapsed = true;
+
+    render(<ToolsSection />);
+
+    expect(deployControl.props).toMatchObject({ play: { isCollapsed: true } });
+
+    await settleTransitions();
+  });
   it("leaves the row out when the game has no tools", () => {
     context.visibleTools = [];
 
