@@ -22,12 +22,20 @@ import { isCancellation } from "../transfer/cancellation";
 import { withRetry } from "../transfer/retry";
 import type { TimeoutOptions } from "../transfer/timeouts";
 import { createGotTimeoutOptions } from "../transfer/timeouts";
+import { ContiguousHash } from "./contiguousHash";
 import { toNetworkError } from "./errors";
 import type { ProgressReporter } from "./progress";
 import type { NormalizedResource } from "./resolver";
 import { normalize } from "./resolver";
 
 export const defaultChunkConcurrency = 4;
+
+/**
+ * Bytes a chunked download may write ahead of the hashed prefix before the MD5 is left to a read of
+ * the finished file. Beyond this, reading those bytes back is unlikely to hit the page cache, so it
+ * saves nothing over hashing the file afterwards.
+ */
+export const maxHashAheadBytes = 512 * 1024 * 1024;
 
 /** @internal */
 export type Checkpoint = {
@@ -56,7 +64,7 @@ export async function download<T>(
     timeout?: TimeoutOptions;
     userAgent?: string;
   },
-): Promise<void> {
+): Promise<{ md5?: string }> {
   if (options?.abortSignal?.aborted) {
     throw new VortexError("Download cancelled", { kind: "user-canceled", skipped: false });
   }
@@ -140,6 +148,22 @@ export async function download<T>(
     handle = { fd, path: dest };
   } catch (err) {
     throw parseError(err, { path: dest }, () => `Failed to open ${dest}`);
+  }
+
+  // MD5 while writing. A resumed download's earlier bytes were written by another attempt, so that
+  // one is hashed from the file afterwards, as before.
+  if (checkpoint === undefined) {
+    const fd = handle.fd;
+    handle.hash = new ContiguousHash(async (position, length) => {
+      const buffer = Buffer.allocUnsafe(length);
+      let read = 0;
+      while (read < length) {
+        const { bytesRead } = await fd.read(buffer, read, length - read, position + read);
+        if (bytesRead === 0) break;
+        read += bytesRead;
+      }
+      return buffer.subarray(0, read);
+    }, maxHashAheadBytes);
   }
 
   if (checkpoint && probe.size) {
@@ -272,6 +296,11 @@ export async function download<T>(
         options?.abortSignal,
       );
     }
+    const md5 = await digestWritten(handle);
+    if (options?.progressReporter !== undefined) {
+      options.progressReporter.md5 = md5;
+    }
+    return { md5 };
   } catch (err) {
     if (isCancellation(err)) {
       throw new VortexError(
@@ -284,6 +313,19 @@ export async function download<T>(
     throw err;
   } finally {
     await handle.fd.close();
+  }
+}
+
+/** the MD5 hashed while writing, if it certainly covers the whole file as it is on disk */
+async function digestWritten(handle: FileHandle): Promise<string | undefined> {
+  if (handle.hash === undefined) {
+    return undefined;
+  }
+  try {
+    const { size } = await handle.fd.stat();
+    return await handle.hash.digest(size);
+  } catch {
+    return undefined;
   }
 }
 
@@ -414,6 +456,7 @@ async function downloadStream(
       try {
         const result = await handle.fd.write(buffer, 0, buffer.length, writePosition);
 
+        handle.hash?.written(writePosition, buffer.subarray(0, result.bytesWritten));
         if (progress) progress.bytesWritten += result.bytesWritten;
         writePosition += result.bytesWritten;
       } catch (err) {
@@ -535,4 +578,4 @@ type ProbeResult = {
   fileName: string | undefined;
 };
 
-type FileHandle = { fd: NodeFileHandle; path: string };
+type FileHandle = { fd: NodeFileHandle; path: string; hash?: ContiguousHash };
