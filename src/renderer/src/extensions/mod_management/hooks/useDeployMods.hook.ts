@@ -76,8 +76,12 @@ const failureSelector = (state: IState): IDeploymentFailure | null =>
 const progressTextSelector = (state: IState): string | undefined =>
   state.session.base.progress?.["deployment"]?.[selectors.activeGameId(state)]?.text || undefined;
 
-const progressPercentSelector = (state: IState): number | undefined =>
-  state.session.base.progress?.["deployment"]?.[selectors.activeGameId(state)]?.percent;
+/** A percent the deployment gave; the reducer rounds a missing one to NaN, which is none. */
+const progressPercentSelector = (state: IState): number | undefined => {
+  const percent =
+    state.session.base.progress?.["deployment"]?.[selectors.activeGameId(state)]?.percent;
+  return Number.isFinite(percent) ? percent : undefined;
+};
 
 const autoDeploySelector = (state: IState): boolean => state.settings.automation?.deploy === true;
 

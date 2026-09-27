@@ -30,29 +30,18 @@
         }
     }
 
-    /* The rocket leaving along the line it points in and coming round again, for as long as
-       a deployment runs. Its button clips it, so it flies out of sight. Off with the pulse. */
-    --animate-rocket-launch: rocket-launch 1.4s ease-in infinite;
+    /* A status row's progress line before the deployment gives a percent: a third of the
+       line crossing it. Progress is information, so it keeps its own duration and
+       reduced motion leaves it running, as it does spinners. */
+    --animate-deploy-progress: deploy-progress 1.4s ease-in-out infinite;
 
-    @keyframes rocket-launch {
-        0% {
-            translate: 0 0;
-            opacity: 1;
+    @keyframes deploy-progress {
+        from {
+            translate: -100% 0;
         }
 
-        45% {
-            translate: 10px -12px;
-            opacity: 0;
-        }
-
-        46% {
-            translate: -10px 12px;
-            opacity: 0;
-        }
-
-        100% {
-            translate: 0 0;
-            opacity: 1;
+        to {
+            translate: 300% 0;
         }
     }
 }

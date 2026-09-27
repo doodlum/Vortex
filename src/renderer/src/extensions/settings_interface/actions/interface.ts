@@ -56,7 +56,7 @@ export const setReduceMotion = safeCreateAction("SET_REDUCE_MOTION", (enabled: b
 
 /**
  * Design comparison, to be reduced to the chosen design before upstreaming: which of the
- * menu's Deploy control designs to show, 1 to 5.
+ * menu's Deploy status row variations to show - see deployDesigns.ts.
  */
 export const setDeployButtonStyle = safeCreateAction(
   "SET_DEPLOY_BUTTON_STYLE",

@@ -1,10 +1,10 @@
 import { pathToFileURL } from "url";
 
 import { mdiPlay } from "@mdi/js";
-import React, { type FC, type ReactNode, useMemo } from "react";
+import React, { type FC, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 
-import { Button, type IButtonBrand } from "@/ui/components/button/Button";
+import { Button } from "@/ui/components/button/Button";
 import { Icon } from "@/ui/components/icon/Icon";
 import { Image } from "@/ui/components/image/Image";
 import { Tooltip } from "@/ui/components/tooltip/Tooltip";
@@ -15,32 +15,12 @@ import StarterInfo from "@/util/StarterInfo";
 
 import { formatGameDisplayName } from "../Spine/utils";
 
-/**
- * What a Deploy control that merges into Play puts on it instead of Play itself - see
- * `DeployMerged`.
- */
-export interface IPlayOverride {
-  label: string;
-  /** Replaces the tooltip's first line; `interactive` when it holds a control. */
-  details?: ReactNode;
-  interactive?: boolean;
-  brand?: IButtonBrand;
-  iconPath?: string;
-  iconClassName?: string;
-  badge?: "primary" | "danger";
-  busy?: boolean;
-  /** Replaces Play's own action; absent while busy, which makes a click do nothing. */
-  onClick?: () => void;
-}
-
-export interface IPlayButtonProps {
+/** Play, as ToolsSection has always drawn it; the Deploy control draws its status row above. */ export interface IPlayButtonProps {
   primaryStarter: IStarterInfo | undefined;
   gameName: string | undefined;
   isPrimaryRunning: boolean;
   isCollapsed: boolean;
   disabled: boolean;
-  override?: IPlayOverride;
-  className?: string;
   onClick: () => void;
 }
 
@@ -50,8 +30,6 @@ export const PlayButton: FC<React.PropsWithChildren<IPlayButtonProps>> = ({
   isPrimaryRunning,
   isCollapsed,
   disabled,
-  override,
-  className,
   onClick,
 }) => {
   const { t } = useTranslation();
@@ -69,32 +47,28 @@ export const PlayButton: FC<React.PropsWithChildren<IPlayButtonProps>> = ({
     return undefined;
   }, [primaryStarter]);
 
-  const label = override?.label ?? (isPrimaryRunning ? t("Running...") : t("Play"));
+  const label = isPrimaryRunning ? t("Running...") : t("Play");
 
   /** What the button says it will do, for the tooltip's first line and the aria-label. */
-  const playLabel =
-    override?.label ??
-    (isPrimaryRunning
-      ? t("Running...")
-      : gameName
-        ? t("Play {{game}}", { replace: { game: formatGameDisplayName(gameName) } })
-        : t("Play"));
+  const playLabel = isPrimaryRunning
+    ? t("Running...")
+    : gameName
+      ? t("Play {{game}}", { replace: { game: formatGameDisplayName(gameName) } })
+      : t("Play");
 
   return (
     <div className="relative w-full">
       <Tooltip
         customContent={
           <div className="space-y-1 px-4 py-3">
-            {override?.details ?? (
-              <Typography
-                appearance="moderate"
-                as="p"
-                className="font-semibold"
-                typographyType="body-sm"
-              >
-                {playLabel}
-              </Typography>
-            )}
+            <Typography
+              appearance="moderate"
+              as="p"
+              className="font-semibold"
+              typographyType="body-sm"
+            >
+              {playLabel}
+            </Typography>
 
             {!!primaryStarter && (
               <>
@@ -120,25 +94,15 @@ export const PlayButton: FC<React.PropsWithChildren<IPlayButtonProps>> = ({
             )}
           </div>
         }
-        interactive={override?.interactive}
         placement="right"
       >
         <Button
-          aria-busy={override?.busy || undefined}
           aria-label={isCollapsed ? playLabel : undefined}
-          brand={override?.brand ?? "neutral"}
-          className={joinClasses([
-            "w-full transition-all",
-            isCollapsed ? "h-10" : "h-12",
-            className,
-          ])}
+          brand="neutral"
+          className={joinClasses(["w-full transition-all", isCollapsed ? "h-10" : "h-12"])}
           customContent={
             <>
-              <Icon
-                className={joinClasses(["nxm-button-icon", override?.iconClassName])}
-                path={override?.iconPath ?? mdiPlay}
-                size="lg"
-              />
+              <Icon className="nxm-button-icon" path={mdiPlay} size="lg" />
 
               {!isCollapsed && (
                 <Typography
@@ -152,26 +116,10 @@ export const PlayButton: FC<React.PropsWithChildren<IPlayButtonProps>> = ({
               )}
             </>
           }
-          data-play-badge={override?.badge}
           disabled={disabled}
-          onClick={override !== undefined ? override.onClick : onClick}
+          onClick={onClick}
         />
       </Tooltip>
-
-      {!!override?.badge && (
-        <span
-          aria-hidden
-          className={joinClasses(
-            [
-              "pointer-events-none absolute -top-1 -right-1 z-2 size-3 rounded-full border-2 border-surface-base",
-            ],
-            {
-              "bg-primary-moderate": override.badge === "primary",
-              "bg-danger-moderate": override.badge === "danger",
-            },
-          )}
-        />
-      )}
     </div>
   );
 };

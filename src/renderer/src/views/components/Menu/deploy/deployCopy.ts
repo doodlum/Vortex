@@ -84,6 +84,26 @@ export const progressLabel = (t: TFunction, deploy: IDeployMods): string => {
   return percent === undefined ? step : `${step} ${percent}`;
 };
 
+/**
+ * The status a row says in words: the notifications' own strings where one said it, so
+ * "Deployment necessary", the running step and percent, "Mods deployed", the failure's
+ * headline. "Up to date" is the row's own, as nothing was said when nothing was pending.
+ */
+export const rowText = (t: TFunction, deploy: IDeployMods): string => {
+  switch (deploy.status) {
+    case "idle":
+      return t("Up to date");
+    case "deployed":
+      return t("Mods deployed");
+    case "needed":
+      return t("Deployment necessary");
+    case "deploying":
+      return progressLabel(t, deploy);
+    case "failed":
+      return deploy.failure !== null ? t(deploy.failure.title) : t("Deployment failed");
+  }
+};
+
 /** What clicking the control does in each state: nothing while it deploys. */
 export const deployAction = (deploy: IDeployMods): (() => void) | undefined => {
   switch (deploy.status) {

@@ -328,6 +328,15 @@ describe("useDeployMods", () => {
     expect(result.current.progressPercent).toBe(60);
   });
 
+  it("has no percent before the deployment gives one", () => {
+    const { result } = render({
+      activity: ["deployment"],
+      progress: { text: "Loading deployment manifest", percent: Number.NaN },
+    });
+
+    expect(result.current.progressPercent).toBeUndefined();
+  });
+
   // "Deployment necessary"'s More, word for word, with its checkbox.
   it("opens the Deployment necessary dialog with the automatic deployment offer", async () => {
     api.showDialog.mockResolvedValueOnce({

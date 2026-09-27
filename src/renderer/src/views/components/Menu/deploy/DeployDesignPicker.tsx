@@ -7,10 +7,7 @@ import type { IState } from "@/types/IState";
 import { Picker } from "@/ui/components/picker/Picker";
 import { Typography } from "@/ui/components/typography/Typography";
 
-import { DEFAULT_DEPLOY_DESIGN, DEPLOY_DESIGNS } from "./DeployControl";
-
-const designSelector = (state: IState): number =>
-  state.settings.interface.deployButtonStyle ?? DEFAULT_DEPLOY_DESIGN;
+import { DEPLOY_DESIGNS, designSelector } from "./DeployControl";
 
 /**
  * Design comparison, for Settings > Interface: picks the menu's Deploy control design,
@@ -33,7 +30,7 @@ export const DeployDesignPicker = () => {
 
       <Picker<number>
         options={DEPLOY_DESIGNS.map((design) => ({
-          label: `${design.id}. ${t(design.name)}`,
+          label: t(design.name),
           value: design.id,
         }))}
         placement="left"

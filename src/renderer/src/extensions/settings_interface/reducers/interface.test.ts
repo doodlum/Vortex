@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 
+import { resolveDeployDesign } from "../deployDesigns";
 import settingsReducer from "./interface";
 
 describe("setLanguage", () => {
@@ -57,12 +58,32 @@ describe("setReduceMotion", () => {
 });
 
 describe("setDeployButtonStyle", () => {
-  it("records the design picked", () => {
-    const result = settingsReducer.reducers.SET_DEPLOY_BUTTON_STYLE({ deployButtonStyle: 1 }, 3);
-    expect(result).toEqual({ deployButtonStyle: 3 });
+  it("records the variation picked", () => {
+    const result = settingsReducer.reducers.SET_DEPLOY_BUTTON_STYLE({ deployButtonStyle: 6 }, 8);
+    expect(result).toEqual({ deployButtonStyle: 8 });
   });
 
-  it("has no default, so an untouched setting shows the recommended design", () => {
+  it("has no default, so an untouched setting shows the first variation", () => {
     expect(settingsReducer.defaults).not.toHaveProperty("deployButtonStyle");
+  });
+
+  // 1 to 5 were the earlier designs, all removed.
+  it.each([1, 2, 3, 4, 5, 42])("records the first variation for removed design %i", (style) => {
+    const result = settingsReducer.reducers.SET_DEPLOY_BUTTON_STYLE(
+      { deployButtonStyle: 7 },
+      style,
+    );
+    expect(result).toEqual({ deployButtonStyle: 6 });
+  });
+});
+
+describe("resolveDeployDesign", () => {
+  it.each([6, 7, 8, 9, 10])("keeps variation %i", (style) => {
+    expect(resolveDeployDesign(style)).toBe(style);
+  });
+
+  // A stored choice from before the change, read back from disk.
+  it.each([1, 2, 3, 4, 5, undefined])("reads %s as the first variation", (style) => {
+    expect(resolveDeployDesign(style)).toBe(6);
   });
 });

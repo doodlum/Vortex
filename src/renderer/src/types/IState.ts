@@ -228,7 +228,7 @@ export interface ISettingsInterface {
   relativeTimes: boolean;
   alwaysCompactHeaders: boolean;
   reduceMotion?: boolean;
-  /** Design comparison: which menu Deploy control design to show, 1 to 5. */
+  /** Design comparison: which menu Deploy status row variation to show, 6 to 10. */
   deployButtonStyle?: number;
   dashboardLayout: string[];
   foregroundDL: boolean;
