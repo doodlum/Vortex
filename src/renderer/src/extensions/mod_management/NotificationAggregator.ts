@@ -14,6 +14,34 @@ const setImmediatePolyfill = (fn: () => void): void => {
   }
 };
 
+type Replace = { [key: string]: string };
+
+function listValues(values: string[]): string {
+  return values.length <= 5
+    ? values.join(", ")
+    : `${values.slice(0, 5).join(", ")} and ${values.length - 5} more`;
+}
+
+/**
+ * The substitutions for a group's shared title and details. The group is keyed on the
+ * untranslated text, so its members can fill a placeholder differently ("{{id}} failed to
+ * install" for two mods): a value they agree on is kept, one they don't lists theirs.
+ */
+function mergeReplace(group: IPendingNotification[]): Replace | undefined {
+  const keys = new Set(group.flatMap((n) => Object.keys(n.replace ?? {})));
+  if (keys.size === 0) {
+    return undefined;
+  }
+  const merged: Replace = {};
+  for (const key of keys) {
+    const values = Array.from(
+      new Set(group.map((n) => n.replace?.[key]).filter((v) => v !== undefined)),
+    );
+    merged[key] = values.length === 1 ? values[0] : listValues(values);
+  }
+  return merged;
+}
+
 export interface IAggregatedNotification {
   id: string;
   type: "error" | "warning" | "info";
@@ -24,6 +52,8 @@ export interface IAggregatedNotification {
   count: number;
   allowReport?: boolean;
   actions?: INotificationAction[];
+  /** Substitutions for the placeholders in title and details. */
+  replace?: Replace;
 }
 
 export interface IPendingNotification {
@@ -33,6 +63,7 @@ export interface IPendingNotification {
   item: string;
   allowReport?: boolean;
   actions?: INotificationAction[];
+  replace?: Replace;
 }
 
 /**
@@ -88,7 +119,7 @@ export class NotificationAggregator {
     title: string,
     details: string | Error,
     item: string,
-    options: { allowReport?: boolean; actions?: INotificationAction[] } = {},
+    options: { allowReport?: boolean; actions?: INotificationAction[]; replace?: Replace } = {},
   ): void {
     if (!this.mActiveAggregations.has(aggregationId)) {
       setImmediatePolyfill(() => {
@@ -96,6 +127,7 @@ export class NotificationAggregator {
           message: item,
           allowReport: options.allowReport,
           actions: options.actions,
+          replace: options.replace,
         });
       });
       return;
@@ -109,6 +141,7 @@ export class NotificationAggregator {
       item,
       allowReport: options.allowReport,
       actions: options.actions,
+      replace: options.replace,
     });
   }
 
@@ -363,6 +396,7 @@ export class NotificationAggregator {
         count: group.length,
         allowReport: first.allowReport,
         actions: first.actions,
+        replace: mergeReplace(group),
       };
     });
   }
@@ -430,11 +464,7 @@ export class NotificationAggregator {
     let result = baseMessage;
 
     if (items.length > 1) {
-      const itemList =
-        items.length <= 5
-          ? items.join(", ")
-          : `${items.slice(0, 5).join(", ")} and ${items.length - 5} more`;
-      result += `\n\nAffected dependencies: ${itemList}`;
+      result += `\n\nAffected dependencies: ${listValues(items)}`;
     }
 
     return result;
@@ -446,6 +476,7 @@ export class NotificationAggregator {
         id: notification.id,
         allowReport: notification.allowReport,
         actions: notification.actions,
+        replace: notification.replace,
       };
 
       // Add count information to the title if multiple items
@@ -466,6 +497,7 @@ export class NotificationAggregator {
             message: notification.text,
             actions: notification.actions,
             allowSuppress: options.allowReport,
+            replace: notification.replace,
           });
           break;
         case "info":
@@ -476,6 +508,7 @@ export class NotificationAggregator {
             message: notification.text,
             actions: notification.actions,
             allowSuppress: options.allowReport,
+            replace: notification.replace,
           });
           break;
       }
