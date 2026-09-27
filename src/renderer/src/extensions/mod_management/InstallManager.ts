@@ -541,6 +541,10 @@ class InstallManager {
   // install actions) can size their own queue against the same, already-tuned budget instead of
   // picking an unrelated number.
   static readonly MAX_SIMULTANEOUS_INSTALLS = 5;
+  // Installs in flight at once. Only MAX_SIMULTANEOUS_INSTALLS of them extract at a time
+  // (mExtractLimit); the others do the work around extraction (file list, installer, FOMOD,
+  // linking into staging, attributes), so extraction never waits for that work to finish.
+  private static readonly INSTALL_SLOTS = InstallManager.MAX_SIMULTANEOUS_INSTALLS * 2;
   private mApi: IExtensionApi;
   private mInstallers: IModInstaller[] = [];
   private mGetInstallPath: (gameId: string) => string;
@@ -586,7 +590,11 @@ class InstallManager {
   // mQueue. Dependency orchestration/look-ahead is bounded separately by mDependencyPipelineLimit.
   // Waiting installs start in installPriority order: dependencies largest archive first, so the
   // longest extractions don't run alone at the end of a collection.
-  private mInstallLimit: PriorityLimiter = new PriorityLimiter(
+  private mInstallLimit: PriorityLimiter = new PriorityLimiter(InstallManager.INSTALL_SLOTS);
+
+  // Caps how many archives extract at once, across all installs. An install holds a slot here only
+  // while 7z runs, in the same priority order as mInstallLimit.
+  private mExtractLimit: PriorityLimiter = new PriorityLimiter(
     InstallManager.MAX_SIMULTANEOUS_INSTALLS,
   );
 
@@ -1737,6 +1745,7 @@ class InstallManager {
                     fileList,
                     unattended,
                     details,
+                    priority,
                   );
                 })
                 .then((result: IInstallResult & { installerId?: string }) => {
@@ -3909,6 +3918,7 @@ class InstallManager {
     tempPath: string,
     progress: (files: string[], percent: number) => void,
     queryPassword: () => PromiseLike<string>,
+    priority: number = Number.MAX_SAFE_INTEGER,
     maxRetries: number = 3,
     retryDelayMs: number = 1000,
   ): Promise<{ code: number; errors: string[] }> {
@@ -3969,7 +3979,17 @@ class InstallManager {
         ),
       );
     };
-    return attemptExtract(maxRetries);
+    return this.mExtractLimit.doAt(priority, () => {
+      // extractionTimeMs (installInner) includes the wait for a slot; this is the 7z run alone
+      const start = Date.now();
+      log("debug", "extraction slot acquired", { archivePath: path.basename(archivePath) });
+      return attemptExtract(maxRetries).finally(() => {
+        log("debug", "extraction slot released", {
+          archivePath: path.basename(archivePath),
+          durationMs: Date.now() - start,
+        });
+      });
+    });
   }
 
   /**
@@ -3988,6 +4008,7 @@ class InstallManager {
     extractList?: IFileListItem[],
     unattended?: boolean,
     details?: IInstallationDetails,
+    extractPriority?: number,
   ): Promise<IInstallResult> {
     let fileList: string[] = [];
     let phase = "Extracting";
@@ -4005,8 +4026,13 @@ class InstallManager {
         new ArchiveBrokenError(path.basename(archivePath), "file type on avoidlist"),
       );
     } else {
-      extractProm = this.extractWithRetry(installationZip, archivePath, tempPath, progress, () =>
-        this.queryPassword(api.store),
+      extractProm = this.extractWithRetry(
+        installationZip,
+        archivePath,
+        tempPath,
+        progress,
+        () => this.queryPassword(api.store),
+        extractPriority,
       );
       (extractProm as any).startTime = extractionStart;
     }
