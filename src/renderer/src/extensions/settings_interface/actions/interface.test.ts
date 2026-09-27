@@ -51,3 +51,23 @@ describe("setReduceMotion", () => {
     });
   });
 });
+
+describe("setDeployButtonStyle", () => {
+  it("creates the correct action", () => {
+    expect(interfaceActions.setDeployButtonStyle(2)).toEqual({
+      error: false,
+      type: "SET_DEPLOY_BUTTON_STYLE",
+      payload: 2,
+    });
+  });
+});
+
+describe("setPlayWhilePending", () => {
+  it("creates the correct action", () => {
+    expect(interfaceActions.setPlayWhilePending(2)).toEqual({
+      error: false,
+      type: "SET_PLAY_WHILE_PENDING",
+      payload: 2,
+    });
+  });
+});

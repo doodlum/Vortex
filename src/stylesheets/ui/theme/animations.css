@@ -11,4 +11,36 @@
             opacity: 1;
         }
     }
+
+    /*
+     * The deploy rocket taking off along the line it points in, while a deployment runs.
+     * A loop, so it keeps its own duration rather than the transition one - and motion.css
+     * switches it off instead, as it does the skeleton pulse.
+     */
+    --animate-rocket-lift: rocket-lift 1.2s ease-in-out infinite;
+
+    @keyframes rocket-lift {
+        0%,
+        100% {
+            translate: 0 0;
+        }
+
+        50% {
+            translate: 1.5px -2px;
+        }
+    }
+
+    /* A pulse of the primary ring round the Deploy row, when a locked Play sends the user
+       to it. Decorative - focus moves either way - so motion.css switches it off. */
+    --animate-deploy-attention: deploy-attention 0.7s ease-out;
+
+    @keyframes deploy-attention {
+        from {
+            box-shadow: 0 0 0 0 var(--color-primary-moderate);
+        }
+
+        to {
+            box-shadow: 0 0 0 8px transparent;
+        }
+    }
 }

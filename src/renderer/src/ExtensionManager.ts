@@ -99,6 +99,7 @@ import {
 } from "./util/CustomErrors";
 import { runElevated } from "./util/elevated";
 import { disableErrorReport, isOutdated, recordErrorSpan } from "./util/errorHandling";
+import { extensionErrorOptions } from "./util/extensionErrorOptions";
 import * as fsVortex from "./util/fs";
 import getVortexPath from "./util/getVortexPath";
 import type { i18n } from "./util/i18n";
@@ -1070,30 +1071,13 @@ class ExtensionManager {
       details: string | Error | any,
       options?: IErrorOptions,
     ) {
-      let extension: IRegisteredExtension = this.extension;
-
-      if (extension === undefined && details?.["extension"] !== undefined) {
-        extension = (this.getLoadedExtensions() as IRegisteredExtension[]).find(
-          (iter) => iter.name === details["extension"],
-        );
-      }
-
-      if (
-        extension !== undefined &&
-        extension.info !== undefined &&
-        extension.info.author !== COMPANY_ID
-      ) {
-        if (options === undefined) {
-          options = {};
-        }
-        if (options.allowReport !== false) {
-          options.extensionName = extension.info.name;
-
-          const remoteExtensions = (this.getState() as IState).session.extensions.available;
-          options.extensionRemote = remoteExtensions.find((ext) => isExtSame(extension.info, ext));
-        }
-        options.extension = extension;
-      }
+      options = extensionErrorOptions(
+        this.extension,
+        () => this.getLoadedExtensions() as IRegisteredExtension[],
+        this.getState() as IState,
+        details,
+        options,
+      );
       showError(store.dispatch, message, details, options);
     };
 

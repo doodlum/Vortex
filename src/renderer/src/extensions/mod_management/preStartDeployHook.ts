@@ -4,6 +4,7 @@ import { UserCanceled } from "../../util/CustomErrors";
 import onceCB from "../../util/onceCB";
 import { needToDeploy } from "./selectors";
 import getText from "./texts";
+import { deploysWithoutNotifications } from "./util/deploymentFailure";
 
 type DeployResult = "auto" | "yes" | "skip" | "cancel";
 
@@ -46,6 +47,18 @@ function queryDeploy(api: IExtensionApi): Promise<DeployResult> {
   }
 }
 
+/**
+ * The deploy handler reports a failure rather than passing it on. The classic layout's
+ * notification then said so while the game started anyway; the modern layout's Deploy
+ * control says so instead, so the launch stops while the changes are still undeployed.
+ */
+function stopIfStillPending(api: IExtensionApi): Promise<void> {
+  const state = api.getState();
+  return deploysWithoutNotifications(state) && needToDeploy(state)
+    ? Promise.reject(new UserCanceled())
+    : Promise.resolve();
+}
+
 function checkDeploy(api: IExtensionApi): Promise<void> {
   return queryDeploy(api).then((shouldDeploy) => {
     if (shouldDeploy === "yes") {
@@ -60,7 +73,7 @@ function checkDeploy(api: IExtensionApi): Promise<void> {
             }
           }),
         );
-      });
+      }).then(() => stopIfStillPending(api));
     } else if (shouldDeploy === "auto") {
       return new Promise<void>((resolve, reject) => {
         api.events.emit("await-activation", (err: Error) => {
@@ -70,7 +83,7 @@ function checkDeploy(api: IExtensionApi): Promise<void> {
             resolve();
           }
         });
-      });
+      }).then(() => stopIfStillPending(api));
     } else if (shouldDeploy === "cancel") {
       return Promise.reject(new UserCanceled());
     } else {

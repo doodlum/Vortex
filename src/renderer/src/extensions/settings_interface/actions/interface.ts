@@ -53,3 +53,21 @@ export const setAlwaysCompactHeaders = safeCreateAction(
  * then the setting is absent and the operating system's preference is followed.
  */
 export const setReduceMotion = safeCreateAction("SET_REDUCE_MOTION", (enabled: boolean) => enabled);
+
+/**
+ * Design comparison, to be reduced to the chosen design before upstreaming: which of the
+ * menu's Deploy status row variations to show - see deployDesigns.ts.
+ */
+export const setDeployButtonStyle = safeCreateAction(
+  "SET_DEPLOY_BUTTON_STYLE",
+  (style: number) => style,
+);
+
+/**
+ * Design comparison, to be reduced to the chosen design before upstreaming: how Play is
+ * held back while a deployment is pending - see `deployDesigns.ts`.
+ */
+export const setPlayWhilePending = safeCreateAction(
+  "SET_PLAY_WHILE_PENDING",
+  (style: number) => style,
+);

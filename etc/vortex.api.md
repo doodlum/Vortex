@@ -3611,6 +3611,7 @@ interface ISettingsInterface {
     dashletSettings: {
         [dashletId: string]: IDashletSettings;
     };
+    deployButtonStyle?: number;
     // (undocumented)
     desktopNotifications: boolean;
     // (undocumented)
@@ -3623,6 +3624,8 @@ interface ISettingsInterface {
     primaryTool?: {
         [gameId: string]: string;
     };
+    // (undocumented)
+    playWhilePending?: number;
     // (undocumented)
     profilesVisible: boolean;
     // (undocumented)

@@ -33,6 +33,7 @@ const MenuContent: FC<React.PropsWithChildren<unknown>> = () => {
   const { visibleTools } = useToolsContext();
   const toolCount = visibleTools.length;
   const [canScrollUp, setCanScrollUp] = useState(false);
+  const [toolsHeight, setToolsHeight] = useState(0);
 
   const onScroll = (event: Event) => setCanScrollUp((event.target as HTMLDivElement).scrollTop > 0);
 
@@ -64,6 +65,8 @@ const MenuContent: FC<React.PropsWithChildren<unknown>> = () => {
             "flex flex-col gap-y-0.5 pt-1 transition-[width]",
             menuIsCollapsed ? `w-10 ${toolPadding[toolCount]}` : "w-49 pb-34",
           ])}
+          // what ToolsSection stacks over the pages, once it has measured itself
+          style={toolsHeight > 0 ? { paddingBottom: toolsHeight + 24 } : undefined}
         >
           {selection.type === "downloads" ? (
             <DownloadsMenuContent />
@@ -92,7 +95,7 @@ const MenuContent: FC<React.PropsWithChildren<unknown>> = () => {
         <div className="pointer-events-none absolute right-0 bottom-0 size-3 bg-surface-base" />
       </div>
 
-      <ToolsSection />
+      <ToolsSection onHeightChange={setToolsHeight} />
 
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-1 h-6 bg-linear-to-t from-surface-base to-transparent" />
     </TooltipDelayGroup>

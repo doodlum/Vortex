@@ -228,6 +228,10 @@ export interface ISettingsInterface {
   relativeTimes: boolean;
   alwaysCompactHeaders: boolean;
   reduceMotion?: boolean;
+  /** Design comparison: which menu Deploy status row variation to show. */
+  deployButtonStyle?: number;
+  /** Design comparison: how Play is held back while a deployment is pending. */
+  playWhilePending?: number;
   dashboardLayout: string[];
   foregroundDL: boolean;
   dashletSettings: { [dashletId: string]: IDashletSettings };
