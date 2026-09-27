@@ -154,3 +154,119 @@ describe("NotificationAggregator", () => {
     expect(aggregator.isAggregating("test-session")).toBe(false);
   });
 });
+
+describe("NotificationAggregator placeholders", () => {
+  let aggregator: NotificationAggregator;
+
+  const flush = async (id: string) => {
+    const done = aggregator.flushAggregation(id);
+    await vi.runAllTimersAsync();
+    await done;
+  };
+
+  beforeEach(() => {
+    aggregator = new NotificationAggregator(mockApi as unknown as IExtensionApi);
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test("passes a notification's substitutions on when not aggregating", async () => {
+    aggregator.addNotification("test-session", "error", "{{id}} failed to install", "boom", "A", {
+      replace: { id: "ModA" },
+    });
+    await vi.runAllTimersAsync();
+
+    expect(mockApi.showErrorNotification).toHaveBeenCalledWith(
+      "{{id}} failed to install",
+      "boom",
+      expect.objectContaining({ replace: { id: "ModA" } }),
+    );
+  });
+
+  test("keeps a single aggregated notification's substitutions", async () => {
+    aggregator.startAggregation("test-session", 0);
+    aggregator.addNotification("test-session", "error", "{{id}} failed to install", "boom", "A", {
+      replace: { id: "ModA" },
+    });
+    await flush("test-session");
+
+    expect(mockApi.showErrorNotification).toHaveBeenCalledWith(
+      "{{id}} failed to install",
+      "boom",
+      expect.objectContaining({ replace: { id: "ModA" } }),
+    );
+  });
+
+  test("names every member of a group that fills a placeholder differently", async () => {
+    aggregator.startAggregation("test-session", 0);
+    for (const id of ["ModA", "ModB", "ModA"]) {
+      aggregator.addNotification("test-session", "error", "{{id}} failed to install", "boom", id, {
+        replace: { id, reason: "disk full" },
+      });
+    }
+    await flush("test-session");
+
+    expect(mockApi.showErrorNotification).toHaveBeenCalledTimes(1);
+    expect(mockApi.showErrorNotification).toHaveBeenCalledWith(
+      "{{id}} failed to install (3 dependencies)",
+      expect.anything(),
+      expect.objectContaining({ replace: { id: "ModA, ModB", reason: "disk full" } }),
+    );
+  });
+
+  test("lists at most five values, then a count", async () => {
+    aggregator.startAggregation("test-session", 0);
+    const ids = ["M1", "M2", "M3", "M4", "M5", "M6", "M7"];
+    for (const id of ids) {
+      aggregator.addNotification("test-session", "error", "{{id}} failed", "boom", id, {
+        replace: { id },
+      });
+    }
+    await flush("test-session");
+
+    expect(mockApi.showErrorNotification).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ replace: { id: "M1, M2, M3, M4, M5 and 2 more" } }),
+    );
+  });
+
+  test("keeps a value only some members of the group supply", async () => {
+    aggregator.startAggregation("test-session", 0);
+    aggregator.addNotification("test-session", "error", "Install failed", "boom", "A");
+    aggregator.addNotification("test-session", "error", "Install failed", "boom", "B", {
+      replace: { path: "C:\mods" },
+    });
+    await flush("test-session");
+
+    expect(mockApi.showErrorNotification).toHaveBeenCalledWith(
+      "Install failed (2 dependencies)",
+      expect.anything(),
+      expect.objectContaining({ replace: { path: "C:\mods" } }),
+    );
+  });
+
+  test("leaves the substitutions out when no member has any", async () => {
+    aggregator.startAggregation("test-session", 0);
+    aggregator.addNotification("test-session", "error", "Install failed", "boom", "A");
+    await flush("test-session");
+
+    expect(mockApi.showErrorNotification.mock.calls[0][2].replace).toBeUndefined();
+  });
+
+  test("passes the substitutions to aggregated warnings", async () => {
+    aggregator.startAggregation("test-session", 0);
+    aggregator.addNotification("test-session", "warning", "{{id}} needs a look", "hm", "A", {
+      replace: { id: "ModA" },
+    });
+    await flush("test-session");
+
+    expect(mockApi.sendNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "{{id}} needs a look", replace: { id: "ModA" } }),
+    );
+  });
+});
