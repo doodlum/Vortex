@@ -29,6 +29,8 @@ function harness(extractSlots: number) {
   };
   const self = {
     mExtractLimit: new PriorityLimiter(extractSlots),
+    mTempRemovals: new Map(),
+    awaitTempRemoval: (InstallManager.prototype as any).awaitTempRemoval,
     isFileInUse: () => false,
     isCritical: () => false,
   };

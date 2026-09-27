@@ -590,6 +590,9 @@ class InstallManager {
   // mQueue. Dependency orchestration/look-ahead is bounded separately by mDependencyPipelineLimit.
   // Waiting installs start in installPriority order: dependencies largest archive first, so the
   // longest extractions don't run alone at the end of a collection.
+  // Temporary install directories being removed in the background, by lower-cased path.
+  private mTempRemovals: Map<string, Promise<void>> = new Map();
+
   private mInstallLimit: PriorityLimiter = new PriorityLimiter(InstallManager.INSTALL_SLOTS);
 
   // Caps how many archives extract at once, across all installs. An install holds a slot here only
@@ -1847,11 +1850,12 @@ class InstallManager {
                   },
                 )
                 .finally(() => {
+                  // The temporary directory holds only links to the staged files. Removing it
+                  // doesn't have to hold up the install; an install into the same path waits for
+                  // it (awaitTempRemoval).
                   if (tempPath !== undefined) {
                     log("debug", "removing temporary path", tempPath);
-                    return fs.removeAsync(tempPath);
-                  } else {
-                    return Promise.resolve();
+                    this.removeTempInBackground(tempPath);
                   }
                 })
                 .then(() => {
@@ -3912,6 +3916,39 @@ class InstallManager {
     return lowered.includes("not enough space") || lowered.includes("enospc");
   }
 
+  /**
+   * remove an install's temporary directory without waiting for it. Removals of one path run one
+   * after the other, and a failure is logged: the directory is only links to staged files, and the
+   * next install into it clears it first.
+   */
+  private removeTempInBackground(tempPath: string): void {
+    const key = tempPath.toLowerCase();
+    const removal: Promise<void> = (this.mTempRemovals.get(key) ?? Promise.resolve())
+      .then(() => fs.removeAsync(tempPath))
+      .then(
+        () => undefined,
+        (err: unknown) => {
+          log("warn", "failed to remove temporary path", {
+            tempPath,
+            error: getErrorMessageOrDefault(err),
+          });
+        },
+      )
+      .finally(() => {
+        if (this.mTempRemovals.get(key) === removal) {
+          this.mTempRemovals.delete(key);
+        }
+      });
+    this.mTempRemovals.set(key, removal);
+  }
+
+  /**
+   * resolves once no background removal of this temporary directory is running
+   */
+  private awaitTempRemoval(tempPath: string): Promise<void> {
+    return this.mTempRemovals.get(tempPath.toLowerCase()) ?? Promise.resolve();
+  }
+
   private extractWithRetry(
     zip: Zip,
     archivePath: string,
@@ -3951,33 +3988,36 @@ class InstallManager {
       //     errors[Math.floor(Math.random() * errors.length)](),
       //   );
       // }
-      // clean up any stale temp directory from a previous failed attempt
-      return Promise.resolve(fs.removeAsync(tempPath)).then(() =>
-        Promise.resolve(
-          zip
-            .extractFull(archivePath, tempPath, { ssc: false }, progress, queryPassword as any)
-            .then((result: { code: number; errors: string[] }) => {
-              // 7z can resolve (not reject) with a non-zero exit code and
-              // file-in-use errors. Retry in that case instead of proceeding
-              // with a partial extraction.
-              if (result.code !== 0) {
-                return retryIfFileInUse(result.errors ?? []) ?? result;
-              }
-              return result;
-            })
-            .catch((err) => {
-              const error = unknownToError(err);
-              return (
-                retryIfFileInUse([error.message]) ??
-                (this.isCritical(error.message)
-                  ? Promise.reject(
-                      new ArchiveBrokenError(path.basename(archivePath), error.message),
-                    )
-                  : Promise.reject(error))
-              );
-            }),
-        ),
-      );
+      // clean up any stale temp directory from a previous failed attempt, after a background
+      // removal of the same path has finished
+      return this.awaitTempRemoval(tempPath)
+        .then(() => fs.removeAsync(tempPath))
+        .then(() =>
+          Promise.resolve(
+            zip
+              .extractFull(archivePath, tempPath, { ssc: false }, progress, queryPassword as any)
+              .then((result: { code: number; errors: string[] }) => {
+                // 7z can resolve (not reject) with a non-zero exit code and
+                // file-in-use errors. Retry in that case instead of proceeding
+                // with a partial extraction.
+                if (result.code !== 0) {
+                  return retryIfFileInUse(result.errors ?? []) ?? result;
+                }
+                return result;
+              })
+              .catch((err) => {
+                const error = unknownToError(err);
+                return (
+                  retryIfFileInUse([error.message]) ??
+                  (this.isCritical(error.message)
+                    ? Promise.reject(
+                        new ArchiveBrokenError(path.basename(archivePath), error.message),
+                      )
+                    : Promise.reject(error))
+                );
+              }),
+          ),
+        );
     };
     return this.mExtractLimit.doAt(priority, () => {
       // extractionTimeMs (installInner) includes the wait for a slot; this is the 7z run alone
