@@ -54,7 +54,6 @@ export const Header: FC<React.PropsWithChildren<unknown>> = () => {
   return (
     <div
       className="flex h-11 items-center justify-between gap-x-6 pl-4.5"
-      data-app-titlebar=""
       style={{ WebkitAppRegion: "drag" }}
     >
       <div className="flex min-w-0 flex-1 items-center gap-x-1">
@@ -71,7 +70,7 @@ export const Header: FC<React.PropsWithChildren<unknown>> = () => {
 
         <Typography
           brand="none"
-          className="flex max-w-64 items-center gap-x-2 overflow-hidden font-semibold whitespace-nowrap"
+          className="flex grow items-center gap-x-2 overflow-hidden font-semibold whitespace-nowrap"
         >
           <span className="truncate text-neutral-strong">{title}</span>
 
@@ -83,18 +82,20 @@ export const Header: FC<React.PropsWithChildren<unknown>> = () => {
 
       <div className="flex shrink-0 items-center gap-x-2" style={{ WebkitAppRegion: "no-drag" }}>
         <PanelToolbar />
+
         <ProfileSection />
+
         <PremiumIndicator />
-        <div className="flex h-7 items-center gap-x-2">
-          <StagingIndicator />
+
+        <StagingIndicator />
+
+        <div className="flex items-center gap-x-5">
           <VersionIndicator />
+
+          <div className="h-6 w-0.5 rounded-md bg-stroke-weak" />
+
+          <WindowControls />
         </div>
-        <span
-          aria-hidden="true"
-          className="h-6 w-px bg-stroke-weak"
-          data-header-window-divider=""
-        />
-        <WindowControls />
       </div>
     </div>
   );

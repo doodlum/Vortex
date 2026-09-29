@@ -127,8 +127,8 @@ export function PanelToolbar() {
               aria-hidden="true"
               className="h-1 w-2 bg-neutral-subdued group-hover:bg-neutral-strong"
               style={{
-                WebkitMaskImage: 'url("assets/icons/menu-chevron.svg")',
-                maskImage: 'url("assets/icons/menu-chevron.svg")',
+                WebkitMaskImage: 'url("assets/panels/layout-chevron.svg")',
+                maskImage: 'url("assets/panels/layout-chevron.svg")',
                 WebkitMaskSize: "contain",
                 maskSize: "contain",
                 WebkitMaskRepeat: "no-repeat",

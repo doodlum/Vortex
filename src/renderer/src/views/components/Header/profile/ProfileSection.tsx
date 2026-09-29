@@ -13,6 +13,7 @@ import { scheduleMembershipRefresh } from "@/extensions/nexus_integration/member
 import { Icon } from "@/ui/components/icon/Icon";
 import { Image } from "@/ui/components/image/Image";
 import { Popover } from "@/ui/components/popover/Popover";
+import { PopoverButton } from "@/ui/components/popover/PopoverButton";
 import { PopoverMenu } from "@/ui/components/popover/PopoverMenu";
 import type { IMenuAction } from "@/ui/components/popover/PopoverMenuItem";
 import { PopoverPanel } from "@/ui/components/popover/PopoverPanel";
@@ -23,7 +24,6 @@ import {
   isLoggedIn as isLoggedInSelector,
   userInfo as userInfoSelector,
 } from "../../../../util/selectors";
-import { HeaderMenuButton } from "../HeaderMenuButton";
 import { HelpMenu } from "../help/HelpMenu";
 import { useHelpAction } from "../help/useHelpMenu.hook";
 
@@ -83,8 +83,13 @@ export const ProfileSection: FC<React.PropsWithChildren<unknown>> = () => {
       {({ open }) => (
         <>
           <Tooltip content={label} disabled={open} placement="bottom">
-            <HeaderMenuButton
-              icon={
+            <PopoverButton
+              appearance="weak"
+              aria-haspopup="menu"
+              aria-label={label}
+              brand="neutral"
+              data-testid="profile-menu-trigger"
+              leftIcon={
                 userInfo?.profileUrl ? (
                   <Image
                     alt={userInfo.name ?? ""}
@@ -96,8 +101,6 @@ export const ProfileSection: FC<React.PropsWithChildren<unknown>> = () => {
                   <Icon path={mdiAccountCircle} />
                 )
               }
-              label={label}
-              testId="profile-menu-trigger"
             />
           </Tooltip>
 
