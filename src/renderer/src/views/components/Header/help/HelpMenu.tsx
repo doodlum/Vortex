@@ -2,12 +2,13 @@ import { mdiDotsHorizontal } from "@mdi/js";
 import React, { type FC } from "react";
 import { useTranslation } from "react-i18next";
 
+import { Icon } from "@/ui/components/icon/Icon";
 import { Popover } from "@/ui/components/popover/Popover";
-import { PopoverButton } from "@/ui/components/popover/PopoverButton";
 import { PopoverMenu } from "@/ui/components/popover/PopoverMenu";
 import { PopoverPanel } from "@/ui/components/popover/PopoverPanel";
 import { Tooltip } from "@/ui/components/tooltip/Tooltip";
 
+import { HeaderMenuButton } from "../HeaderMenuButton";
 import { useHelpMenuSections } from "./useHelpMenu.hook";
 
 /**
@@ -26,13 +27,7 @@ export const HelpMenu: FC<React.PropsWithChildren<unknown>> = () => {
       {({ open }) => (
         <>
           <Tooltip content={label} disabled={open} placement="bottom">
-            <PopoverButton
-              appearance="weak"
-              aria-haspopup="menu"
-              aria-label={label}
-              brand="neutral"
-              leftIconPath={mdiDotsHorizontal}
-            />
+            <HeaderMenuButton icon={<Icon path={mdiDotsHorizontal} />} label={label} />
           </Tooltip>
 
           <PopoverPanel className="nxm-popover-panel-dropdown">

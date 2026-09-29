@@ -77,6 +77,16 @@ describe("ProfileSection", () => {
       expect(screen.getByRole("button", { name: "Ada" })).toBeInTheDocument();
     });
 
+    it("keeps the profile tooltip attached to the redesigned trigger", async () => {
+      render(<ProfileSection />);
+      const trigger = screen.getByRole("button", { name: "Ada" });
+      await userEvent.hover(trigger);
+      await waitFor(() => {
+        expect(screen.getByRole("tooltip")).toHaveTextContent("Ada");
+        expect(trigger).toHaveAttribute("aria-describedby", screen.getByRole("tooltip").id);
+      });
+    });
+
     it("renders the avatar, which the e2e suite locates by its alt text", () => {
       render(<ProfileSection />);
       expect(screen.getByAltText("Ada")).toBeInTheDocument();
