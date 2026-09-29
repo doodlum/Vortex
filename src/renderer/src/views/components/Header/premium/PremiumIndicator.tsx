@@ -35,26 +35,29 @@ export const PremiumIndicator: FC<React.PropsWithChildren<unknown>> = () => {
     ).catch(() => undefined);
   }, []);
 
-  const status = !loggedIn ? (
-    <Button brand="primary" onClick={handleLogin}>
-      {t("Log in")}
-    </Button>
-  ) : premium ? (
-    <Typography appearance="moderate" data-testid="premium-indicator" typographyType="title-sm">
-      {t("Premium")}
-    </Typography>
-  ) : showAd ? (
-    <Button brand="premium" leftIconPath={mdiDiamondStone} onClick={handleGoPremium}>
-      {t("Go premium")}
-    </Button>
-  ) : null;
+  if (!loggedIn) {
+    return (
+      <Button brand="primary" onClick={handleLogin}>
+        {t("Log in")}
+      </Button>
+    );
+  }
 
-  if (!status) return null;
+  if (premium) {
+    return (
+      <Typography appearance="moderate" data-testid="premium-indicator" typographyType="title-sm">
+        {t("Premium")}
+      </Typography>
+    );
+  }
 
-  return (
-    <div className="flex h-7 shrink-0 items-center gap-x-2" data-header-premium-group="">
-      {status}
-      <span aria-hidden="true" className="h-6 w-px bg-stroke-weak" />
-    </div>
-  );
+  if (showAd) {
+    return (
+      <Button brand="premium" leftIconPath={mdiDiamondStone} onClick={handleGoPremium}>
+        {t("Go premium")}
+      </Button>
+    );
+  }
+
+  return null;
 };
