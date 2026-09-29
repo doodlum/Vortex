@@ -8,7 +8,7 @@ interface IHeaderMenuButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonEle
   testId?: string;
 }
 
-/** Match the two-part panel control's compact title-bar scale. */
+/** Compact title-bar menu trigger: an icon followed by a dropdown chevron. */
 export const HeaderMenuButton = forwardRef<HTMLButtonElement, IHeaderMenuButtonProps>(
   ({ icon, label, testId, ...props }, ref) => (
     <PopoverButton
@@ -24,8 +24,8 @@ export const HeaderMenuButton = forwardRef<HTMLButtonElement, IHeaderMenuButtonP
             aria-hidden="true"
             className="h-1 w-2 bg-neutral-subdued group-hover:bg-neutral-strong"
             style={{
-              WebkitMaskImage: 'url("assets/panels/layout-chevron.svg")',
-              maskImage: 'url("assets/panels/layout-chevron.svg")',
+              WebkitMaskImage: 'url("assets/icons/menu-chevron.svg")',
+              maskImage: 'url("assets/icons/menu-chevron.svg")',
               WebkitMaskSize: "contain",
               maskSize: "contain",
               WebkitMaskRepeat: "no-repeat",
