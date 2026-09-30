@@ -4,6 +4,7 @@ import { useSelector } from "react-redux";
 
 import { useWindowContext } from "@/contexts";
 import { Button } from "@/ui/components/button/Button";
+import { CHROME_ZOOM_STYLE } from "@/ui/components/chrome_zoom/ChromeZoomScope";
 import { Tooltip } from "@/ui/components/tooltip/Tooltip";
 import { Typography } from "@/ui/components/typography/Typography";
 import { nxmPanelClose, nxmPanelOpen } from "@/ui/icon-paths";
@@ -19,6 +20,7 @@ import { ProfileSection } from "./profile/ProfileSection";
 import { StagingIndicator } from "./StagingIndicator";
 import { VersionIndicator } from "./VersionIndicator";
 import { WindowControls } from "./WindowControls";
+import { ZoomControl } from "./ZoomControl";
 
 export const Header: FC<React.PropsWithChildren<unknown>> = () => {
   const { menuIsCollapsed, setMenuIsCollapsed } = useWindowContext();
@@ -52,8 +54,9 @@ export const Header: FC<React.PropsWithChildren<unknown>> = () => {
 
   return (
     <div
-      className="flex h-11 items-center justify-between gap-x-6 pl-4.5"
-      style={{ WebkitAppRegion: "drag" }}
+      className="flex h-11 shrink-0 items-center justify-between gap-x-6 pl-4.5"
+      data-testid="window-titlebar"
+      style={{ ...CHROME_ZOOM_STYLE, WebkitAppRegion: "drag" }}
     >
       <div className="flex min-w-0 flex-1 items-center gap-x-1">
         <Tooltip content={menuIsCollapsed ? t("Open menu") : t("Collapse menu")} placement="right">
@@ -80,7 +83,11 @@ export const Header: FC<React.PropsWithChildren<unknown>> = () => {
       </div>
 
       <div className="flex shrink-0 items-center gap-x-2" style={{ WebkitAppRegion: "no-drag" }}>
-        <ProfileSection />
+        <div className="flex items-center">
+          <ZoomControl />
+
+          <ProfileSection />
+        </div>
 
         <PremiumIndicator />
 

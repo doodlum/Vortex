@@ -1,4 +1,4 @@
-import { mdiAccountCircle, mdiLogout, mdiRefresh } from "@mdi/js";
+import { mdiAccountCircle, mdiLogout, mdiRefresh, mdiMagnify } from "@mdi/js";
 import React, { type FC } from "react";
 import { useTranslation } from "react-i18next";
 import { useDispatch, useSelector } from "react-redux";
@@ -15,6 +15,7 @@ import { Image } from "@/ui/components/image/Image";
 import { Popover } from "@/ui/components/popover/Popover";
 import { PopoverButton } from "@/ui/components/popover/PopoverButton";
 import { PopoverMenu } from "@/ui/components/popover/PopoverMenu";
+import type { IMenuControlsRow } from "@/ui/components/popover/PopoverMenu";
 import type { IMenuAction } from "@/ui/components/popover/PopoverMenuItem";
 import { PopoverPanel } from "@/ui/components/popover/PopoverPanel";
 import { Tooltip } from "@/ui/components/tooltip/Tooltip";
@@ -26,6 +27,7 @@ import {
 } from "../../../../util/selectors";
 import { HelpMenu } from "../help/HelpMenu";
 import { useHelpAction } from "../help/useHelpMenu.hook";
+import { ZoomControls } from "../ZoomControls";
 
 export const ProfileSection: FC<React.PropsWithChildren<unknown>> = () => {
   const dispatch = useDispatch();
@@ -46,7 +48,7 @@ export const ProfileSection: FC<React.PropsWithChildren<unknown>> = () => {
 
   const label = userInfo?.name ?? t("Account");
 
-  const sections: IMenuAction[][] = [
+  const sections: (IMenuAction | IMenuControlsRow)[][] = [
     !userInfo
       ? []
       : [
@@ -58,6 +60,7 @@ export const ProfileSection: FC<React.PropsWithChildren<unknown>> = () => {
             },
           },
         ],
+    [{ iconPath: mdiMagnify, label: t("Zoom"), controls: <ZoomControls inMenu /> }],
     [
       {
         iconPath: mdiRefresh,

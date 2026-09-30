@@ -32,13 +32,16 @@ vi.mock("./VersionIndicator", () => ({
 vi.mock("./WindowControls", () => ({
   WindowControls: () => <div data-testid="window-controls" />,
 }));
+vi.mock("./ZoomControl", () => ({
+  ZoomControl: () => <div data-testid="zoom" />,
+}));
 
 import { Header } from "./Header";
 
 describe("Header layout", () => {
-  it("leads with the profile menu and keeps the version beside the window controls", () => {
+  it("puts the zoom control before the profile menu, and the version beside the window controls", () => {
     render(<Header />);
-    const order = ["profile", "premium", "staging", "version", "window-controls"];
+    const order = ["zoom", "profile", "premium", "staging", "version", "window-controls"];
     const nodes = order.map((id) => screen.getByTestId(id));
     for (let i = 1; i < nodes.length; i++) {
       expect(
@@ -60,8 +63,12 @@ describe("Header layout", () => {
 
     const cluster = group.parentElement!;
     expect(cluster).toHaveClass("gap-x-2");
-    for (const id of ["profile", "premium", "staging"]) {
+    for (const id of ["premium", "staging"]) {
       expect(screen.getByTestId(id).parentElement, id).toBe(cluster);
     }
+    // The zoom control shares a gapless group with Profile, so its slot can collapse to nothing.
+    const zoomGroup = screen.getByTestId("zoom").parentElement!;
+    expect(screen.getByTestId("profile").parentElement).toBe(zoomGroup);
+    expect(zoomGroup.parentElement).toBe(cluster);
   });
 });
