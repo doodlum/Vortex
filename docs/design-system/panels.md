@@ -13,13 +13,12 @@ each panel holds one page, and the sidebar is the page switcher.
   The adjacent dropdown offers every legal position. Right click or Shift+F10
   on the button opens that dropdown too. The button and menu icons reflect
   current divider ratios and the proposed panel bounds. The two-part control
-  scales with the profile button: 28px high in Vortex's 44px title bar, with
-  a 28px primary segment and an 18px dropdown segment.
-- The adjacent profile control is also 46×28px, with a circular avatar and
-  dropdown chevron inside one outlined button. The title-bar order is Panels,
-  Profile, Premium status, divider, Version, divider, then window controls.
-  When signed out, the Help menu occupies the profile slot; when no Premium
-  status is shown, its divider disappears with it.
+  is 28px high in Vortex's 44px title bar, with a 28px primary segment and an
+  18px dropdown segment.
+- The profile control beside it is Vortex's standard avatar button. The
+  title-bar order is Panels, Profile, Premium status, the STAGING pill (preview
+  builds only), Version, a divider, then window controls. When signed out, the
+  Help menu occupies the profile slot and Log in the Premium slot.
 - Up to four panels form columns, rows, or a two-by-two layout. A pending
   unfilled panel moves when another position is chosen, rather than creating
   a second empty panel. A fourth panel aligns its new divider with its neighbor.
