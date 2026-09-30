@@ -50,4 +50,25 @@ describe("Header layout", () => {
       ).toBeTruthy();
     }
   });
+
+  it("spaces the version, divider and window controls as one group, apart from the rest", () => {
+    render(<Header />);
+    const version = screen.getByTestId("version");
+    const group = version.parentElement!;
+    const divider = version.nextElementSibling!;
+
+    expect(group).toHaveClass("gap-x-5");
+    expect(divider).toHaveClass("h-6", "w-0.5", "rounded-md", "bg-stroke-weak");
+    expect(divider.nextElementSibling).toBe(screen.getByTestId("window-controls"));
+
+    const cluster = group.parentElement!;
+    expect(cluster).toHaveClass("gap-x-2");
+    for (const id of ["premium", "staging"]) {
+      expect(screen.getByTestId(id).parentElement, id).toBe(cluster);
+    }
+    // The zoom control shares a gapless group with Profile, so its slot can collapse to nothing.
+    const zoomGroup = screen.getByTestId("zoom").parentElement!;
+    expect(screen.getByTestId("profile").parentElement).toBe(zoomGroup);
+    expect(zoomGroup.parentElement).toBe(cluster);
+  });
 });
