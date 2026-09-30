@@ -48,15 +48,23 @@ describe("Header layout", () => {
     }
   });
 
-  it("centers the version between two equal columns, with no divider", () => {
+  it("centers the version between columns that share the free space, with no divider", () => {
     const { container } = render(<Header />);
     const bar = container.firstElementChild!;
     const version = screen.getByTestId("version");
 
-    // The middle of three columns whose sides share the free space equally stays centered.
-    expect(bar).toHaveClass("grid", "grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]");
-    // Side padding on the grid would shift its middle off the bar's center.
-    expect(bar.className).not.toMatch(/\bp[lrx]-/);
+    // Exactly these classes: padding, a border or a margin on the bar would move its middle off
+    // the bar's center. The right column never gets narrower than its controls, so when they
+    // need more than half the bar the version moves aside instead of ending up under them.
+    expect(bar.className.split(/\s+/).sort()).toEqual(
+      [
+        "gap-x-6",
+        "grid",
+        "grid-cols-[minmax(0,1fr)_auto_minmax(min-content,1fr)]",
+        "h-11",
+        "items-center",
+      ].sort(),
+    );
     expect([...bar.children].indexOf(version)).toBe(1);
     expect(bar.children).toHaveLength(3);
     expect(container.querySelector(".bg-stroke-weak")).toBeNull();
