@@ -86,5 +86,7 @@ describe("Header layout", () => {
       expect(screen.getByTestId(id).parentElement, id).toBe(controls);
     }
     expect([...cluster.children]).toEqual([controls, screen.getByTestId("window-controls")]);
+    // The drag regions (the bar drags, the cluster doesn't) aren't checked here: happy-dom drops
+    // -webkit-app-region. Check them in the app.
   });
 });
