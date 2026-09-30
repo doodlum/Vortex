@@ -54,13 +54,14 @@ describe("Header layout", () => {
     const version = screen.getByTestId("version");
 
     // Exactly these classes: padding, a border or a margin on the bar would move its middle off
-    // the bar's center. The right column never gets narrower than its controls, so when they
-    // need more than half the bar the version moves aside instead of ending up under them.
+    // the bar's center. The right column is at least as wide as its controls' natural width, so
+    // when they need more than half the bar the version moves aside instead of squeezing them or
+    // ending up under them.
     expect(bar.className.split(/\s+/).sort()).toEqual(
       [
         "gap-x-6",
         "grid",
-        "grid-cols-[minmax(0,1fr)_auto_minmax(min-content,1fr)]",
+        "grid-cols-[minmax(0,1fr)_auto_minmax(max-content,1fr)]",
         "h-11",
         "items-center",
       ].sort(),
@@ -69,10 +70,18 @@ describe("Header layout", () => {
     expect(bar.children).toHaveLength(3);
     expect(container.querySelector(".bg-stroke-weak")).toBeNull();
 
+    const classes = (element: Element) => element.className.split(/\s+/).sort();
+    // The left column carries the bar's inset, so the menu toggle stays where it was.
+    expect(classes(bar.firstElementChild!)).toEqual(
+      ["flex", "gap-x-1", "items-center", "min-w-0", "pl-4.5"].sort(),
+    );
+    // Padding, a margin or a width on the cluster would move the window controls.
     const cluster = bar.lastElementChild!;
-    expect(cluster).toHaveClass("justify-self-end", "gap-x-5");
+    expect(classes(cluster)).toEqual(
+      ["flex", "gap-x-5", "items-center", "justify-self-end"].sort(),
+    );
     const controls = screen.getByTestId("profile").parentElement!;
-    expect(controls).toHaveClass("gap-x-2");
+    expect(classes(controls)).toEqual(["flex", "gap-x-2", "items-center"].sort());
     for (const id of ["premium", "staging"]) {
       expect(screen.getByTestId(id).parentElement, id).toBe(controls);
     }

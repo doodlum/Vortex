@@ -52,7 +52,7 @@ export const Header: FC<React.PropsWithChildren<unknown>> = () => {
 
   return (
     <div
-      className="grid h-11 grid-cols-[minmax(0,1fr)_auto_minmax(min-content,1fr)] items-center gap-x-6"
+      className="grid h-11 grid-cols-[minmax(0,1fr)_auto_minmax(max-content,1fr)] items-center gap-x-6"
       style={{ WebkitAppRegion: "drag" }}
     >
       <div className="flex min-w-0 items-center gap-x-1 pl-4.5">
