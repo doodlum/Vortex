@@ -50,4 +50,21 @@ describe("Header layout", () => {
       ).toBeTruthy();
     }
   });
+
+  it("spaces the version, divider and window controls as one group, apart from the rest", () => {
+    render(<Header />);
+    const version = screen.getByTestId("version");
+    const group = version.parentElement!;
+    const divider = version.nextElementSibling!;
+
+    expect(group).toHaveClass("gap-x-5");
+    expect(divider).toHaveClass("h-6", "w-0.5", "rounded-md", "bg-stroke-weak");
+    expect(divider.nextElementSibling).toBe(screen.getByTestId("window-controls"));
+
+    const cluster = group.parentElement!;
+    expect(cluster).toHaveClass("gap-x-2");
+    for (const id of ["profile", "premium", "staging"]) {
+      expect(screen.getByTestId(id).parentElement, id).toBe(cluster);
+    }
+  });
 });
