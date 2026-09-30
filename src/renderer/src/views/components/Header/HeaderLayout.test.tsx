@@ -32,13 +32,16 @@ vi.mock("./VersionIndicator", () => ({
 vi.mock("./WindowControls", () => ({
   WindowControls: () => <div data-testid="window-controls" />,
 }));
+vi.mock("../panels/PanelToolbar", () => ({
+  PanelToolbar: () => <div data-testid="panel-toolbar" />,
+}));
 
 import { Header } from "./Header";
 
 describe("Header layout", () => {
-  it("leads with the profile menu and keeps the version beside the window controls", () => {
+  it("puts the panel toolbar before the profile menu, and the version beside the window controls", () => {
     render(<Header />);
-    const order = ["profile", "premium", "staging", "version", "window-controls"];
+    const order = ["panel-toolbar", "profile", "premium", "staging", "version", "window-controls"];
     const nodes = order.map((id) => screen.getByTestId(id));
     for (let i = 1; i < nodes.length; i++) {
       expect(

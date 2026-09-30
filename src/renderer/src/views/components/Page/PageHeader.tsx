@@ -1,4 +1,12 @@
-import React, { type HTMLAttributes, type ReactNode } from "react";
+import React, {
+  createContext,
+  useContext,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type HTMLAttributes,
+  type ReactNode,
+} from "react";
 
 import { type IPictogramName, Pictogram } from "@/ui/components/pictogram/Pictogram";
 import { Typography } from "@/ui/components/typography/Typography";
@@ -14,6 +22,9 @@ export type IPageHeaderProps = Omit<HTMLAttributes<HTMLDivElement>, "children"> 
   pictogramName?: IPictogramName;
   subtitle?: string;
 } & XOr<{ title: string }, { customTitle: ReactNode | ((compact: boolean) => ReactNode) }>;
+
+/** Panel chrome can stay pinned to the header corner without changing page APIs. */
+export const PageHeaderActionsContext = createContext<ReactNode>(null);
 
 /**
  * Full-bleed header for a non-scrolling `Page`. The bar itself spans the full
@@ -44,16 +55,67 @@ export const PageHeader = ({
   ...rest
 }: IPageHeaderProps) => {
   const { compact, scrolled } = usePage();
+  const panelActions = useContext(PageHeaderActionsContext);
+  const pageActions = typeof children === "function" ? children(compact) : children;
+  const hasPageActions = !!pageActions;
+  const hasPanelActions = !!panelActions;
+  const headerRef = useRef<HTMLDivElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const panelActionsRef = useRef<HTMLDivElement>(null);
+  const [wrappedToolbarShift, setWrappedToolbarShift] = useState(0);
+  const toolbarShiftRef = useRef(0);
+
+  useLayoutEffect(() => {
+    if (!hasPageActions || !hasPanelActions) return;
+    const header = headerRef.current;
+    const toolbar = toolbarRef.current;
+    const panelControls = panelActionsRef.current;
+    if (!header || !toolbar || !panelControls) return;
+
+    const measure = () => {
+      const toolbarBounds = toolbar.getBoundingClientRect();
+      const panelBounds = panelControls.getBoundingClientRect();
+      if (!toolbarBounds.height || !panelBounds.height) return;
+      const shareRow = Math.abs(toolbarBounds.top - panelBounds.top) < 2;
+      // The close button occupies the title row. A wrapped toolbar can use the
+      // normal content gutter without changing the flex line break decision.
+      const contentRight = toolbar.parentElement?.parentElement?.getBoundingClientRect().right;
+      const shift =
+        shareRow || contentRight === undefined
+          ? 0
+          : Math.max(
+              0,
+              Math.min(32, contentRight - 24 - (toolbarBounds.right - toolbarShiftRef.current)),
+            );
+      toolbarShiftRef.current = shift;
+      setWrappedToolbarShift(shift);
+    };
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(header);
+    observer?.observe(toolbar);
+    observer?.observe(panelControls);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [hasPageActions, hasPanelActions, compact]);
 
   return (
     <div
+      ref={headerRef}
+      data-page-header=""
       className={joinClasses(["relative z-10 w-full py-3 pb-3", className], {
         "border-b border-stroke-weak": !scrolled || isFullWidth,
         "shadow-md": scrolled && !isFullWidth,
       })}
       {...rest}
     >
-      <PageContent className="flex items-start gap-x-2 px-6" isFullWidth={isFullWidth}>
+      <PageContent
+        className={joinClasses(["flex items-start gap-x-2 pl-6", panelActions ? "pr-14" : "pr-6"])}
+        isFullWidth={isFullWidth}
+      >
         {!!pictogramName && (
           <Pictogram
             className={joinClasses(["transition-[width,height]", compact ? "size-7" : "size-14"])}
@@ -62,34 +124,52 @@ export const PageHeader = ({
           />
         )}
 
-        <div className="min-w-0 grow">
-          <div className="flex items-center justify-between gap-x-6">
-            <div className="min-w-0">
-              {(typeof customTitle === "function" ? customTitle(compact) : customTitle) ?? (
-                <Typography
-                  appearance={compact ? "subdued" : "moderate"}
-                  as="h2"
-                  className="transition-colors"
-                  typographyType="heading-xs"
-                >
-                  {title}
-                </Typography>
-              )}
-            </div>
-
-            {typeof children === "function" ? children(compact) : children}
+        <div className="flex min-w-0 grow flex-wrap items-start justify-between gap-x-6 gap-y-2">
+          <div className="min-w-16 grow overflow-hidden">
+            {(typeof customTitle === "function" ? customTitle(compact) : customTitle) ?? (
+              <Typography
+                appearance={compact ? "subdued" : "moderate"}
+                as="h2"
+                className="truncate transition-colors"
+                typographyType="heading-xs"
+              >
+                {title}
+              </Typography>
+            )}
+            {!!subtitle && (
+              <Typography
+                appearance="subdued"
+                className={joinClasses("truncate", { hidden: compact })}
+              >
+                {subtitle}
+              </Typography>
+            )}
           </div>
-
-          {!!subtitle && (
-            <Typography
-              appearance="subdued"
-              className={joinClasses("truncate", { hidden: compact })}
+          {pageActions && (
+            <div
+              ref={toolbarRef}
+              data-page-header-toolbar=""
+              className="ml-auto flex shrink-0 items-center gap-3"
+              style={
+                hasPanelActions && wrappedToolbarShift
+                  ? { transform: `translateX(${wrappedToolbarShift}px)` }
+                  : undefined
+              }
             >
-              {subtitle}
-            </Typography>
+              {pageActions}
+            </div>
           )}
         </div>
       </PageContent>
+      {panelActions && (
+        <div
+          ref={panelActionsRef}
+          data-panel-header-actions=""
+          className="absolute top-3 right-3 flex items-center"
+        >
+          {panelActions}
+        </div>
+      )}
     </div>
   );
 };

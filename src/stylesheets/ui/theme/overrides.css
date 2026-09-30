@@ -14,11 +14,18 @@
             inset: 0 !important;
         }
 
+        /* Legacy pages place a menu-coloured .panel-body over the whole page.
+           Keep page content level with modern pages, while menus and dialogs
+           outside the page retain their own elevation. */
+        .main-page .panel > .panel-body {
+            background-color: var(--color-surface-low) !important;
+        }
+
         .mainpage-header-container {
-            background-color: var(--color-surface-high) !important;
+            background-color: var(--color-surface-mid) !important;
 
             .btn-default {
-                background-color: var(--color-surface-high) !important;
+                background-color: var(--color-surface-mid) !important;
 
                 &:hover {
                     background-color: var(--color-zinc-600) !important;

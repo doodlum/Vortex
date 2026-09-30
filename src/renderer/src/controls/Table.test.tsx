@@ -123,6 +123,7 @@ beforeAll(() => {
 afterEach(() => {
   document.body.innerHTML = "";
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("SuperTable row virtualisation", () => {
@@ -157,4 +158,41 @@ describe("SuperTable row virtualisation", () => {
     page.dispatchEvent(new Event("scroll"));
     expect(updateWidth).not.toHaveBeenCalled();
   });
+});
+
+it("preserves header widths while hidden and resizes them immediately when shown again", async () => {
+  const observers = new Map<Element, () => void>();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      private target: Element | undefined;
+      constructor(private callback: () => void) {}
+      observe(target: Element) {
+        this.target = target;
+        observers.set(target, this.callback);
+      }
+      disconnect() {
+        if (this.target) observers.delete(this.target);
+      }
+    },
+  );
+  const { container, unmount } = renderTable(false);
+  await rowsOf(container);
+  const proxy = container.querySelector(".table-main-pane .table-header tr")!;
+  const header = container.querySelector(".table-header-pane .table-header tr")!;
+  let width = 140;
+  Object.defineProperty(proxy, "clientWidth", { get: () => width * proxy.children.length });
+  for (const cell of proxy.children)
+    Object.defineProperty(cell, "clientWidth", { get: () => width });
+  const resize = observers.get(proxy)!;
+  resize();
+  expect((header.firstElementChild as HTMLElement).style.minWidth).toBe("140px");
+  width = 0;
+  resize();
+  expect((header.firstElementChild as HTMLElement).style.minWidth).toBe("140px");
+  width = 220;
+  resize();
+  expect((header.firstElementChild as HTMLElement).style.minWidth).toBe("220px");
+  unmount();
+  expect(observers.has(proxy)).toBe(false);
 });

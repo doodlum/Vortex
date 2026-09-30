@@ -12,6 +12,7 @@ import type { IHistoryPersistent, IHistoryState } from "@/extensions/history_man
 import type { IMod } from "@/extensions/mod_management/types/IMod";
 import type { IProfile } from "@/extensions/profile_management/types/IProfile";
 import type { IUpdaterSessionState } from "@/extensions/updater/reducers";
+import type { IPanelSettings } from "@/util/panelLayout";
 
 import type { ICollectionInstallState } from "./collections/ICollectionInstallSession";
 import type { ExtensionType, IAvailableExtension, IExtension } from "./extensions";
@@ -321,7 +322,14 @@ export interface ISettingsWorkarounds {
   userSymlinks: boolean;
 }
 
+export interface ISettingsSplitView {
+  /** Game ID, then primary page ID, to the saved secondary page ID. */
+  pairs: Record<string, Record<string, string>>;
+}
+
 export interface ISettings {
+  panels?: IPanelSettings;
+  splitView?: ISettingsSplitView;
   interface: ISettingsInterface;
   automation: ISettingsAutomation;
   gameMode: ISettingsGameMode;

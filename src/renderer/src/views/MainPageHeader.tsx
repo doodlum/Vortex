@@ -1,8 +1,6 @@
 import React, { type FC, type ReactNode, useContext } from "react";
 import { Portal } from "react-overlays";
-import { useSelector } from "react-redux";
 
-import { mainPage as mainPageSelector } from "../util/selectors";
 import { PageHeaderContext } from "./MainPageContainer";
 
 export interface IProps {
@@ -10,17 +8,16 @@ export interface IProps {
 }
 
 export const MainPageHeader: FC<React.PropsWithChildren<IProps>> = ({ children }) => {
-  const mainPage = useSelector(mainPageSelector);
-  const { headerPortal, page } = useContext(PageHeaderContext);
+  const { headerPortal, active } = useContext(PageHeaderContext);
 
-  if (!headerPortal?.()) {
+  if (!active || !headerPortal?.()) {
     return null;
   }
-  return mainPage === page ? (
+  return (
     <Portal container={headerPortal}>
       <div className="mainpage-header">{children}</div>
     </Portal>
-  ) : null;
+  );
 };
 
 export default MainPageHeader;
