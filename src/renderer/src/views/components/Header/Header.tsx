@@ -52,10 +52,10 @@ export const Header: FC<React.PropsWithChildren<unknown>> = () => {
 
   return (
     <div
-      className="flex h-11 items-center justify-between gap-x-6 pl-4.5"
+      className="grid h-11 grid-cols-[minmax(0,1fr)_auto_minmax(max-content,1fr)] items-center gap-x-6"
       style={{ WebkitAppRegion: "drag" }}
     >
-      <div className="flex min-w-0 flex-1 items-center gap-x-1">
+      <div className="flex min-w-0 items-center gap-x-1 pl-4.5">
         <Tooltip content={menuIsCollapsed ? t("Open menu") : t("Collapse menu")} placement="right">
           <Button
             appearance="weak"
@@ -79,20 +79,21 @@ export const Header: FC<React.PropsWithChildren<unknown>> = () => {
         </Typography>
       </div>
 
-      <div className="flex shrink-0 items-center gap-x-2" style={{ WebkitAppRegion: "no-drag" }}>
-        <StagingIndicator />
+      <VersionIndicator />
 
-        <VersionIndicator />
-
-        <PremiumIndicator />
-
-        <div className="flex items-center gap-x-5">
+      <div
+        className="flex items-center gap-x-5 justify-self-end"
+        style={{ WebkitAppRegion: "no-drag" }}
+      >
+        <div className="flex items-center gap-x-2">
           <ProfileSection />
 
-          <div className="h-6 w-0.5 rounded-md bg-stroke-weak" />
+          <PremiumIndicator />
 
-          <WindowControls />
+          <StagingIndicator />
         </div>
+
+        <WindowControls />
       </div>
     </div>
   );
