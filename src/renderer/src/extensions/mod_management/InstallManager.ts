@@ -280,6 +280,13 @@ export const VARIANT_ACTION = "Add Variant";
 // exe is a self-extracting archive and we would be able to handle it
 const FILETYPES_AVOID = [".dll"];
 
+// 7z names the archive type ("Cannot open the file as [7z] archive") only after it has read the
+// file and recognised its format, so that wording means the contents are unreadable, never that
+// another process holds the file. Without a type ("Cannot open the file as archive") 7z could not
+// identify the file at all, which is also how it reports a file it can't read.
+const ARCHIVE_UNREADABLE_AS_TYPE = /can ?not open the file as \[[^\]]*\] archive/gi;
+const ARCHIVE_UNREADABLE = /can ?not open the file as (\[[^\]]*\] )?archive/i;
+
 function nop() {
   // nop
 }
@@ -3850,7 +3857,7 @@ class InstallManager {
     if (errorCode && ["EBUSY", "EPERM", "EACCES"].includes(errorCode)) {
       return true;
     }
-    const lowered = errorMessage.toLowerCase();
+    const lowered = errorMessage.replace(ARCHIVE_UNREADABLE_AS_TYPE, "").toLowerCase();
     const patterns = [
       "being used by another process",
       "locked by another process",
@@ -4182,7 +4189,8 @@ class InstallManager {
   }
 
   private queryContinue(api: IExtensionApi, errors: string[], archivePath: string): Promise<void> {
-    const terminal = errors.find((err) => err.indexOf("Can not open the file as archive") !== -1);
+    // nothing was extracted from an archive 7z couldn't open, so continuing would install nothing
+    const terminal = errors.some((err) => ARCHIVE_UNREADABLE.test(err));
 
     return new Promise<void>((resolve, reject) => {
       const actions = [
