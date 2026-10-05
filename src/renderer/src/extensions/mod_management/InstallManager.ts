@@ -186,6 +186,7 @@ import type { IModInstaller, ISupportedInstaller } from "./types/IModInstaller";
 import type { IInstallationDetails, InstallFunc } from "./types/InstallFunc";
 import type { IReplaceChoice, ReplaceChoice } from "./types/IReplaceChoice";
 import type { ISupportedResult, ITestSupportedDetails, TestSupported } from "./types/TestSupported";
+import { archiveMatchesReference, contradictsReference } from "./util/archiveMatchesReference";
 import { getCSharpScriptAllowListForGame } from "./util/cSharpScriptAllowList";
 import gatherDependencies, {
   findDownloadByRef,
@@ -288,8 +289,10 @@ function findDownloadByReferenceTag(
   downloads: Record<string, IDownload>,
   reference: IModReference,
 ): string | null {
+  // an archive whose hash isn't the one a non-fuzzy reference pins is never the member, even when
+  // it carries the member's tag
   const dlId = findDownloadByRef(reference, downloads);
-  if (dlId) {
+  if (dlId && !contradictsReference(downloads[dlId], reference)) {
     return dlId;
   }
 
@@ -300,7 +303,8 @@ function findDownloadByReferenceTag(
   return (
     Object.keys(downloads).find(
       (id) =>
-        downloadHasReferenceTag(downloads[id], reference.tag) ||
+        (downloadHasReferenceTag(downloads[id], reference.tag) &&
+          !contradictsReference(downloads[id], reference)) ||
         (reference.md5Hint && downloads[id].fileMD5 === reference.md5Hint),
     ) || null
   );
@@ -308,7 +312,7 @@ function findDownloadByReferenceTag(
 
 function getReadyDownloadId(
   downloads: Record<string, IDownload>,
-  reference: { tag?: string; md5Hint?: string },
+  reference: IModReference,
   hasActiveOrPendingCheck: (downloadId: string) => boolean,
 ): string | null {
   const downloadId = findDownloadByReferenceTag(downloads, reference);
@@ -5419,6 +5423,7 @@ class InstallManager {
     campaign?: string,
     fileName?: string,
     parentCollection?: IParentCollection,
+    expected?: IModReference,
   ): Promise<string> {
     const call = (input: string | (() => PromiseLike<string>)): Promise<string> =>
       input !== undefined && typeof input === "function"
@@ -5473,7 +5478,21 @@ class InstallManager {
                   if (error == null) {
                     return resolve(id);
                   } else if (error instanceof AlreadyDownloaded) {
-                    return resolve(error.downloadId);
+                    // the adapter reuses a file by its name alone; without `expected` the
+                    // download below doesn't check again, so a replaced file can't loop
+                    return resolve(
+                      this.reuseExistingArchive(api, error.downloadId, expected, () =>
+                        this.downloadURL(
+                          api,
+                          lookupResult,
+                          wasCanceled,
+                          referenceTag,
+                          campaign,
+                          fileName,
+                          parentCollection,
+                        ),
+                      ),
+                    );
                   } else if (parseError(error).data.kind === "download:is-html") {
                     // If this is a google drive link and the file exceeds the
                     //  virus testing limit, Google will return an HTML page asking
@@ -5517,6 +5536,43 @@ class InstallManager {
             }
           }),
       );
+  }
+
+  /**
+   * Resolves to the download the adapter reused by file name, unless it is a finished archive that
+   * isn't the file `expected` pins. That one is removed and the file downloaded again.
+   */
+  private async reuseExistingArchive(
+    api: IExtensionApi,
+    downloadId: string,
+    expected: IModReference | undefined,
+    redownload: () => Promise<string>,
+  ): Promise<string> {
+    const download = api.getState().persistent.downloads.files[downloadId];
+    if (
+      expected === undefined ||
+      download?.state !== "finished" ||
+      (await archiveMatchesReference(api, download, expected))
+    ) {
+      return downloadId;
+    }
+    log("warn", "archive on disk is not the file the rule pins, downloading it again", {
+      downloadId,
+      fileName: download.localPath,
+      size: download.size,
+      fileMD5: api.getState().persistent.downloads.files[downloadId]?.fileMD5,
+      expectedSize: expected.fileSize,
+      expectedMD5: expected.fileMD5,
+    });
+    await new Promise<void>((resolve, reject) => {
+      api.events.emit(
+        "remove-download",
+        downloadId,
+        (err: Error | null) => (err ? reject(err) : resolve()),
+        { confirmed: true, silent: true },
+      );
+    });
+    return redownload();
   }
 
   private downloadMatching(
@@ -5659,6 +5715,7 @@ class InstallManager {
                 campaign,
                 fileName,
                 parentCollection,
+                requirement,
               )
             : res,
         );
@@ -5671,6 +5728,7 @@ class InstallManager {
         campaign,
         fileName,
         parentCollection,
+        requirement,
       ).catch((err) => {
         if (err instanceof UserCanceled || err instanceof ProcessCanceled) {
           return Promise.reject(err);
@@ -6502,6 +6560,24 @@ class InstallManager {
         } else {
           dlPromise = Promise.resolve(dep.download);
         }
+      } else if (
+        downloads[dep.download].state === "finished" &&
+        dep.extra?.localPath === undefined
+      ) {
+        // resolved by tag or by mod/file id, neither of which proves it's the pinned file
+        const existing = downloads[dep.download];
+        const hasSource = (dep.lookupResults[0]?.value?.sourceURI ?? "") !== "";
+        dlPromise = archiveMatchesReference(api, existing, dep.reference).then((matches) => {
+          if (matches || !hasSource) {
+            return dep.download;
+          }
+          log("warn", "resolved archive is not the file the rule pins, downloading it", {
+            downloadId: dep.download,
+            fileName: existing.localPath,
+            expectedMD5: dep.reference.fileMD5,
+          });
+          return queueDownload(dep);
+        });
       }
       return dlPromise
         .catch((err: unknown) => {
