@@ -11,6 +11,7 @@ vi.mock("../controls/ExtensionGate", () => ({
   default: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
+import { MainPage } from "./MainPage";
 import { MainPageContainer } from "./MainPageContainer";
 
 // --- Helpers ---
@@ -62,5 +63,23 @@ describe("MainPageContainer", () => {
     renderPage({ newLayout: (() => true) as unknown as boolean });
 
     expect(legacyChrome()).toBeInTheDocument();
+  });
+
+  it("keeps a visible secondary page's toolbar in its own header", () => {
+    const page = makePage({
+      component: () => (
+        <MainPage>
+          <MainPage.Header>
+            <button type="button">Sort Now</button>
+          </MainPage.Header>
+        </MainPage>
+      ),
+    });
+
+    const { rerender } = render(<MainPageContainer active page={page} secondary />);
+    expect(screen.getByRole("button", { name: "Sort Now" })).toBeInTheDocument();
+
+    rerender(<MainPageContainer active={false} page={page} secondary />);
+    expect(screen.queryByRole("button", { name: "Sort Now" })).not.toBeInTheDocument();
   });
 });

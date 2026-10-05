@@ -86,7 +86,7 @@ export const Page = forwardRef<HTMLDivElement, IPageProps>(
       <PageContext.Provider value={pageContext}>
         <div
           className={joinClasses([
-            "my-0.5 mr-0.5 flex flex-1 flex-col transition-opacity",
+            "my-0.5 mr-0.5 flex min-h-0 flex-1 flex-col transition-opacity",
             scrollable ? "overflow-auto" : "overflow-hidden",
             active
               ? "relative z-1000 opacity-100 delay-0"
