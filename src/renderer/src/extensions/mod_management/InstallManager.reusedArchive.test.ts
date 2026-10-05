@@ -6,6 +6,9 @@
  * copy, must not be reused or tagged as the member, or every retry installs the same bad file. A
  * same-named copy that is the right file must still be reused without a download (LAZ-972).
  */
+import { mkdir, writeFile } from "node:fs/promises";
+import * as path from "node:path";
+
 import { AlreadyDownloaded } from "@vortex/shared/errors";
 import { beforeEach, describe, expect, vi } from "vitest";
 
@@ -23,8 +26,10 @@ import {
 } from "../../test-utils/builders";
 import type { IInstallManagerHarness } from "../../test-utils/harnessTypes";
 import { test as imTest } from "../../test-utils/installManagerTest";
+import { makeTempDir } from "../../test-utils/tempDir";
 import { generateCollectionSessionId, modRuleId } from "../../util/collectionInstallSession";
 import { MOD_TYPE } from "../collections/constants";
+import { downloadPathForGame } from "../download_management/selectors";
 import type { IDownload } from "../download_management/types/IDownload";
 import type { IModReference } from "./types/IMod";
 import { downloadReferenceTags } from "./util/testModReference";
@@ -347,4 +352,54 @@ describe("a member already resolved to an archive with another hash", () => {
       expect(disk.removed).toEqual(["dl-existing"]);
     },
   );
+});
+
+describe("an archive whose record no longer describes the file", () => {
+  // the hash was recorded when the download finished; the file was cut short afterwards
+  imTest(
+    "is re-downloaded when its size on disk isn't the member's",
+    async ({ makeInstallManager }) => {
+      const { h, rule, queued } = makeInstall(
+        makeInstallManager,
+        exactRef,
+        onDisk({ fileMD5: GOOD_MD5, modInfo: { referenceTag: TAG, referenceTags: [TAG] } }),
+      );
+      // the real file, cut to half the size its record still says
+      const root = await makeTempDir("laz1286-");
+      h.setState((draft) => {
+        draft.settings.downloads.path = root;
+      });
+      const dlPath = downloadPathForGame(h.getState(), GAME);
+      await mkdir(dlPath, { recursive: true });
+      await writeFile(path.join(dlPath, ARCHIVE), Buffer.alloc(GOOD_SIZE / 2));
+      const disk = fakeAdapter(h, [ARCHIVE]);
+
+      const installed = await installMember(h, rule, queued, "dl-existing");
+
+      expect(installed).not.toBe("dl-existing");
+      expect(disk.removed).toEqual(["dl-existing"]);
+      expect(hashFile).not.toHaveBeenCalled();
+    },
+  );
+
+  // an earlier attempt installed the bad copy, which marked the download failed; the adapter still
+  // hands it back by name
+  imTest("is re-downloaded after it failed to install", async ({ makeInstallManager }) => {
+    const { h, rule, queued } = makeInstall(
+      makeInstallManager,
+      exactRef,
+      onDisk({
+        state: "failed",
+        fileMD5: "truncated-md5",
+        size: GOOD_SIZE / 2,
+        modInfo: { referenceTag: TAG, referenceTags: [TAG] },
+      }),
+    );
+    const disk = fakeAdapter(h, [ARCHIVE]);
+
+    const installed = await installMember(h, rule, queued);
+
+    expect(installed).not.toBe("dl-existing");
+    expect(disk.removed).toEqual(["dl-existing"]);
+  });
 });

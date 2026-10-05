@@ -6,6 +6,7 @@
  * it. Fuzzy references (`+prefer`, ranges, `*`) legitimately resolve to files with other hashes, so
  * they are never checked.
  */
+import { stat } from "node:fs/promises";
 import * as path from "path";
 
 import { log } from "../../../logging";
@@ -38,15 +39,15 @@ export function contradictsReference(
   );
 }
 
-async function hashDownload(api: IExtensionApi, download: IDownload): Promise<string | undefined> {
-  if (!download.localPath) {
-    return undefined;
-  }
+function archivePath(api: IExtensionApi, download: IDownload): string {
   const state = api.getState();
   const gameId = convertGameIdReverse(knownGames(state), download.game[0]) || download.game[0];
-  const filePath = path.join(downloadPathForGame(state, gameId), download.localPath);
+  return path.join(downloadPathForGame(state, gameId), download.localPath);
+}
+
+async function hashDownload(api: IExtensionApi, download: IDownload): Promise<string | undefined> {
   try {
-    const hash = await fileMD5(filePath);
+    const hash = await fileMD5(archivePath(api, download));
     api.store.dispatch(setDownloadHash(download.id, hash));
     return hash;
   } catch (err) {
@@ -55,25 +56,31 @@ async function hashDownload(api: IExtensionApi, download: IDownload): Promise<st
   }
 }
 
+// the size on disk, which a recorded hash can't vouch for once the file changed after it was hashed
+async function sizeOnDisk(api: IExtensionApi, download: IDownload): Promise<number | undefined> {
+  return stat(archivePath(api, download)).then(
+    (stats) => stats.size,
+    () => download.size,
+  );
+}
+
 /**
- * Whether the finished download can be reused for the reference. Uses the recorded hash when there
- * is one; otherwise rejects on a known size mismatch before hashing the file (and recording the
- * hash). An archive that can't be hashed keeps the old behaviour and is reused.
+ * Whether the download can be reused for the reference. A known size that isn't the reference's
+ * rejects it first; then the recorded hash decides, or, when none is recorded, the file is hashed
+ * (and the hash recorded). An archive that can't be hashed keeps the old behaviour and is reused.
  */
 export async function archiveMatchesReference(
   api: IExtensionApi,
   download: IDownload,
   reference: IModReference,
 ): Promise<boolean> {
-  if (!pinsFileHash(reference)) {
+  if (!pinsFileHash(reference) || !download.localPath) {
     return true;
   }
-  let hash = download.fileMD5;
-  if (hash === undefined) {
-    if (reference.fileSize > 0 && download.size > 0 && download.size !== reference.fileSize) {
-      return false;
-    }
-    hash = await hashDownload(api, download);
+  const size = (reference.fileSize ?? 0) > 0 ? await sizeOnDisk(api, download) : undefined;
+  if (size !== undefined && size > 0 && size !== reference.fileSize) {
+    return false;
   }
+  const hash = download.fileMD5 ?? (await hashDownload(api, download));
   return hash === undefined || hash === reference.fileMD5;
 }

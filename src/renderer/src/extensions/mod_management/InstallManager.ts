@@ -5539,8 +5539,9 @@ class InstallManager {
   }
 
   /**
-   * Resolves to the download the adapter reused by file name, unless it is a finished archive that
-   * isn't the file `expected` pins. That one is removed and the file downloaded again.
+   * Resolves to the download the adapter reused by file name, unless it is a settled archive (finished,
+   * or failed to install) that isn't the file `expected` pins. That one is removed and the file
+   * downloaded again.
    */
   private async reuseExistingArchive(
     api: IExtensionApi,
@@ -5549,9 +5550,11 @@ class InstallManager {
     redownload: () => Promise<string>,
   ): Promise<string> {
     const download = api.getState().persistent.downloads.files[downloadId];
+    // a download still in progress or paused is left to the resume handling
+    const settled = download?.state === "finished" || download?.state === "failed";
     if (
       expected === undefined ||
-      download?.state !== "finished" ||
+      !settled ||
       (await archiveMatchesReference(api, download, expected))
     ) {
       return downloadId;
