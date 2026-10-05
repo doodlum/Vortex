@@ -201,7 +201,11 @@ async function installMember(
     true,
   );
   try {
-    await vi.waitFor(() => expect(queued.mock.calls.length).toBeGreaterThan(0));
+    // the first round in a file loads the manager's lazy modules, which can outlast waitFor's default
+    // second on a loaded machine
+    await vi.waitFor(() => expect(queued.mock.calls.length).toBeGreaterThan(0), {
+      timeout: 15_000,
+    });
     return queued.mock.calls[0][2] as string;
   } finally {
     internals(h.manager).mDependencyInstalls[COLLECTION]?.();
