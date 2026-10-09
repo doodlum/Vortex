@@ -59,6 +59,7 @@ import { activeGameId } from "./extensions/profile_management/selectors";
 import { log } from "./logging";
 import type { IExtensionApi } from "./types/IExtensionContext";
 import type { IState } from "./types/IState";
+import { throwIfDownloadCancelled, withDownloadCancellation } from "./util/downloadCancellation";
 import getVortexPath from "./util/getVortexPath";
 import { batchDispatch, flatten } from "./util/util";
 
@@ -70,6 +71,9 @@ function rehydrateDownloadError(state: WireDownloadState): Error | null {
 
 type ProtocolHandler = (
   inputUrl: string,
+  name?: string,
+  friendlyName?: string,
+  signal?: AbortSignal,
 ) => PromiseLike<{ urls: string[]; updatedUrl?: string; meta: unknown }>;
 
 /**
@@ -138,6 +142,12 @@ function normalizeAllowInstall(allowInstall: boolean | "force" | undefined): boo
 type StoredDownloadInfo = {
   encodedUrl: EncodedUrl;
   callback?: (err: Error | null, id?: string) => void;
+  controller: AbortController;
+  referenceTag?: string;
+  downloadId?: string;
+  cancelled?: "intercept" | "pause" | "remove";
+  settled: Promise<void>;
+  release: () => void;
 };
 
 type ActiveDownload = {
@@ -178,6 +188,16 @@ export class IPCDownloadAdapter {
     });
 
     window.api.downloader.onResolve((collationId) => this.#resolve(collationId));
+
+    api.events.on("intercept-download", (referenceTag: unknown) => {
+      if (typeof referenceTag !== "string" || referenceTag.length === 0) return;
+      for (const info of this.#pending.values()) {
+        if (info.referenceTag === referenceTag) {
+          info.cancelled ??= "intercept";
+          info.controller.abort();
+        }
+      }
+    });
 
     api.events.on("start-download", (...args: unknown[]) => {
       const parsed = startDownloadArgsSchema.safeParse(args);
@@ -531,66 +551,66 @@ export class IPCDownloadAdapter {
     }
 
     const encodedUrl = parseEncodedUrl(rawUrl.toString());
+    const { collationId, info } = this.#createPending(
+      encodedUrl,
+      callback,
+      typeof modInfo.referenceTag === "string" ? modInfo.referenceTag : undefined,
+    );
+    try {
+      const { state, dlPath, gameIds } = await this.#resolveDownloadTarget(modInfo);
+      throwIfDownloadCancelled(info.controller.signal);
 
-    const { state, dlPath, gameIds } = await this.#resolveDownloadTarget(modInfo);
-
-    // Check for an existing file using the caller-supplied name before queuing.
-    // We can only do this when a name is provided; temp-named downloads are always new.
-    if (fileName !== undefined && redownload !== "always") {
-      const namedDest = path.join(dlPath, fileName);
-      const fileExists = await access(namedDest).then(
-        () => true,
-        () => false,
-      );
-      if (fileExists && redownload !== "replace") {
-        let useExisting = true;
-        if (redownload === "ask") {
-          const result = await this.#api.showDialog?.(
-            "question",
-            "File already downloaded",
-            { text: `"${fileName}" is already on disk. Download again?` },
-            [{ label: "Use existing" }, { label: "Re-download" }],
-          );
-          useExisting = result?.action !== "Re-download";
-        }
-        if (useExisting) {
-          const downloads = state.persistent.downloads.files;
-          let existingId = Object.keys(downloads).find(
-            (id) => downloads[id].localPath === fileName,
-          );
-          const gameId = gameIds[0];
-          if (existingId === undefined && gameId !== undefined) {
-            // A file no record tracks (dropped in manually, or its record was lost) is adopted
-            // the same way the download-folder scan adopts unknown archives, so the caller
-            // receives a usable download id. Adoption needs a game id: ADD_LOCAL_DOWNLOAD's
-            // sanity check blocks a record without one.
-            const { size } = await stat(namedDest);
-            existingId = randomUUID();
-            this.#api.store.dispatch(addLocalDownload(existingId, gameId, fileName, size));
-            this.#api.store.dispatch(
-              setCompatibleGames(
-                existingId,
-                gameIds.filter((game): game is string => game !== undefined),
-              ),
+      // Check for an existing file using the caller-supplied name before queuing.
+      // We can only do this when a name is provided; temp-named downloads are always new.
+      if (fileName !== undefined && redownload !== "always") {
+        const namedDest = path.join(dlPath, fileName);
+        const fileExists = await access(namedDest).then(
+          () => true,
+          () => false,
+        );
+        throwIfDownloadCancelled(info.controller.signal);
+        if (fileExists && redownload !== "replace") {
+          let useExisting = true;
+          if (redownload === "ask") {
+            const result = await this.#api.showDialog?.(
+              "question",
+              "File already downloaded",
+              { text: `"${fileName}" is already on disk. Download again?` },
+              [{ label: "Use existing" }, { label: "Re-download" }],
             );
+            throwIfDownloadCancelled(info.controller.signal);
+            useExisting = result?.action !== "Re-download";
           }
-          if (existingId !== undefined) {
-            callback?.(new AlreadyDownloaded(fileName, existingId));
-            return;
+          if (useExisting) {
+            const downloads = state.persistent.downloads.files;
+            let existingId = Object.keys(downloads).find(
+              (id) => downloads[id].localPath === fileName,
+            );
+            const gameId = gameIds[0];
+            if (existingId === undefined && gameId !== undefined) {
+              // A file no record tracks (dropped in manually, or its record was lost) is adopted
+              // the same way the download-folder scan adopts unknown archives, so the caller
+              // receives a usable download id. Adoption needs a game id: ADD_LOCAL_DOWNLOAD's
+              // sanity check blocks a record without one.
+              const { size } = await stat(namedDest);
+              throwIfDownloadCancelled(info.controller.signal);
+              existingId = randomUUID();
+              this.#api.store.dispatch(addLocalDownload(existingId, gameId, fileName, size));
+              this.#api.store.dispatch(
+                setCompatibleGames(
+                  existingId,
+                  gameIds.filter((game): game is string => game !== undefined),
+                ),
+              );
+            }
+            if (existingId !== undefined) {
+              callback?.(new AlreadyDownloaded(fileName, existingId));
+              return;
+            }
+            // untracked file with no game to record it under: fall through to a fresh download
           }
-          // untracked file with no game to record it under: fall through to a fresh download
         }
       }
-    }
-
-    const collationId = this.#nextCollationId++;
-    try {
-      const info: StoredDownloadInfo = {
-        encodedUrl: encodedUrl,
-        callback,
-      };
-
-      this.#pending.set(collationId, info);
 
       // Use a temporary filename so the main process can start writing immediately.
       // #completeDownload renames to the final name derived from Content-Disposition.
@@ -605,7 +625,12 @@ export class IPCDownloadAdapter {
         collationId,
       });
 
+      throwIfDownloadCancelled(info.controller.signal);
       const { downloadId } = await window.api.downloader.start(dest, collationId);
+      if (info.controller.signal.aborted) {
+        await this.#stopLateStart(downloadId, dest, info);
+        throw new UserCanceled(false);
+      }
 
       const allowInstall = normalizeAllowInstall(options?.allowInstall);
 
@@ -649,8 +674,63 @@ export class IPCDownloadAdapter {
         }
       }
     } catch (err) {
-      this.#resolvedMeta.delete(collationId);
       callback?.(unknownToError(err));
+    } finally {
+      this.#pending.delete(collationId);
+      this.#resolvedMeta.delete(collationId);
+      info.release();
+    }
+  }
+
+  #createPending(
+    encodedUrl: EncodedUrl,
+    callback?: StoredDownloadInfo["callback"],
+    referenceTag?: string,
+    downloadId?: string,
+  ): { collationId: number; info: StoredDownloadInfo } {
+    let release!: () => void;
+    const settled = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const info: StoredDownloadInfo = {
+      encodedUrl,
+      callback,
+      referenceTag,
+      downloadId,
+      controller: new AbortController(),
+      settled,
+      release,
+    };
+    const collationId = this.#nextCollationId++;
+    this.#pending.set(collationId, info);
+    return { collationId, info };
+  }
+
+  #abortPending(downloadId: string, reason: "pause" | "remove"): StoredDownloadInfo[] {
+    const found: StoredDownloadInfo[] = [];
+    for (const info of this.#pending.values()) {
+      if (info.downloadId !== downloadId) continue;
+      found.push(info);
+      if (reason === "remove" || info.cancelled === undefined) info.cancelled = reason;
+      info.controller.abort();
+    }
+    return found;
+  }
+
+  async #stopLateStart(downloadId: string, dest: string, info: StoredDownloadInfo): Promise<void> {
+    let checkpoint: WireDownloadCheckpoint | undefined;
+    try {
+      checkpoint = await window.api.downloader.pause(downloadId);
+    } catch (err) {
+      const state = await window.api.downloader.getState(downloadId);
+      if (!["completed", "failed", "canceled"].includes(state.status)) throw err;
+    }
+    const recordExists = this.#api.getState().persistent.downloads.files[downloadId] !== undefined;
+    if (info.cancelled === "pause" && info.downloadId !== undefined && recordExists) {
+      if (checkpoint) this.#api.store.dispatch(setDownloadCheckpoint(downloadId, checkpoint));
+      this.#api.store.dispatch(pauseDownload(downloadId, true));
+    } else {
+      await rm(dest, { force: true });
     }
   }
 
@@ -735,11 +815,13 @@ export class IPCDownloadAdapter {
     callback?: (err: Error | null) => void,
   ): Promise<void> {
     try {
+      const pending = this.#abortPending(downloadId, "remove");
+      await Promise.all(pending.map((info) => info.settled));
       const state = this.#api.getState();
       const download = state.persistent.downloads.files?.[downloadId];
       const isRunning = download !== undefined && ["init", "started"].includes(download.state);
 
-      if (this.#activeDownloads.has(downloadId) && isRunning) {
+      if (pending.length === 0 && this.#activeDownloads.has(downloadId) && isRunning) {
         // Still actively downloading: cancel it and let the poll loop's terminal
         // "canceled" handling remove the record and fire the UserCanceled callback.
         log("debug", "cancelling download", { downloadId });
@@ -769,6 +851,17 @@ export class IPCDownloadAdapter {
     downloadId: string,
     callback?: (err: Error | null) => void,
   ): Promise<void> {
+    const pending = this.#abortPending(downloadId, "pause");
+    if (pending.length > 0) {
+      // A successful pause must include any late native handoff and restore cleanup,
+      // so a caller can immediately resume without hitting the in-flight restore guard.
+      await Promise.all(pending.map((info) => info.settled));
+      if (this.#api.getState().persistent.downloads.files[downloadId] !== undefined) {
+        this.#api.store.dispatch(pauseDownload(downloadId, true));
+      }
+      callback?.(null);
+      return;
+    }
     // Only downloads still in progress are pausable (same active-download check as
     // hydrateFromState). For anything else - already finished/failed/paused, or no longer present -
     // the manager would throw "is not paused: status is ...", so treat it as a no-op success.
@@ -853,6 +946,14 @@ export class IPCDownloadAdapter {
     const dlPath = downloadPathForGame(state, gameId);
     const dest = path.join(dlPath, download.localPath);
 
+    const { collationId, info } = this.#createPending(
+      encodedUrl,
+      callback,
+      typeof download.modInfo?.referenceTag === "string"
+        ? download.modInfo.referenceTag
+        : undefined,
+      downloadId,
+    );
     this.#restoring.add(downloadId);
     try {
       log("debug", "restoring download without usable checkpoint", { downloadId });
@@ -869,21 +970,25 @@ export class IPCDownloadAdapter {
       );
       this.#api.store.dispatch(pauseDownload(downloadId, false));
 
-      const collationId = this.#nextCollationId++;
-      this.#pending.set(collationId, { encodedUrl });
-
       // Drop the unusable partial and stale checkpoint so the transfer starts over from zero.
       await rm(dest, { force: true });
       this.#api.store.dispatch(clearDownloadCheckpoint(downloadId));
 
       try {
+        throwIfDownloadCancelled(info.controller.signal);
         // Passing the existing downloadId makes main replace the previous attempt and start the
         // transfer from scratch under the same id.
         await window.api.downloader.start(dest, collationId, downloadId);
+        if (info.controller.signal.aborted) {
+          await this.#stopLateStart(downloadId, dest, info);
+          throw new UserCanceled(false);
+        }
       } catch (err) {
         // The partial and checkpoint are already gone, so mark the record failed rather than
         // leaving it stuck in an active state the poll loop never tracks.
-        this.#api.store.dispatch(finishDownload(downloadId, "failed", unknownToError(err)));
+        if (!info.controller.signal.aborted) {
+          this.#api.store.dispatch(finishDownload(downloadId, "failed", unknownToError(err)));
+        }
         throw err;
       } finally {
         this.#pending.delete(collationId);
@@ -902,7 +1007,10 @@ export class IPCDownloadAdapter {
         startedEventEmitted: false,
       });
     } finally {
+      this.#pending.delete(collationId);
+      this.#resolvedMeta.delete(collationId);
       this.#restoring.delete(downloadId);
+      info.release();
     }
   }
 
@@ -1030,7 +1138,7 @@ export class IPCDownloadAdapter {
       throw new Error(`No pending download for collationId ${collationId}`);
     }
 
-    this.#pending.delete(collationId);
+    throwIfDownloadCancelled(info.controller.signal);
 
     const { encodedUrl } = info;
     const headers: Record<string, string> | undefined = encodedUrl.referer
@@ -1046,7 +1154,11 @@ export class IPCDownloadAdapter {
         encodedUrl,
       });
 
-      const resolved = await Promise.resolve(handler(encodedUrl.url.toString()));
+      const resolved = await withDownloadCancellation(
+        () => handler(encodedUrl.url.toString(), undefined, undefined, info.controller.signal),
+        info.controller.signal,
+      );
+      throwIfDownloadCancelled(info.controller.signal);
 
       // Stash resolver meta so #handleStartDownload can merge it into modInfo.
       if (resolved.meta !== undefined && resolved.meta !== null) {

@@ -166,6 +166,37 @@ JSON.stringify(download, null, 2);
 
 ## Log Files
 
+### Interrupted downloads
+
+The download manager retries a response that ends before its declared Content-Length,
+using the same backoff as other temporary connection failures. By default, there are at most three
+retries per probe or transfer, after which the download fails normally. Retries write
+an informational `retrying download transfer` entry with the download ID, attempt,
+delay and error classification. Search those entries alongside the final download
+failure to distinguish recovery from exhausted retries. Upload responses, changed
+resources, invalid byte ranges, filesystem failures and cancellation do not gain
+these additional retries.
+
+The Nexus mod download-link GET has a separate allowance of three retries for raw
+`ETIMEDOUT` connection errors, including Node address-selection aggregates containing
+only connection timeouts. Delays are approximately one, two and four seconds with
+jitter. `retrying download-link lookup` entries identify the game, mod and file,
+without logging authorised URLs or credentials. API refusals, rate limits,
+cancellation errors and collection GraphQL lookups do not use this allowance.
+Pending protocol resolution carries a cancellation signal in the handler's optional
+fourth argument; the existing name/friendly-name argument positions are retained.
+Collection interception uses its reference tag, while pause/remove target an existing
+download ID. Cancellation stops the retry delay and further lookups, discards late
+resolver results without caching them, and clears the affected free-user queue entry.
+The Nexus client's already-issued HTTP request cannot itself be aborted through this
+interface; its eventual result is ignored. A handle arriving after cancellation is
+stopped before the normal renderer handoff. Queued transfers also honor pause/cancel.
+Pausing a queued resume preserves its existing ranges and ETag. A pending restore's
+pause callback waits for native stop and cleanup, allowing an immediate resume.
+The free-user dialog's cancel and skip actions also stop an authorised-link lookup
+already in progress, without depending on a collection session.
+Exhaustion preserves the final error; only active successful lookups enter the URL cache.
+
 Vortex writes detailed logs that are invaluable for debugging.
 
 ### Log Locations

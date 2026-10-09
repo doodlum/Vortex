@@ -17,6 +17,11 @@ import {
   ServiceTemporarilyUnavailable,
   UserCanceled,
 } from "../../util/CustomErrors";
+import {
+  throwIfDownloadCancelled,
+  withDownloadCancellation,
+  waitForDownloadRetry,
+} from "../../util/downloadCancellation";
 import { createKeyedCache } from "../../util/keyedCache";
 import opn from "../../util/opn";
 import { batchDispatch } from "../../util/util";
@@ -42,6 +47,30 @@ const DL_QUERY: IRevisionQuery = {
 };
 
 const DOWNLOAD_URL_CACHE_DURATION = 5 * 60 * 1000;
+const DOWNLOAD_URL_TIMEOUT_RETRIES = 3;
+
+/** Only raw connection timeouts from the download-link GET qualify, not API refusals. */
+function isDownloadLinkTimeout(error: unknown): boolean {
+  if (
+    !(error instanceof Error) ||
+    error instanceof NexusError ||
+    error instanceof NexusHTTPError ||
+    error instanceof UserCanceled ||
+    error instanceof ProcessCanceled ||
+    !("code" in error) ||
+    error.code !== "ETIMEDOUT"
+  ) {
+    return false;
+  }
+  // Node's autoSelectFamily can report one timeout per attempted address.
+  return (
+    !(error instanceof AggregateError) ||
+    (error.errors.length > 0 &&
+      error.errors.every(
+        (cause: unknown) => cause instanceof Error && "code" in cause && cause.code === "ETIMEDOUT",
+      ))
+  );
+}
 
 /** A download parked until the user fetches an authorised link from the website. */
 interface IQueuedDownload {
@@ -53,6 +82,7 @@ interface IQueuedDownload {
   queryRelevantUpdates: () => Promise<IFileUpdate[]>;
   /** Whether the user has been sent to the website to fetch an authorised link for this one. */
   awaitingLink: boolean;
+  signal?: AbortSignal;
 }
 
 /** What one download-url lookup found: the cdn urls plus the nexus ids identifying them. */
@@ -141,7 +171,13 @@ export class NxmProtocol {
   }
 
   /** Registered as the download protocol handler for the nxm scheme. */
-  readonly resolve = async (input: string): Promise<IResolvedURL> => {
+  readonly resolve = async (
+    input: string,
+    _name?: string,
+    _friendlyName?: string,
+    signal?: AbortSignal,
+  ): Promise<IResolvedURL> => {
+    throwIfDownloadCancelled(signal);
     const url = new NXMUrl(input);
 
     const cached = userInfo(this.#api.getState());
@@ -160,20 +196,20 @@ export class NxmProtocol {
 
     if (this.#canDownloadInApp(url)) {
       try {
-        return await this.#apiDownload(input, url, pageId);
+        return await this.#apiDownload(input, url, pageId, signal);
       } catch (err) {
-        if (await this.#confirmMembershipEnded(url, err)) {
-          return this.#websiteDownload(input, url);
+        if (await withDownloadCancellation(() => this.#confirmMembershipEnded(url, err), signal)) {
+          return this.#websiteDownload(input, url, signal);
         }
         throw err;
       }
     }
 
-    if (await this.#isDirectDownload(url, pageId)) {
-      return this.#apiDownload(input, url, pageId);
+    if (await withDownloadCancellation(() => this.#isDirectDownload(url, pageId), signal)) {
+      return this.#apiDownload(input, url, pageId, signal);
     }
 
-    return this.#websiteDownload(input, url);
+    return this.#websiteDownload(input, url, signal);
   };
 
   /**
@@ -299,7 +335,10 @@ export class NxmProtocol {
         .slice()
         .filter((queued) => this.#canDownloadInApp(queued.url))
         .forEach((queued) => {
-          this.resolve(queued.input).then(queued.resolve, queued.reject);
+          this.resolve(queued.input, undefined, undefined, queued.signal).then(
+            queued.resolve,
+            queued.reject,
+          );
         });
     },
   };
@@ -362,9 +401,10 @@ export class NxmProtocol {
    * it - otherwise an abandoned trip to the website leaves an entry that never expires, holding
    * the settled download alive and re-resolving it if a matching link ever does arrive.
    */
-  #dequeue(input: string): void {
+  #dequeue(queued: IQueuedDownload): void {
+    const { input } = queued;
     // the entry may already be gone
-    const queuedIdx = this.#freeQueue.findIndex((iter) => iter.input === input);
+    const queuedIdx = this.#freeQueue.indexOf(queued);
     if (queuedIdx !== -1) {
       this.#freeQueue.splice(queuedIdx, 1);
     }
@@ -379,23 +419,42 @@ export class NxmProtocol {
    * Park the download until the user brings back an authorised link from the website (or cancels
    * or skips it). FreeUserDLDialog renders off the redux queue this dispatches into.
    */
-  #websiteDownload(input: string, url: NXMUrl): Promise<IResolvedURL> {
+  #websiteDownload(input: string, url: NXMUrl, signal?: AbortSignal): Promise<IResolvedURL> {
     // a promise settles once and #dequeue tolerates a repeat, so cancelling after a skip is safe
     return new Promise<IResolvedURL>((resolve, reject) => {
-      this.#freeQueue.push({
+      if (signal?.aborted) {
+        reject(new UserCanceled(false));
+        return;
+      }
+      const controller = new AbortController();
+      let settled = false;
+      const abort = () => queued.reject(new UserCanceled(false));
+      const queued: IQueuedDownload = {
         input,
         url,
+        signal: controller.signal,
         resolve: (res) => {
-          this.#dequeue(input);
+          if (settled) return;
+          settled = true;
+          signal?.removeEventListener("abort", abort);
+          this.#dequeue(queued);
           resolve(res);
         },
         reject: (err) => {
-          this.#dequeue(input);
+          if (settled) return;
+          settled = true;
+          signal?.removeEventListener("abort", abort);
+          // Dialog cancel/skip owns this lifetime too, even when there is no
+          // external signal or collection session to cancel a nested lookup.
+          controller.abort();
+          this.#dequeue(queued);
           reject(err);
         },
         queryRelevantUpdates: () => this.#relevantUpdates(url),
         awaitingLink: false,
-      });
+      };
+      this.#freeQueue.push(queued);
+      signal?.addEventListener("abort", abort, { once: true });
       this.#api.store.dispatch(addFreeUserDLItem(input));
     });
   }
@@ -452,7 +511,13 @@ export class NxmProtocol {
   }
 
   /** Ask the api for the download urls, serving a recent answer for the same file from cache. */
-  async #apiDownload(input: string, url: NXMUrl, pageId: string): Promise<IResolvedURL> {
+  async #apiDownload(
+    input: string,
+    url: NXMUrl,
+    pageId: string,
+    signal?: AbortSignal,
+  ): Promise<IResolvedURL> {
+    throwIfDownloadCancelled(signal);
     if (!["mod", "collection"].includes(url.type)) {
       throw new ProcessCanceled("Not a download url");
     }
@@ -472,8 +537,8 @@ export class NxmProtocol {
     try {
       found =
         url.type === "mod"
-          ? await this.#modDownload(url, pageId)
-          : await this.#collectionDownload(url, revisionNumber);
+          ? await this.#modDownload(url, pageId, signal)
+          : await this.#collectionDownload(url, revisionNumber, signal);
     } catch (err) {
       this.#throwDownloadError(err);
     }
@@ -484,27 +549,50 @@ export class NxmProtocol {
       meta: { source: "nexus", nexus: { ids: found.ids } } as IResolvedURL["meta"],
     };
 
+    throwIfDownloadCancelled(signal);
     this.#urlCache.set(cacheKey, { urls: resolved.urls, meta: resolved.meta });
     return resolved;
   }
 
-  async #modDownload(url: NXMUrl, pageId: string): Promise<IFoundDownload> {
-    return {
-      urls: await this.#nexus.getDownloadURLs(url.modId, url.fileId, url.key, url.expires, pageId),
-      ids: { modId: url.modId, fileId: url.fileId },
-    };
+  async #modDownload(url: NXMUrl, pageId: string, signal?: AbortSignal): Promise<IFoundDownload> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return {
+          urls: await withDownloadCancellation(
+            () => this.#nexus.getDownloadURLs(url.modId, url.fileId, url.key, url.expires, pageId),
+            signal,
+          ),
+          ids: { modId: url.modId, fileId: url.fileId },
+        };
+      } catch (err) {
+        throwIfDownloadCancelled(signal);
+        if (attempt >= DOWNLOAD_URL_TIMEOUT_RETRIES || !isDownloadLinkTimeout(err)) {
+          throw err;
+        }
+        const delayMs = 1000 * 2 ** attempt + Math.floor(Math.random() * 200) - 100;
+        log("info", "retrying download-link lookup", {
+          gameId: pageId,
+          modId: url.modId,
+          fileId: url.fileId,
+          attempt: attempt + 1,
+          delayMs,
+          code: "ETIMEDOUT",
+        });
+        await waitForDownloadRetry(delayMs, signal);
+      }
+    }
   }
 
   async #collectionDownload(
     url: NXMUrl,
     revisionNumber: number | undefined,
+    signal?: AbortSignal,
   ): Promise<IFoundDownload> {
     let revision: Partial<IRevision>;
     try {
-      revision = await this.#nexus.getCollectionRevisionGraph(
-        DL_QUERY,
-        url.collectionSlug,
-        revisionNumber,
+      revision = await withDownloadCancellation(
+        () => this.#nexus.getCollectionRevisionGraph(DL_QUERY, url.collectionSlug, revisionNumber),
+        signal,
       );
     } catch (err) {
       err["collectionSlug"] = url.collectionSlug;
@@ -513,7 +601,10 @@ export class NxmProtocol {
     }
 
     return {
-      urls: await this.#nexus.getCollectionDownloadLink(revision.downloadLink),
+      urls: await withDownloadCancellation(
+        () => this.#nexus.getCollectionDownloadLink(revision.downloadLink),
+        signal,
+      ),
       ids: {
         collectionId: revision.collection.id,
         revisionId: revision.id,
@@ -571,7 +662,7 @@ export class NxmProtocol {
     }
     // the link has arrived, so stop treating it as outstanding; resolving dequeues the download
     queued.awaitingLink = false;
-    this.resolve(url).then(queued.resolve, queued.reject);
+    this.resolve(url, undefined, undefined, queued.signal).then(queued.resolve, queued.reject);
     return true;
   }
 
