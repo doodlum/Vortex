@@ -716,3 +716,11 @@ contentTracing.startRecording(
 View traces at: `chrome://tracing`
 
 [Vortex-Staging]: https://github.com/Nexus-Mods/Vortex-Staging
+
+### Archive extraction failures
+
+A truncated `.7z` reported as `Unexpected end of archive` fails immediately as a damaged archive. A typed `Cannot open the file as [7z] archive` message by itself does not indicate a sharing violation; accompanying access or sharing errors still use the existing extraction retries. Untyped open errors retain those retries, including localized Windows system messages.
+
+When 7z could not open an archive, the extraction dialog offers Cancel and Delete, without Continue. Partial extractions such as CRC failures retain Continue. A damaged-archive failure finishes the install callback and releases its concurrency slot in attended and unattended installs. The attended notification retains its explicit Delete and Delete & Redownload actions; it does not redownload automatically.
+
+Run the focused renderer suites with `pnpm exec vitest run src/extensions/mod_management/InstallManager.archiveErrors.test.ts src/extensions/mod_management/InstallManager.archiveSettlement.test.ts` from `src/renderer`. They cover captured 7z error messages and callback settlement through the real manager, with filesystem/metadata stand-ins. They do not prove real downloads succeed.
