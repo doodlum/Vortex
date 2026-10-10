@@ -1,3 +1,4 @@
+import type * as FsPromises from "node:fs/promises";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 
@@ -8,12 +9,12 @@ import { preserveExistingDownload } from "./preserveExistingDownload";
 
 const linkFile = vi.hoisted(() => vi.fn());
 vi.mock("node:fs/promises", async (original) => {
-  const actual = await original<typeof import("node:fs/promises")>();
+  const actual = await original<typeof FsPromises>();
   linkFile.mockImplementation(actual.link);
   return { ...actual, default: { ...actual, link: linkFile }, link: linkFile };
 });
 beforeEach(async () => {
-  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  const actual = await vi.importActual<typeof FsPromises>("node:fs/promises");
   linkFile.mockReset().mockImplementation(actual.link);
 });
 

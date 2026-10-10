@@ -1,34 +1,33 @@
 import { createHash } from "node:crypto";
+import type * as FsPromises from "node:fs/promises";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 
 import { beforeEach, expect, vi } from "vitest";
 
 import { downloadPathForGame } from "./extensions/download_management/selectors";
+import type * as Preservation from "./extensions/download_management/util/preserveExistingDownload";
 import { test } from "./test-utils/downloadAdapterTest";
 import { makeTempDir } from "./test-utils/tempDir";
 
 const reserve = vi.hoisted(() => vi.fn());
 vi.mock("node:fs/promises", async (original) => {
-  const actual = await original<typeof import("node:fs/promises")>();
+  const actual = await original<typeof FsPromises>();
   reserve.mockImplementation(actual.open);
   return { ...actual, default: { ...actual, open: reserve }, open: reserve };
 });
 const finalize = vi.hoisted(() => vi.fn());
 vi.mock("./extensions/download_management/util/preserveExistingDownload", async (original) => {
-  const actual =
-    await original<
-      typeof import("./extensions/download_management/util/preserveExistingDownload")
-    >();
+  const actual = await original<typeof Preservation>();
   finalize.mockImplementation(actual.preserveExistingDownload);
   return { preserveExistingDownload: finalize };
 });
 beforeEach(async () => {
-  const disk = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  const disk = await vi.importActual<typeof FsPromises>("node:fs/promises");
   reserve.mockReset().mockImplementation(disk.open);
-  const actual = await vi.importActual<
-    typeof import("./extensions/download_management/util/preserveExistingDownload")
-  >("./extensions/download_management/util/preserveExistingDownload");
+  const actual = await vi.importActual<typeof Preservation>(
+    "./extensions/download_management/util/preserveExistingDownload",
+  );
   finalize.mockReset().mockImplementation(actual.preserveExistingDownload);
 });
 
@@ -293,7 +292,7 @@ for (const state of ["paused", "finished"] as const) {
       const old = path.join(folder, "__vortex_tmp_00000000");
       await writeFile(old, "previous transfer bytes");
       const previous = structuredClone(h.getState().persistent.downloads.files[h.downloadId]);
-      const start = h.start.getMockImplementation()!;
+      const start = h.start.getMockImplementation();
       h.start.mockImplementation(async (...args) => {
         await writeFile(args[0], "new transfer bytes");
         return start(...args);
@@ -326,7 +325,7 @@ test("a reserved UUID collision refuses the new transfer without overwriting exi
   });
   const folder = downloadPathForGame(h.getState(), "skyrimse");
   await mkdir(folder, { recursive: true });
-  const disk = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  const disk = await vi.importActual<typeof FsPromises>("node:fs/promises");
   let existing = "";
   reserve.mockImplementationOnce(async (filePath, flags) => {
     existing = String(filePath);
