@@ -23,6 +23,19 @@ import { showExternalChanges } from "../actions/session";
 import { MERGED_PATH } from "../modMerging";
 import type { FileAction, IFileEntry } from "../types/IFileEntry";
 
+function manifestKey(source: string, relPath: string): string {
+  return JSON.stringify([source, relPath]);
+}
+
+function deployedPath(
+  outputPath: string,
+  entry: Pick<IDeployedFile, "target" | "relPath">,
+): string {
+  return truthy(entry.target)
+    ? path.join(outputPath, entry.target, entry.relPath)
+    : path.join(outputPath, entry.relPath);
+}
+
 /**
  * look at the file actions and act accordingly. Depending on the action this can
  * be a direct file operation or a modification to the previous manifest so that
@@ -64,11 +77,20 @@ async function applyFileActions(
   // not doing anything with 'nop'. The regular deployment code is responsible for doing the right
   // thing in this case.
 
+  const targets = new Map(
+    lastDeployment.map((entry) => [manifestKey(entry.source, entry.relPath), entry.target]),
+  );
+  const destination = (entry: IFileEntry) =>
+    deployedPath(outputPath, {
+      target: targets.get(manifestKey(entry.source, entry.filePath)),
+      relPath: entry.filePath,
+    });
+
   // process the actions that the user selected in the dialog
   await Promise.all(
     (actionGroups["drop"] || []).map((entry) =>
       truthy(entry.filePath)
-        ? fs.removeAsync(path.join(outputPath, entry.filePath))
+        ? fs.removeAsync(destination(entry))
         : Promise.reject(new Error("invalid file path")),
     ),
   );
@@ -84,7 +106,7 @@ async function applyFileActions(
   await Promise.all(
     (actionGroups["import"] || []).map((entry) => {
       const source = path.join(sourcePath, entry.source, entry.filePath);
-      const deployed = path.join(outputPath, entry.filePath);
+      const deployed = destination(entry);
       // Very rarely we have a case where the files are links of each other
       // (or at least node reports that) so the copy would fail.
       // Instead of handling the errors (when we can't be sure if it's due to a bug in node.js
@@ -108,16 +130,18 @@ async function applyFileActions(
   // this includes files that were deleted and those replaced
   const dropSet = new Set(
     [].concat(
-      (actionGroups["restore"] || []).map((entry) => entry.filePath),
-      (actionGroups["drop"] || []).map((entry) => entry.filePath),
+      (actionGroups["restore"] || []).map((entry) => manifestKey(entry.source, entry.filePath)),
+      (actionGroups["drop"] || []).map((entry) => manifestKey(entry.source, entry.filePath)),
       // also remove the files that got deleted, except these won't be reinstalled
-      (actionGroups["delete"] || []).map((entry) => entry.filePath),
+      (actionGroups["delete"] || []).map((entry) => manifestKey(entry.source, entry.filePath)),
       // also remove the files that got imported because they too only exist in staging
       // at this point
-      (actionGroups["import"] || []).map((entry) => entry.filePath),
+      (actionGroups["import"] || []).map((entry) => manifestKey(entry.source, entry.filePath)),
     ),
   );
-  const newDeployment = lastDeployment.filter((entry) => !dropSet.has(entry.relPath));
+  const newDeployment = lastDeployment.filter(
+    (entry) => !dropSet.has(manifestKey(entry.source, entry.relPath)),
+  );
   lastDeployment = newDeployment;
 
   const affectedMods = new Set<string>();

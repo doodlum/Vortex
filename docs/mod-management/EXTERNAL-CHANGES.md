@@ -79,6 +79,14 @@ There are **two view modes** toggled by "Show individual files":
 - **By source (default)**: Groups files by their source mod name. Shows mod name, file count, and a single action for all files in that mod. Uses `ISourceEntry`.
 - **By file**: Shows each `IFileEntry` individually with file path, staging modified time, deployed modified time, and per-file action.
 
+For a game that deploys each mod into a subfolder, drop and import resolve the destination as
+the mod path plus the manifest entry's target subfolder and relative file path. Applying an action
+removes only that source/file pair from the manifest; another mod's same-named file stays tracked.
+
+An uninstalled mod alone is not proof that a deployed file can be removed silently. The manifest's
+timestamp comes from the archive and can be preserved by a user's replacement file. Outside the
+existing automatic rules below, missing staging files still require a choice in this dialog.
+
 ## Auto-resolution rules
 
 Not all changes reach the dialog. Two categories are resolved silently:

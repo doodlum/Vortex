@@ -1,3 +1,5 @@
+import * as path from "path";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
@@ -7,7 +9,9 @@ import type {
   IFileChange,
 } from "../../../types/IExtensionContext";
 import type { IState } from "../../../types/IState";
+import * as fs from "../../../util/fs";
 import { MERGED_PATH } from "../modMerging";
+import type { IFileEntry } from "../types/IFileEntry";
 
 // Mock fs. applyFileActions inside dealWithExternalChanges calls into it
 // whenever any auto-resolved changes are present. Real fs ops would fail in a
@@ -35,22 +39,22 @@ vi.mock("../../../util/getVortexPath", () => ({ default: vi.fn(() => "/tmp") }))
 // Capture every payload passed to showExternalChanges so each test can assert
 // what would have been surfaced to the user.
 const showExternalChangesCalls: Array<{ [typeId: string]: IFileChange[] }> = [];
+let chosenActions: IFileEntry[] = [];
 // externalChanges.ts only imports `showExternalChanges` from this module, so
 // stubbing that one export is sufficient. The returned thunk resolves with
-// [] (simulating the user clicking Confirm without overriding any default
-// action); downstream applyFileActions is still exercised but is a no-op
-// given mocked fs.
+// chosenActions models the user response; empty by default. The target-path
+// cases below explicitly select a file action and exercise applyFileActions.
 vi.mock("../actions/session", () => ({
   showExternalChanges: vi.fn((changes: { [typeId: string]: IFileChange[] }) => {
     return () => {
       showExternalChangesCalls.push(changes);
-      return Promise.resolve([]);
+      return Promise.resolve(chosenActions);
     };
   }),
 }));
 
 import InstallManager from "../InstallManager";
-import { dealWithExternalChanges } from "./externalChanges";
+import { changeToEntry, dealWithExternalChanges } from "./externalChanges";
 
 function makeRefchange(source: string, filePath: string): IFileChange {
   return {
@@ -257,5 +261,121 @@ describe("dealWithExternalChanges", () => {
 
     // The next deployment cycle would pick up B.
     expect(installManager.consumeRecentChanges()).toEqual(new Set([modB]));
+  });
+});
+
+describe("external change deployment identity", () => {
+  beforeEach(() => {
+    chosenActions = [];
+    showExternalChangesCalls.length = 0;
+  });
+  afterEach(() => {
+    chosenActions = [];
+    vi.clearAllMocks();
+  });
+  const changeFor = (source: string, changeType: "srcdeleted" | "deleted"): IFileChange => ({
+    source,
+    filePath: "config.ini",
+    changeType,
+    sourceTime: new Date(0),
+    destTime: new Date(0),
+  });
+  const manifestFor = (source: string, target: string): IDeployedFile => ({
+    source,
+    target,
+    relPath: "config.ini",
+    time: 0,
+  });
+  const run = (changes: IFileChange[], entries: IDeployedFile[], recentChanges?: Set<string>) => {
+    const { api, activator } = makeApi({ externalChanges: changes });
+    return dealWithExternalChanges(
+      api,
+      activator,
+      "test-profile",
+      FAKE_STAGING,
+      FAKE_MOD_PATHS,
+      { "": entries },
+      recentChanges,
+    );
+  };
+
+  it.each(["", "mod-subfolder"])("applies explicit drop to target '%s'", async (target) => {
+    const change = changeFor("mod-A", "srcdeleted");
+    chosenActions = [changeToEntry("", change)];
+    const result = await run([change], [manifestFor(change.source, target)]);
+    expect(showExternalChangesCalls).toEqual([{ "": [change] }]);
+    expect(fs.removeAsync).toHaveBeenCalledExactlyOnceWith(
+      path.join(FAKE_MOD_PATHS[""], target, change.filePath),
+    );
+    expect(fs.moveAsync).not.toHaveBeenCalled();
+    expect(result).toEqual([[]]);
+  });
+
+  it("imports the chosen target and retains another mod's same-named manifest entry", async () => {
+    const change = changeFor("mod-A", "srcdeleted");
+    const keeper = manifestFor("mod-B", "target-B");
+    chosenActions = [{ ...changeToEntry("", change), action: "import" }];
+    const result = await run([change], [manifestFor(change.source, "target-A"), keeper]);
+    expect(fs.removeAsync).toHaveBeenCalledExactlyOnceWith(
+      path.join(FAKE_STAGING, "mod-A", "config.ini"),
+    );
+    expect(fs.moveAsync).toHaveBeenCalledExactlyOnceWith(
+      path.join(FAKE_MOD_PATHS[""], "target-A", "config.ini"),
+      path.join(FAKE_STAGING, "mod-A", "config.ini"),
+      { overwrite: true },
+    );
+    expect(result).toEqual([[keeper]]);
+  });
+
+  it.each([false, true])(
+    "drops only the owning manifest entry (automatic=%s)",
+    async (automatic) => {
+      const change = changeFor("mod-A", "srcdeleted");
+      const keeper = manifestFor("mod-B", "target-B");
+      if (!automatic) chosenActions = [changeToEntry("", change)];
+      const result = await run(
+        [change],
+        [manifestFor(change.source, "target-A"), keeper],
+        automatic ? new Set(["mod-A"]) : undefined,
+      );
+      expect(showExternalChangesCalls).toHaveLength(automatic ? 0 : 1);
+      expect(fs.removeAsync).toHaveBeenCalledExactlyOnceWith(
+        path.join(FAKE_MOD_PATHS[""], "target-A", "config.ini"),
+      );
+      expect(result).toEqual([[keeper]]);
+    },
+  );
+
+  it.each(["restore", "delete"] as const)(
+    "keeps another source's manifest entry on %s",
+    async (action) => {
+      const change = changeFor("mod-A", "deleted");
+      const keeper = manifestFor("mod-B", "target-B");
+      chosenActions = [{ ...changeToEntry("", change), action }];
+      const result = await run([change], [manifestFor(change.source, "target-A"), keeper]);
+      expect(result).toEqual([[keeper]]);
+      expect(fs.moveAsync).not.toHaveBeenCalled();
+      if (action === "delete") {
+        expect(fs.removeAsync).toHaveBeenCalledExactlyOnceWith(
+          path.join(FAKE_STAGING, "mod-A", "config.ini"),
+        );
+      } else {
+        expect(fs.removeAsync).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("asks before deleting an uninstalled mod's replacement with a preserved timestamp", async () => {
+    vi.mocked(fs.lstatAsync).mockResolvedValueOnce({
+      mtime: new Date(0),
+      isFile: () => true,
+    } as never);
+    const change = changeFor("removed-mod", "srcdeleted");
+    const manifest = manifestFor(change.source, "removed-mod-target");
+    const result = await run([change], [manifest]);
+    expect(showExternalChangesCalls).toEqual([{ "": [change] }]);
+    expect(fs.removeAsync).not.toHaveBeenCalled();
+    expect(fs.moveAsync).not.toHaveBeenCalled();
+    expect(result).toEqual([[manifest]]);
   });
 });
