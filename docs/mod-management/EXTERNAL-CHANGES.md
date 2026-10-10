@@ -79,9 +79,17 @@ There are **two view modes** toggled by "Show individual files":
 - **By source (default)**: Groups files by their source mod name. Shows mod name, file count, and a single action for all files in that mod. Uses `ISourceEntry`.
 - **By file**: Shows each `IFileEntry` individually with file path, staging modified time, deployed modified time, and per-file action.
 
+For a game that deploys each mod into a subfolder, drop and import resolve the destination as
+the mod path plus the manifest entry's target subfolder and relative file path. Applying an action
+removes only that source/file pair from the manifest; another mod's same-named file stays tracked.
+
+An uninstalled mod alone is not proof that a deployed file can be removed silently. The manifest's
+timestamp comes from the archive and can be preserved by a user's replacement file. Outside the
+existing automatic rules below, missing staging files still require a choice in this dialog.
+
 ## Auto-resolution rules
 
-Not all changes reach the dialog. These categories are resolved silently:
+Not all changes reach the dialog. Two categories are resolved silently:
 
 **Merged files** (`__merged` prefix) and **collection installs / autoResolveAll** use `defaultInternalAction`:
 
@@ -89,26 +97,6 @@ Not all changes reach the dialog. These categories are resolved silently:
 - `valchange` → `nop`
 - `deleted` → `restore` (always re-create the link)
 - `srcdeleted` → `drop`
-
-**Deployed files of uninstalled mods** also use `defaultInternalAction`, so the file is deleted
-(`drop`), but only when all of these hold:
-
-- the change is `srcdeleted`;
-- no mod of the game has that `installationPath` any more;
-- the manifest has an entry for the file, and the file at its deployed path (including the entry's
-  `target` subfolder, when the game deploys each mod into one) is a regular file whose modification
-  time still matches the entry's `time` (compared to the second). A hardlink keeps the staging
-  file's time, so an untouched orphan matches; a file the user replaced or edited does not.
-
-The recorded `time` is the staging file's modification time, which is the file's timestamp inside
-the mod archive. It identifies the archive's copy of the file, not this particular deployment. A
-file the user put there that carries the same archive timestamp, for example by extracting the same
-archive into the game folder by hand or restoring a timestamp-preserving copy, matches as well and
-is deleted without a prompt. File size is not recorded in the manifest, so it can't be used to tell
-them apart.
-
-If any check fails, or the file can't be read, the change goes to the dialog as before. This only
-affects hardlink deployment, because `srcdeleted` is raised only when the method can restore.
 
 These defaults prioritize staging as the source of truth — appropriate for automated operations where external edits should not be preserved.
 
