@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { readFile, mkdtemp, mkdir, rm, access } from "node:fs/promises";
+import { readFile, writeFile, mkdtemp, mkdir, rm, access } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -48,6 +48,82 @@ async function makeTmpDir(): Promise<TmpDir> {
 }
 
 describe("DownloadManager", () => {
+  for (const operation of ["pause", "cancel"] as const) {
+    it(`${operation} settles a queued download without issuing any request`, async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const complete = serveFile({ body: SMALL_FILE });
+      using running = server.route(async (ctx) => {
+        if (ctx.req.method === "GET") {
+          entered();
+          await gate;
+        }
+        return complete(ctx);
+      });
+      using queued = server.route(complete);
+      await using tmp = await makeTmpDir();
+      const manager = new DownloadManager({ concurrency: 1 });
+      const first = manager.download(running.url, path.join(tmp.dir, "running"), urlResolver);
+      await started;
+      const second = manager.download(queued.url, path.join(tmp.dir, "queued"), urlResolver);
+      expect(second.getState().status).toBe("queued");
+      try {
+        const state = await second[operation]();
+        expect(state.status).toBe(operation === "pause" ? "paused" : "canceled");
+        await second.promise;
+        expect(queued.requests).toHaveLength(0);
+      } finally {
+        release();
+        await first.promise;
+        await second.promise;
+      }
+      expect(queued.requests).toHaveLength(0);
+      expect(await readFile(path.join(tmp.dir, "running"))).toEqual(SMALL_FILE);
+    });
+  }
+  it.each([false, true])(
+    "retries a truncated response with the default strategy (ranges: %s)",
+    async (acceptRanges) => {
+      const body = randomBytes(64 * 1024);
+      const complete = serveFile({ body, acceptRanges, etag: '"stable"' });
+      let gets = 0;
+      using route = server.route(async (ctx) => {
+        if (ctx.req.method !== "GET" || ++gets > 1) return complete(ctx);
+        ctx.res.writeHead(acceptRanges ? 206 : 200, {
+          "content-length": body.length,
+          ...(acceptRanges ? { "content-range": `bytes 0-${body.length - 1}/${body.length}` } : {}),
+          etag: '"stable"',
+        });
+        ctx.res.write(body.subarray(0, 4096));
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        ctx.res.destroy();
+      });
+      await using tmp = await makeTmpDir();
+      const manager = new DownloadManager({ concurrency: 1 });
+      const dest = path.join(tmp.dir, "output");
+      const handle = manager.download(route.url, dest, urlResolver);
+
+      await handle.promise;
+
+      expect(gets).toBe(2);
+      expect(await readFile(dest)).toEqual(body);
+      expect(handle.getState()).toMatchObject({
+        status: "completed",
+        bytesReceived: body.length,
+        bytesWritten: body.length,
+      });
+      const requests = route.requests.filter((request) => request.method === "GET");
+      expect(requests.every((request) => request.headers["if-match"] === '"stable"')).toBe(true);
+      expect(requests[1]!.range).toEqual(requests[0]!.range);
+    },
+  );
+
   it("downloads a file and resolves the handle promise", async () => {
     using route = server.route(serveFile({ body: SMALL_FILE, acceptRanges: false }));
     await using tmp = await makeTmpDir();
@@ -139,6 +215,75 @@ describe("DownloadManager", () => {
   });
 
   describe("resume", () => {
+    it("preserves a queued resume checkpoint and skips its completed range after another resume", async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const complete = serveFile({ body: SMALL_FILE });
+      using blockerRoute = server.route(async (ctx) => {
+        if (ctx.req.method === "GET") {
+          entered();
+          await gate;
+        }
+        return complete(ctx);
+      });
+      using target = server.route(
+        serveFile({ body: LARGE_FILE, acceptRanges: true, etag: '"saved"' }),
+      );
+      await using tmp = await makeTmpDir();
+      const manager = new DownloadManager({ concurrency: 1 });
+      const blocker = manager.download(
+        blockerRoute.url,
+        path.join(tmp.dir, "blocker"),
+        urlResolver,
+      );
+      await started;
+      const dest = path.join(tmp.dir, "partial");
+      const completed = { start: 0, end: LARGE_FILE.length / 4 - 1 };
+      const partial = Buffer.alloc(LARGE_FILE.length);
+      LARGE_FILE.copy(partial, 0, 0, completed.end + 1);
+      await writeFile(dest, partial);
+      const checkpoint: DownloadCheckpoint<URL> = {
+        downloadId: "queued-resume",
+        resource: target.url,
+        dest,
+        completedRanges: [completed],
+        etag: '"saved"',
+      };
+      const queued = manager.resume(checkpoint, urlResolver, staticChunker());
+      let paused: Awaited<ReturnType<typeof queued.pause>>;
+      try {
+        expect(queued.getState().status).toBe("queued");
+        paused = await queued.pause();
+        expect(paused.status).toBe("paused");
+        if (paused.status !== "paused") throw new Error("expected paused");
+        expect(paused.checkpoint).toEqual(checkpoint);
+        expect(target.requests).toHaveLength(0);
+        expect(Buffer.compare(await readFile(dest), partial)).toBe(0);
+        expect((await queued.pause()).status).toBe("paused");
+      } finally {
+        release();
+        await Promise.all([blocker.promise, queued.promise]);
+      }
+      expect(target.requests).toHaveLength(0);
+      if (paused.status !== "paused") throw new Error("expected paused");
+      const resumed = manager.resume(paused.checkpoint, urlResolver, staticChunker());
+      await resumed.promise;
+      expect(Buffer.compare(await readFile(dest), LARGE_FILE)).toBe(0);
+      const gets = target.requests.filter((request) => request.method === "GET");
+      expect(gets).toHaveLength(3);
+      expect(
+        gets.every(
+          (request) => request.range?.kind === "bounded" && request.range.start > completed.end,
+        ),
+      ).toBe(true);
+    });
+
     async function waitForFile(path: string, timeout = 10_000): Promise<void> {
       const start = Date.now();
       while (Date.now() - start < timeout) {
@@ -358,19 +503,15 @@ describe("DownloadManager", () => {
       expect(manager.numPending).toBe(1);
 
       const pauseResult = await handle.pause();
-      expect(pauseResult.status).toBe("queued");
+      expect(pauseResult.status).toBe("paused");
+      if (pauseResult.status !== "paused") throw new Error("expected paused");
+      expect(pauseResult.checkpoint.completedRanges).toEqual([]);
 
-      // Cancel blocker so the queue slot opens, then wait for handle to start
-      // running and cancel it too — otherwise both downloads outlive the route
-      // registrations and produce unhandled 404 rejections.
+      // Releasing the occupied slot must not start the already-paused target.
       _blocker.cancel();
       await _blocker.promise.catch(() => {});
-      await vi.waitFor(() => handle.getState().status === "running", {
-        timeout: 5_000,
-        interval: 10,
-      });
-      handle.cancel();
       await handle.promise.catch(() => {});
+      expect(route.requests).toHaveLength(0);
     });
 
     it("does not throw when pause is called after the download has already completed", async () => {

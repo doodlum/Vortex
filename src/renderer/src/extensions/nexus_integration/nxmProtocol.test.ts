@@ -213,6 +213,110 @@ describe("nxm protocol resolver", () => {
   });
 
   describe("api errors", () => {
+    for (const operation of ["onCancel", "onSkip"] as const) {
+      test(`${operation} stops authorised-link backoff without a collection session`, async ({
+        makeNxm,
+      }) => {
+        const { harness, nxm, resolve } = makeNxm({ userInfo: FREE });
+        websiteRoundTrip();
+        const pending = resolve(MOD_URL).catch((error) => error);
+        await vi.waitFor(() => expect(harness.freeUserQueue()).toEqual([MOD_URL]));
+        vi.useFakeTimers();
+        try {
+          harness.getDownloadURLs
+            .mockRejectedValueOnce(
+              Object.assign(new Error("connect timeout"), { code: "ETIMEDOUT" }),
+            )
+            .mockResolvedValue(downloadLink("https://cdn/abandoned"));
+          nxm.dialogHandlers.onDownload(MOD_URL);
+          await nxm.handleLink(`${MOD_URL}?key=authorised&expires=1700000000`, false);
+          await vi.advanceTimersByTimeAsync(0);
+          expect(harness.getDownloadURLs).toHaveBeenCalledTimes(1);
+          nxm.dialogHandlers[operation](MOD_URL);
+          expect(await pending).toBeInstanceOf(UserCanceled);
+          await vi.advanceTimersByTimeAsync(5000);
+          expect(harness.getDownloadURLs).toHaveBeenCalledTimes(1);
+          harness.getDownloadURLs.mockResolvedValue(downloadLink("https://cdn/fresh"));
+          await expect(
+            resolve(`${MOD_URL}?key=authorised&expires=1700000000`),
+          ).resolves.toMatchObject({ urls: ["https://cdn/fresh"] });
+          expect(harness.getDownloadURLs).toHaveBeenCalledTimes(2);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+    }
+
+    test("dialog cancellation discards an outstanding authorised-link GET's late success", async ({
+      makeNxm,
+    }) => {
+      const { harness, nxm, resolve } = makeNxm({ userInfo: FREE });
+      websiteRoundTrip();
+      const pending = resolve(MOD_URL).catch((error) => error);
+      await vi.waitFor(() => expect(harness.freeUserQueue()).toEqual([MOD_URL]));
+      let release!: (links: ReturnType<typeof downloadLink>) => void;
+      harness.getDownloadURLs.mockImplementationOnce(
+        () =>
+          new Promise((res) => {
+            release = res;
+          }),
+      );
+      nxm.dialogHandlers.onDownload(MOD_URL);
+      await nxm.handleLink(`${MOD_URL}?key=authorised&expires=1700000000`, false);
+      expect(harness.getDownloadURLs).toHaveBeenCalledTimes(1);
+      nxm.dialogHandlers.onCancel(MOD_URL);
+      expect(await pending).toBeInstanceOf(UserCanceled);
+      release(downloadLink("https://cdn/abandoned"));
+      await new Promise((res) => setTimeout(res, 0));
+      harness.getDownloadURLs.mockResolvedValue(downloadLink("https://cdn/fresh"));
+      await expect(resolve(`${MOD_URL}?key=authorised&expires=1700000000`)).resolves.toMatchObject({
+        urls: ["https://cdn/fresh"],
+      });
+      expect(harness.getDownloadURLs).toHaveBeenCalledTimes(2);
+    });
+
+    test("cancelling one free-user lookup retains the correct same-file sibling", async ({
+      makeNxm,
+    }) => {
+      const { harness, nxm, resolve } = makeNxm({ userInfo: FREE });
+      websiteRoundTrip();
+      const a = new AbortController();
+      const b = new AbortController();
+      const first = resolve(MOD_URL, undefined, undefined, a.signal);
+      const second = resolve(MOD_URL, undefined, undefined, b.signal).catch((error) => error);
+      await vi.waitFor(() => expect(modInfoQuery).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(harness.freeUserQueue()).toEqual([MOD_URL]));
+      b.abort();
+      expect(await second).toBeInstanceOf(UserCanceled);
+      expect(harness.freeUserQueue()).toEqual([MOD_URL]);
+      harness.setUserInfo(PREMIUM);
+      harness.getDownloadURLs.mockResolvedValue(downloadLink("https://cdn/survivor"));
+      const retry = vi.spyOn(nxm, "resolve");
+      nxm.dialogHandlers.onRetry();
+      expect(retry).toHaveBeenCalledWith(MOD_URL, undefined, undefined, expect.any(AbortSignal));
+      expect(retry.mock.calls[0]![3]!.aborted).toBe(false);
+      await expect(first).resolves.toMatchObject({ urls: ["https://cdn/survivor"] });
+      expect(harness.freeUserQueue()).toEqual([]);
+    });
+
+    test("forwards cancellation when a free user's authorised website link arrives", async ({
+      makeNxm,
+    }) => {
+      const { harness, nxm, resolve } = makeNxm({ userInfo: FREE });
+      websiteRoundTrip();
+      const controller = new AbortController();
+      const pending = resolve(MOD_URL, undefined, undefined, controller.signal).catch(
+        (error) => error,
+      );
+      await vi.waitFor(() => expect(harness.freeUserQueue()).toEqual([MOD_URL]));
+      nxm.dialogHandlers.onDownload(MOD_URL);
+      harness.getDownloadURLs.mockImplementation(() => new Promise(() => {}));
+      await nxm.handleLink(`${MOD_URL}?key=authorised&expires=1700000000`, false);
+      expect(harness.getDownloadURLs).toHaveBeenCalledTimes(1);
+      controller.abort();
+      expect(await pending).toBeInstanceOf(UserCanceled);
+      expect(harness.freeUserQueue()).toEqual([]);
+    });
     test("turns a nexus api error into an HTTPError carrying the status code", async ({
       makeNxm,
     }) => {
@@ -259,6 +363,214 @@ describe("nxm protocol resolver", () => {
       await expect(resolve(MOD_URL)).rejects.toBeInstanceOf(RateLimitError);
       expect(harness.errorNotifications).toHaveLength(0);
       expect(harness.notifications).toEqual([expect.objectContaining({ type: "warning" })]);
+    });
+  });
+
+  describe("download-link connection timeouts", () => {
+    const timeout = () => Object.assign(new Error("connect ETIMEDOUT"), { code: "ETIMEDOUT" });
+    const aggregateTimeout = () =>
+      Object.assign(new AggregateError([timeout(), timeout()], ""), { code: "ETIMEDOUT" });
+
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    test("cancels backoff without another GET and permits a later fresh lookup", async ({
+      makeNxm,
+    }) => {
+      const { harness, resolve } = makeNxm();
+      const controller = new AbortController();
+      harness.getDownloadURLs
+        .mockRejectedValueOnce(timeout())
+        .mockResolvedValue(downloadLink("https://cdn/fresh"));
+      const pending = resolve(MOD_URL, undefined, undefined, controller.signal).catch(
+        (error) => error,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(harness.getDownloadURLs).toHaveBeenCalledTimes(1);
+      controller.abort();
+      expect(await pending).toBeInstanceOf(UserCanceled);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(harness.getDownloadURLs).toHaveBeenCalledTimes(1);
+      await expect(resolve(MOD_URL)).resolves.toMatchObject({ urls: ["https://cdn/fresh"] });
+      expect(harness.getDownloadURLs).toHaveBeenCalledTimes(2);
+    });
+
+    test("discards an abandoned GET's late success without caching it", async ({ makeNxm }) => {
+      const { harness, resolve } = makeNxm();
+      const controller = new AbortController();
+      let complete!: (value: ReturnType<typeof downloadLink>) => void;
+      harness.getDownloadURLs
+        .mockImplementationOnce(
+          () =>
+            new Promise((res) => {
+              complete = res;
+            }),
+        )
+        .mockResolvedValue(downloadLink("https://cdn/new"));
+      const pending = resolve(MOD_URL, undefined, undefined, controller.signal).catch(
+        (error) => error,
+      );
+      controller.abort();
+      expect(await pending).toBeInstanceOf(UserCanceled);
+      complete(downloadLink("https://cdn/abandoned"));
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(resolve(MOD_URL)).resolves.toMatchObject({ urls: ["https://cdn/new"] });
+      expect(harness.getDownloadURLs).toHaveBeenCalledTimes(2);
+    });
+
+    test("does not invoke the API for an already cancelled lookup", async ({ makeNxm }) => {
+      const { harness, resolve } = makeNxm();
+      const controller = new AbortController();
+      controller.abort();
+      await expect(
+        resolve(MOD_URL, undefined, undefined, controller.signal),
+      ).rejects.toBeInstanceOf(UserCanceled);
+      expect(harness.getDownloadURLs).not.toHaveBeenCalled();
+    });
+
+    test("does not request a collection link after its abandoned GraphQL lookup completes", async ({
+      makeNxm,
+    }) => {
+      const { harness, resolve } = makeNxm();
+      const controller = new AbortController();
+      let complete!: (value: unknown) => void;
+      harness.getCollectionRevisionGraph.mockImplementation(
+        () =>
+          new Promise((res) => {
+            complete = res;
+          }),
+      );
+      const pending = resolve(COLLECTION_URL, undefined, undefined, controller.signal).catch(
+        (error) => error,
+      );
+      controller.abort();
+      expect(await pending).toBeInstanceOf(UserCanceled);
+      complete({ downloadLink: "unused", collection: { id: 1 }, id: 2 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(harness.getCollectionDownloadLink).not.toHaveBeenCalled();
+    });
+
+    test("makes a fresh GET after a Node address-selection timeout, then caches success", async ({
+      makeNxm,
+    }) => {
+      const { harness, resolve } = makeNxm();
+      harness.getDownloadURLs
+        .mockRejectedValueOnce(aggregateTimeout())
+        .mockResolvedValue(downloadLink("https://cdn/file.7z"));
+      const result = resolve(MOD_URL);
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(harness.getDownloadURLs).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1100);
+      await expect(result).resolves.toMatchObject({ urls: ["https://cdn/file.7z"] });
+      await resolve(MOD_URL);
+      expect(harness.getDownloadURLs).toHaveBeenCalledTimes(2);
+    });
+
+    test("exhausts three retries and preserves the last error without caching it", async ({
+      makeNxm,
+    }) => {
+      const { harness, resolve } = makeNxm();
+      const lastError = aggregateTimeout();
+      harness.getDownloadURLs
+        .mockRejectedValueOnce(timeout())
+        .mockRejectedValueOnce(timeout())
+        .mockRejectedValueOnce(timeout())
+        .mockRejectedValueOnce(lastError);
+      const result = resolve(MOD_URL).catch((err: unknown) => err);
+
+      await vi.advanceTimersByTimeAsync(1100);
+      expect(harness.getDownloadURLs).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(2100);
+      expect(harness.getDownloadURLs).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(4100);
+      expect(harness.getDownloadURLs).toHaveBeenCalledTimes(4);
+      expect(await result).toBe(lastError);
+      expect(vi.getTimerCount()).toBe(0);
+
+      harness.getDownloadURLs.mockResolvedValue(downloadLink("https://cdn/later.7z"));
+      await resolve(MOD_URL);
+      expect(harness.getDownloadURLs).toHaveBeenCalledTimes(5);
+    });
+
+    for (const [label, error] of [
+      ["a cancellation", Object.assign(new UserCanceled(), { code: "ETIMEDOUT" })],
+      ["a process cancellation", Object.assign(new ProcessCanceled("stop"), { code: "ETIMEDOUT" })],
+      ["an API refusal", apiError(403, "forbidden")],
+      [
+        "an HTTP refusal",
+        new NexusHTTPError(520, "Request Failed", "", "https://api/download_link"),
+      ],
+      ["a rate limit", new RateLimitError()],
+      ["an unknown aggregate", new AggregateError([timeout()], "unknown")],
+      [
+        "an aggregate containing a permanent error",
+        Object.assign(new AggregateError([timeout(), new Error("invalid credentials")], ""), {
+          code: "ETIMEDOUT",
+        }),
+      ],
+      ["a different connection error", Object.assign(new Error("reset"), { code: "ECONNRESET" })],
+    ] as const) {
+      test(`does not retry ${label}`, async ({ makeNxm }) => {
+        const { harness, resolve } = makeNxm();
+        harness.getDownloadURLs.mockRejectedValue(error);
+        await expect(resolve(MOD_URL)).rejects.toBeInstanceOf(Error);
+        expect(harness.getDownloadURLs).toHaveBeenCalledTimes(1);
+        expect(vi.getTimerCount()).toBe(0);
+      });
+    }
+
+    test("does not retry a collection GraphQL lookup", async ({ makeNxm }) => {
+      const { harness, resolve } = makeNxm();
+      const error = aggregateTimeout();
+      harness.getCollectionRevisionGraph.mockRejectedValue(error);
+      await expect(resolve(COLLECTION_URL)).rejects.toBe(error);
+      expect(harness.getCollectionRevisionGraph).toHaveBeenCalledTimes(1);
+      expect(harness.getDownloadURLs).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    test("stops at an authentication refusal after a connection timeout", async ({ makeNxm }) => {
+      const { harness, resolve } = makeNxm();
+      harness.getDownloadURLs
+        .mockRejectedValueOnce(timeout())
+        .mockRejectedValueOnce(apiError(401, "unauthorized"));
+      const result = resolve(MOD_URL).catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(1100);
+      expect(await result).toBeInstanceOf(ProcessCanceled);
+      expect(harness.getDownloadURLs).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    test("logs retry identity without the authorised link or error payload", async ({
+      makeNxm,
+    }) => {
+      const { harness, resolve } = makeNxm();
+      const key = "private-test-key";
+      const error = Object.assign(new Error(`connect ETIMEDOUT; key=${key}`), {
+        code: "ETIMEDOUT",
+      });
+      harness.getDownloadURLs
+        .mockRejectedValueOnce(error)
+        .mockResolvedValue(downloadLink("https://cdn/file.7z?private=test"));
+      const result = resolve(`${MOD_URL}?key=${key}&expires=1700000000`);
+      await vi.advanceTimersByTimeAsync(1100);
+      await result;
+
+      const records = vi
+        .mocked(window.api.log)
+        .mock.calls.filter((record) => record[1] === "retrying download-link lookup");
+      expect(records).toHaveLength(1);
+      expect(JSON.parse(records[0][2]!)).toEqual({
+        gameId: "skyrimspecialedition",
+        modId: 100,
+        fileId: 500,
+        attempt: 1,
+        delayMs: expect.any(Number),
+        code: "ETIMEDOUT",
+      });
+      expect(JSON.stringify(records)).not.toContain(key);
+      expect(JSON.stringify(records)).not.toContain("https://");
     });
   });
 
