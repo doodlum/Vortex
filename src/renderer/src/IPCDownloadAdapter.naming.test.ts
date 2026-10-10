@@ -8,6 +8,7 @@ import { test } from "./test-utils/downloadAdapterTest";
 vi.mock(import("node:fs/promises"), async (importOriginal) => ({
   ...(await importOriginal()),
   mkdir: vi.fn().mockResolvedValue(undefined),
+  open: vi.fn().mockResolvedValue({ close: vi.fn().mockResolvedValue(undefined) }),
   access: vi.fn().mockRejectedValue(new Error("ENOENT")),
   rename: vi.fn().mockResolvedValue(undefined),
   rm: vi.fn().mockResolvedValue(undefined),

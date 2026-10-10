@@ -1,4 +1,5 @@
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 
@@ -10,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, vi } from "vitest";
 const paths = vi.hoisted(() => ({ root: "" }));
 vi.mock("./util/getVortexPath", () => ({ default: () => paths.root }));
 
-import { finishDownload } from "./extensions/download_management/actions/state";
+import { addLocalDownload, finishDownload } from "./extensions/download_management/actions/state";
 import { downloadPathForGame } from "./extensions/download_management/selectors";
 import { test } from "./test-utils/downloadAdapterTest";
 
@@ -72,6 +73,64 @@ describe("blob adoption", () => {
     });
 
     expect(result.err).toBeInstanceOf(Error);
+    expect(h.start).not.toHaveBeenCalled();
+  });
+  test("same-clock browser adoptions preserve occupied names, prior records and each new digest", async ({
+    makeDownloadAdapter,
+  }) => {
+    const h = makeDownloadAdapter({
+      download: { state: "finished", localPath: "Cool Mod.7z" },
+      automationInstall: true,
+    });
+    h.setState((draft) => {
+      draft.settings.downloads.path = path.join(paths.root, "downloads");
+    });
+    const folder = downloadPathForGame(h.getState(), "skyrimse");
+    await mkdir(folder, { recursive: true });
+    vi.setSystemTime(1700000000000);
+    const occupied = ["Cool Mod.7z", "Cool Mod.1700000000000.7z"];
+    await writeFile(path.join(folder, occupied[0]), "old original bytes");
+    await writeFile(path.join(folder, occupied[1]), "old suffix bytes");
+    h.api.store.dispatch(addLocalDownload("old-suffix", "skyrimse", occupied[1], 16));
+    const previous = structuredClone(h.getState().persistent.downloads.files);
+    const install = vi.fn();
+    h.events.on("start-install-download", install);
+    Object.assign(window.api, {
+      hash: {
+        compute: vi.fn(async (_algorithm, filePath) => {
+          const bytes = await readFile(filePath);
+          return { hash: createHash("md5").update(bytes).digest("hex"), numBytes: bytes.length };
+        }),
+      },
+    });
+    const adopted: string[] = [];
+    for (const bytes of ["browser bytes one", "browser bytes two"]) {
+      await writeFile(path.join(paths.root, "Cool Mod.7z.tmp"), bytes);
+      const result = await new Promise<{ error: Error | null; id?: string }>((resolve) => {
+        h.events.emit(
+          "start-download",
+          [BLOB],
+          { game: "skyrimse" },
+          undefined,
+          (error, id) => resolve({ error, id }),
+          "always",
+          { allowInstall: false },
+        );
+      });
+      expect(result.error).toBeNull();
+      const download = h.getState().persistent.downloads.files[result.id!];
+      adopted.push(download.localPath!);
+      expect(occupied).not.toContain(download.localPath);
+      expect(await readFile(path.join(folder, download.localPath!), "utf8")).toBe(bytes);
+      expect(download.fileMD5).toBe(createHash("md5").update(bytes).digest("hex"));
+      expect(download.modInfo.allowInstall).toBe(false);
+    }
+    expect(new Set(adopted).size).toBe(2);
+    expect(await readFile(path.join(folder, occupied[0]), "utf8")).toBe("old original bytes");
+    expect(await readFile(path.join(folder, occupied[1]), "utf8")).toBe("old suffix bytes");
+    for (const [id, old] of Object.entries(previous))
+      expect(h.getState().persistent.downloads.files[id]).toEqual(old);
+    expect(install).not.toHaveBeenCalled();
     expect(h.start).not.toHaveBeenCalled();
   });
 });

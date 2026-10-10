@@ -283,6 +283,17 @@ export interface IInstallManagerHarness extends IApiHarness {
  * IExtensionApi.
  */
 export interface IManagerInternals {
+  downloadURL: (
+    api: unknown,
+    lookup: unknown,
+    wasCanceled: () => boolean,
+    tag?: string,
+    campaign?: string,
+    fileName?: string,
+    parent?: unknown,
+    expected?: unknown,
+    signal?: AbortSignal,
+  ) => Promise<string>;
   reQueueDownloadedMods: (
     api: unknown,
     sourceModId: string,
@@ -295,6 +306,8 @@ export interface IManagerInternals {
     phase: number,
   ) => { phaseComplete: boolean; needsRequeue: boolean; allMods: unknown[] };
   driveSelectedOptionals: (api: unknown, sourceModId: string) => void;
+  mDependencyAbortSignals: WeakMap<() => void, AbortSignal>;
+  installModAsync: (...args: unknown[]) => Promise<string | undefined>;
   admitSettledOptionalPhase: (sourceModId: string, api: unknown) => void;
   pollAllPhasesComplete: (api: unknown, sourceModId: string) => Promise<void>;
   doInstallDependencies: (

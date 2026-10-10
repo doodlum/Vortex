@@ -1,18 +1,10 @@
-/**
- * Whether an archive already in the download folder is the file a dependency rule asks for.
- *
- * A non-fuzzy reference with a file hash names one exact file, so an archive that merely shares its
- * file name (a truncated copy, or a different file from a browser download) must not stand in for
- * it. Fuzzy references (`+prefer`, ranges, `*`) legitimately resolve to files with other hashes, so
- * they are never checked.
- */
 import { stat } from "node:fs/promises";
 import * as path from "path";
 
 import { log } from "../../../logging";
 import type { IExtensionApi } from "../../../types/IExtensionContext";
 import { fileMD5 } from "../../../util/checksum";
-import { setDownloadHash } from "../../download_management/actions/state";
+import { UserCanceled } from "../../../util/CustomErrors";
 import { downloadPathForGame } from "../../download_management/selectors";
 import type { IDownload } from "../../download_management/types/IDownload";
 import { knownGames } from "../../gamemode_management/selectors";
@@ -20,67 +12,79 @@ import { convertGameIdReverse } from "../../nexus_integration/util/convertGameId
 import type { IModReference } from "../types/IMod";
 import { isFuzzyVersion } from "./isFuzzyVersion";
 
-function pinsFileHash(reference: IModReference | undefined): boolean {
+export function pinsFileHash(reference: IModReference | undefined): boolean {
   return !!reference?.fileMD5 && !isFuzzyVersion(reference.versionMatch);
 }
 
-/**
- * True when the download's recorded hash is known and isn't the one the reference pins. Cheap: it
- * never touches the disk, so a download whose hash isn't known yet doesn't contradict.
- */
+/** A recorded mismatch can reject a candidate cheaply; a match cannot prove current disk bytes. */
 export function contradictsReference(
   download: IDownload | undefined,
   reference: IModReference | undefined,
 ): boolean {
   return (
     pinsFileHash(reference) &&
-    download?.fileMD5 !== undefined &&
-    download.fileMD5 !== reference.fileMD5
+    ((download?.fileMD5 !== undefined &&
+      download.fileMD5.toLowerCase() !== reference.fileMD5.toLowerCase()) ||
+      (download?.state === "finished" &&
+        reference.fileSize !== undefined &&
+        download.size !== undefined &&
+        download.size !== reference.fileSize))
   );
 }
 
-function archivePath(api: IExtensionApi, download: IDownload): string {
-  const state = api.getState();
-  const gameId = convertGameIdReverse(knownGames(state), download.game[0]) || download.game[0];
-  return path.join(downloadPathForGame(state, gameId), download.localPath);
-}
-
-async function hashDownload(api: IExtensionApi, download: IDownload): Promise<string | undefined> {
-  try {
-    const hash = await fileMD5(archivePath(api, download));
-    api.store.dispatch(setDownloadHash(download.id, hash));
-    return hash;
-  } catch (err) {
-    log("warn", "failed to hash existing archive", { downloadId: download.id, err });
-    return undefined;
-  }
-}
-
-// the size on disk, which a recorded hash can't vouch for once the file changed after it was hashed
-async function sizeOnDisk(api: IExtensionApi, download: IDownload): Promise<number | undefined> {
-  return stat(archivePath(api, download)).then(
-    (stats) => stats.size,
-    () => download.size,
-  );
+/** Release the caller on cancellation; a late read/hash result has no state-writing side effects. */
+export function withArchiveCancellation<T>(work: PromiseLike<T>, signal?: AbortSignal): Promise<T> {
+  if (signal === undefined) return Promise.resolve(work);
+  return new Promise<T>((resolve, reject) => {
+    const canceled = () => {
+      signal.removeEventListener("abort", canceled);
+      reject(new UserCanceled(false));
+    };
+    signal.addEventListener("abort", canceled, { once: true });
+    if (signal.aborted) canceled();
+    Promise.resolve(work)
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener("abort", canceled));
+  });
 }
 
 /**
- * Whether the download can be reused for the reference. A known size that isn't the reference's
- * rejects it first; then the recorded hash decides, or, when none is recorded, the file is hashed
- * (and the hash recorded). An archive that can't be hashed keeps the old behaviour and is reused.
+ * Read-only verification of a settled, reused archive. Missing/inaccessible bytes and files changed
+ * during hashing are unverified, rather than matches. Fuzzy references retain their existing rules.
  */
 export async function archiveMatchesReference(
   api: IExtensionApi,
   download: IDownload,
   reference: IModReference,
+  signal?: AbortSignal,
 ): Promise<boolean> {
-  if (!pinsFileHash(reference) || !download.localPath) {
-    return true;
-  }
-  const size = (reference.fileSize ?? 0) > 0 ? await sizeOnDisk(api, download) : undefined;
-  if (size !== undefined && size > 0 && size !== reference.fileSize) {
-    return false;
-  }
-  const hash = download.fileMD5 ?? (await hashDownload(api, download));
-  return hash === undefined || hash === reference.fileMD5;
+  if (signal?.aborted) throw new UserCanceled(false);
+  if (!pinsFileHash(reference)) return true;
+  if (!download?.localPath || contradictsReference(download, reference)) return false;
+  const state = api.getState();
+  const gameId = convertGameIdReverse(knownGames(state), download.game[0]) || download.game[0];
+  const filePath = path.join(downloadPathForGame(state, gameId), download.localPath);
+  const verify = async () => {
+    try {
+      const before = await stat(filePath);
+      if (
+        !before.isFile() ||
+        (reference.fileSize !== undefined && before.size !== reference.fileSize)
+      )
+        return false;
+      const hash = await fileMD5(filePath);
+      const after = await stat(filePath);
+      return (
+        before.size === after.size &&
+        before.mtimeMs === after.mtimeMs &&
+        before.ctimeMs === after.ctimeMs &&
+        before.ino === after.ino &&
+        hash.toLowerCase() === reference.fileMD5.toLowerCase()
+      );
+    } catch {
+      log("warn", "unable to verify existing archive", { downloadId: download.id });
+      return false;
+    }
+  };
+  return withArchiveCancellation(verify(), signal);
 }

@@ -294,6 +294,7 @@ describe("collection install completion with a selected, already-downloaded opti
     "a still-pending optional is claimed for download instead",
     async ({ makeInstallManager }) => {
       const { h } = makeParkedInstall(makeInstallManager, { optional: "pending" });
+      internals(h.manager).mDependencyInstalls[COLLECTION] = () => undefined;
 
       internals(h.manager).driveSelectedOptionals(h.api, COLLECTION);
 
