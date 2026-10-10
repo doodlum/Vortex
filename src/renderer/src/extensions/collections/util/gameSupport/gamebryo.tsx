@@ -16,6 +16,7 @@ import type { TFunction } from "../../../../util/i18n";
 import * as selectors from "../../../../util/selectors";
 import { getSafe } from "../../../../util/storeHelper";
 import { batchDispatch } from "../../../../util/util";
+import { referencesMatch } from "../../../gamebryo_plugin_management/util/lootReference";
 import type { IMod } from "../../../mod_management/types/IMod";
 import { findModByRef } from "../../../mod_management/util/findModByRef";
 import { isDependencyRule } from "../../../mod_management/util/testModReference";
@@ -145,14 +146,6 @@ function toLootType(type: string): string {
   }
 }
 
-function refName(iter: string | { name: string }): string {
-  if (typeof iter === "string") {
-    return iter;
-  } else {
-    return iter.name;
-  }
-}
-
 export async function parser(
   api: IExtensionApi,
   gameId: string,
@@ -275,10 +268,8 @@ export async function parser(
         // requires/incompatible, silently dropping every such rule the curator had set.
         const refs = plugin[lootType] ?? plugin[type] ?? [];
         refs.forEach((ref) => {
-          // a reference is either a plain name or {name, display, condition}; refName covers both,
-          // and calling toUpperCase on the object form throws out of the whole reduce.
-          const refUpper = refName(ref).toUpperCase();
-          const match = (iter) => refName(iter).toUpperCase() === refUpper;
+          // Conditions distinguish rules for the same plugin; display is only a label.
+          const match = (iter) => referencesMatch(iter, ref);
 
           if (getSafe(existing, [lootType], []).find(match) === undefined) {
             prev.push({

@@ -18,6 +18,7 @@ import { describe, expect, it, vi } from "vitest";
 import { makeApiHarness, makeMod, makeReference, makeRule } from "../../../../test-utils/builders";
 import type * as fsModule from "../../../../util/fs";
 import type * as selectorsModule from "../../../../util/selectors";
+import userlistReducer from "../../../gamebryo_plugin_management/reducers/userlist";
 import type { IMod } from "../../../mod_management/types/IMod";
 import { MOD_TYPE } from "../../constants";
 import type { ICollection } from "../../types/ICollection";
@@ -341,6 +342,52 @@ describe("gamebryo collection parser plugin rules", () => {
  * manifest, and whatever it filters out the installing user can never receive.
  */
 describe("gamebryo collection plugin rules round trip", () => {
+  it("preserves conditional metadata through export, import and the real reducer", async () => {
+    seedReaddir();
+    const curator = makeHarness();
+    const reference = {
+      name: "RaceCompatibility.esm",
+      display: "Race",
+      condition: 'active("A.esp")',
+    };
+    const retained = { ...reference, condition: 'active("B.esp")' };
+    curator.setState((draft) => {
+      (draft as any).loadOrder = {};
+      (draft as any).userlist.plugins = [{ name: "BijinAIO.esp", req: [reference] }];
+    });
+    const mods = memberMods();
+    const exported = await generate(
+      curator.api.getState(),
+      GAME_ID,
+      "staging",
+      Object.keys(mods),
+      mods,
+    );
+    const installer = makeHarness();
+    installer.setState((draft) => {
+      (draft as any).userlist.plugins = [{ name: "BijinAIO.esp", req: [retained] }];
+    });
+    await parser(
+      installer.api,
+      GAME_ID,
+      makeRuleCollection(exported.pluginRules.plugins),
+      makeMod({ id: COLLECTION_ID, type: MOD_TYPE, rules: [] }),
+    );
+    let state = installer.api.getState()["userlist"];
+    for (const action of installer.dispatched.filter(
+      (entry) => entry.type === "ADD_USERLIST_RULE",
+    )) {
+      state = userlistReducer.reducers[action.type](state, action.payload);
+    }
+    expect(state.plugins[0].req).toEqual([retained, reference]);
+    const removed = userlistReducer.reducers["REMOVE_USERLIST_RULE"](state, {
+      pluginId: "BIJINAIO.ESP",
+      reference,
+      type: "requires",
+    });
+    expect(removed.plugins[0].req).toEqual([retained]);
+  });
+
   it("exports and replays a plugin whose only rules are requires and incompatible", async () => {
     seedReaddir();
     const curator = makeHarness();
