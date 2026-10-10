@@ -3,8 +3,13 @@
  * and only calls inside one probe scope share a conclusive answer for the same folder.
  */
 
+import * as nativeFs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
+import { log } from "../../logging";
 import { withProbeScope } from "../mod_management/util/probeScope";
 import { canHardlinkIn, type ILinkProbeOps, probeHardlink } from "./linkProbe";
 
@@ -36,6 +41,67 @@ function makeOps(...outcomes: Array<string | undefined>): ILinkProbeOps & { call
 
 const linkCalls = (ops: { calls: string[] }) =>
   ops.calls.filter((c) => c.startsWith("link")).length;
+
+describe("native canary cleanup", () => {
+  it("shares a real hardlink probe and leaves no files behind", () => {
+    const folder = nativeFs.mkdtempSync(path.join(os.tmpdir(), "vortex-probe-"));
+    let links = 0;
+    const ops: ILinkProbeOps = {
+      writeFileSync: nativeFs.writeFileSync,
+      linkSync: (source, target) => {
+        nativeFs.linkSync(source, target);
+        links++;
+        expect(nativeFs.statSync(source).ino).toBe(nativeFs.statSync(target).ino);
+      },
+      removeSync: (file) => nativeFs.rmSync(file, { force: true }),
+      removeAsync: (file) => nativeFs.promises.rm(file, { force: true }),
+    };
+    try {
+      withProbeScope(() => {
+        expect(canHardlinkIn(folder, ops)).toBe(true);
+        expect(canHardlinkIn(folder, ops)).toBe(true);
+      });
+      expect(links).toBe(1);
+      expect(nativeFs.readdirSync(folder)).toEqual([]);
+      expect(canHardlinkIn(folder, ops)).toBe(true);
+      expect(links).toBe(2);
+      expect(nativeFs.readdirSync(folder)).toEqual([]);
+    } finally {
+      expect(path.dirname(path.resolve(folder))).toBe(path.resolve(os.tmpdir()));
+      expect(path.basename(folder).startsWith("vortex-probe-")).toBe(true);
+      nativeFs.rmSync(folder, { recursive: true, force: true });
+    }
+  });
+
+  it.each([false, true])(
+    "settles delayed cleanup and reports a rejection (reject=%s)",
+    async (reject) => {
+      vi.useFakeTimers();
+      const ops = makeOps();
+      let removals = 0;
+      ops.removeSync = () => {
+        if (++removals === 2) throw Object.assign(new Error("held"), { code: "EBUSY" });
+      };
+      const error = new Error("cleanup refused");
+      ops.removeAsync = vi.fn(() => (reject ? Promise.reject(error) : Promise.resolve()));
+      vi.mocked(log).mockClear();
+      try {
+        expect(probeHardlink("D:\\staging", ops)).toBe("linked");
+        await vi.runAllTimersAsync();
+        expect(ops.removeAsync).toHaveBeenCalledTimes(reject ? 1 : 2);
+        if (reject)
+          expect(log).toHaveBeenCalledWith(
+            "error",
+            expect.stringContaining("failed to clean up canary"),
+            expect.objectContaining({ message: error.message }),
+          );
+        else expect(log).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+});
 
 const OUTCOMES = [undefined, "EISDIR", "EXDEV", "EMFILE"];
 

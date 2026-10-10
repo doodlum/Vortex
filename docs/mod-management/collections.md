@@ -3,6 +3,14 @@
 How a collection installs: what a phase is, what has to be true before the next
 one starts, and the invariants to preserve when changing the phase logic.
 
+## Work during large installs
+
+The collection table remembers references it could not resolve in the previous rebuild. When Redux replaces a mod, the next rebuild searches those changed mods for missing members; resolved members still use the normal matching rules. Unchanged installed rows keep their object identity. This cache belongs to one mounted collection table and assumes immutable mod and rule objects.
+
+Reference matching and dependency deduplication share one bounded compiled-glob cache. Deployment support queries share the staging-folder hardlink canary only within a synchronous query; later queries probe again, and an inconclusive file-handle error is not cached. Applying a member's type and metadata sends one Redux batch, so subscribers observe the final pair together. A dependency round resets the stalled marker only for its matching active collection session.
+
+These changes reduce repeated work. They do not establish an end-to-end collection speedup; real download and cached-archive runs need separate production measurements.
+
 ## Concept
 
 Collections are curated mod sets that install in phases. Each phase must

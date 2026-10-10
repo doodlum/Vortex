@@ -1,7 +1,11 @@
 import { batch } from "redux-act";
 import { describe, expect, it } from "vitest";
 
+import ReduxWatcher from "../../store/ReduxWatcher";
+import { makeApiHarness, makeMod, makeProfile } from "../../test-utils/builders";
+import { setDeploymentNecessary } from "./actions/deployment";
 import { setModAttributes, setModType } from "./actions/mods";
+import { onModsChanged } from "./eventHandlers";
 import InstallManager from "./InstallManager";
 
 // applyExtraFromRule used to dispatch setModType and then setModAttributes. It now dispatches
@@ -20,6 +24,49 @@ const run = (extra: any) => {
 };
 
 describe("applyExtraFromRule batching", () => {
+  it.each([false, true])(
+    "preserves real state and type-change signaling with installing=%s",
+    (installing) => {
+      const seed = {
+        mods: { skyrimse: { m1: makeMod({ id: "m1" }) } },
+        profiles: { prof1: makeProfile({ id: "prof1", gameId: "skyrimse" }) },
+        activeProfileId: "prof1",
+      };
+      const h = makeApiHarness(seed);
+      const legacy = makeApiHarness(seed);
+      if (installing)
+        h.setState((state) => {
+          Object.assign(state.session, {
+            base: { activity: { installing_dependencies: ["collection"] } },
+          });
+        });
+      const before = h.getState().persistent.mods;
+      const notifications: unknown[] = [];
+      const watched: unknown[] = [];
+      h.api.store.subscribe(() => notifications.push(h.getState().persistent.mods));
+      const watcher = new ReduxWatcher(h.api.store, (error) => {
+        throw error;
+      });
+      watcher.on(["persistent", "mods"], (change) => watched.push(change.currentValue));
+      (InstallManager.prototype as any).applyExtraFromRule.call({}, h.api, "skyrimse", "m1", {
+        type: "dinput",
+        name: "member",
+        version: "1.2",
+      });
+      legacy.api.store.dispatch(setModType("skyrimse", "m1", "dinput"));
+      legacy.api.store.dispatch(
+        setModAttributes("skyrimse", "m1", { customFileName: "member", version: "1.2" }),
+      );
+      expect(h.getState().persistent.mods).toEqual(legacy.getState().persistent.mods);
+      expect(notifications).toHaveLength(1);
+      expect(watched).toEqual([h.getState().persistent.mods]);
+      onModsChanged(h.api, before, h.getState().persistent.mods);
+      expect(
+        h.dispatched.filter((action) => action.type === setDeploymentNecessary.getType()),
+      ).toHaveLength(installing ? 0 : 1);
+    },
+  );
+
   it("dispatches the legacy action sequence in one batch when a type is set", () => {
     const extra = { type: "dinput", name: "n", version: "1.2", author: "a", fileList: [] };
     const dispatched = run(extra);

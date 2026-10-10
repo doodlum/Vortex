@@ -604,4 +604,24 @@ describe("buildCollectionItemRows fallback cache", () => {
     // without the cache each pending member scans every installed mod
     expect(fallbackSearch.candidates).toBeGreaterThan(RULES.length * Object.keys(OTHERS).length);
   });
+
+  it("keeps unchanged installed rows identical while a cached miss becomes installed", () => {
+    const cache = makeRowFallbackCache();
+    const rules = [fuzzyRule(0), fuzzyRule(1)];
+    const firstMods = { "mod-0": fuzzyMod(0) };
+    const params = { rules, mods: firstMods, downloads: {}, modState: {}, sessionMods: {} };
+    const first = buildCollectionItemRows(params, undefined, cache);
+    const secondParams = { ...params, mods: { ...firstMods, "mod-1": fuzzyMod(1) } };
+    const second = buildCollectionItemRows(secondParams, first, cache);
+    expect(second).toEqual(buildCollectionItemRows(secondParams));
+    expect(second[modRuleId(rules[0])]).toBe(first[modRuleId(rules[0])]);
+    expect(second[modRuleId(rules[1])].status).toBe("installed");
+    const changedParams = {
+      ...secondParams,
+      mods: { ...secondParams.mods, "mod-1": fuzzyMod(1, "2.0.0") },
+    };
+    const third = buildCollectionItemRows(changedParams, second, cache);
+    expect(third[modRuleId(rules[0])]).toBe(second[modRuleId(rules[0])]);
+    expect(third[modRuleId(rules[1])]).not.toBe(second[modRuleId(rules[1])]);
+  });
 });

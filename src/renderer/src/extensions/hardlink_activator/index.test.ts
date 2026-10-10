@@ -35,6 +35,7 @@ import type { IDeploymentMethod } from "../mod_management/types/IDeploymentMetho
 import allTypesSupported from "../mod_management/util/allTypesSupported";
 import {
   getCurrentActivator,
+  getSupportedActivators,
   registerDeploymentMethod,
 } from "../mod_management/util/deploymentMethods";
 import init from "./index";
@@ -56,7 +57,9 @@ const state = (stagingPath: string) =>
     settings: {
       gameMode: { discovered: { fallout4: { path: "D:\\game" } } },
       mods: { activator: {} },
+      profiles: { activeProfileId: "profile" },
     },
+    persistent: { profiles: { profile: { gameId: "fallout4" } } },
   }) as any;
 
 describe("hardlink isSupported", () => {
@@ -120,6 +123,13 @@ describe("getCurrentActivator with the hard link method", () => {
     expect(fsMock.writeFileSync).toHaveBeenCalledTimes(20);
     // the other checks still run for every type
     expect(fsMock.accessSync).toHaveBeenCalledTimes(120);
+  });
+
+  it("shares the canary only within each supported-activator query", () => {
+    expect(getSupportedActivators(state("D:\\staging"))).toEqual([hardlink]);
+    expect(getSupportedActivators(state("D:\\staging"))).toEqual([hardlink]);
+    expect(fsMock.linkSync).toHaveBeenCalledTimes(2);
+    expect(fsMock.accessSync).toHaveBeenCalledTimes(6);
   });
 
   it("notices on the very next call that the folder stopped linking, and started again", () => {
