@@ -31,13 +31,9 @@ import { setCreateRule, setQuickEdit, setSource, setTarget } from "../actions/us
 import { NAMESPACE } from "../statics";
 import type { ILOOTList, ILOOTPlugin, ILootReference } from "../types/ILOOTList";
 import type { IPluginCombined } from "../types/IPlugins";
+import { referenceKey, type LootReference } from "../util/lootReference";
 
 type TranslationFunction = typeof I18next.t;
-
-function splitOnce(input: string, separator: string): string[] {
-  const idx = input.indexOf(separator);
-  return [input.slice(0, idx), input.slice(idx + 1)];
-}
 
 export interface IBaseProps {
   plugin: IPluginCombined;
@@ -57,7 +53,7 @@ interface IActionProps {
   onSetTarget: (id: string, pos: { x: number; y: number }) => void;
   onEditDialog: (referenceId: string, reference: string, defaultType: string) => void;
   onAddRule: (referenceId: string, reference: string, type: string) => void;
-  onRemoveRule: (referenceId: string, reference: string, type: string) => void;
+  onRemoveRule: (referenceId: string, reference: LootReference, type: string) => void;
   onQuickEdit: (pluginId: string, mode: string) => void;
 }
 
@@ -439,15 +435,15 @@ class DependencyIcon extends ComponentEx<IProps, IComponentState> {
     }
 
     return (
-      <li key={name}>
-        {display}
+      <li key={referenceKey(ref)} title={typeof ref === "string" ? undefined : ref.condition}>
+        {display || name}
         <tooltip.IconButton
           id={`btn-rule-remove-${name}`}
           value={`${ruleType}:${name}`}
           className="btn-embed"
           icon="remove"
           tooltip={t("Remove")}
-          onClick={this.onRemove}
+          onClick={() => this.props.onRemoveRule(this.props.plugin.id, ref, ruleType)}
         />
       </li>
     );
@@ -484,12 +480,6 @@ class DependencyIcon extends ComponentEx<IProps, IComponentState> {
 
   private hideOverlay = () => {
     this.nextState.showOverlay = false;
-  };
-
-  private onRemove = (evt) => {
-    const { plugin, onRemoveRule } = this.props;
-    const [ruleType, pluginId] = splitOnce(evt.currentTarget.value, ":");
-    onRemoveRule(plugin.id, pluginId, ruleType);
   };
 }
 

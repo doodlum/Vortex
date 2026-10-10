@@ -16,6 +16,7 @@ import type { TFunction } from "../../../../util/i18n";
 import * as selectors from "../../../../util/selectors";
 import { getSafe } from "../../../../util/storeHelper";
 import { batchDispatch } from "../../../../util/util";
+import { referencesMatch } from "../../../gamebryo_plugin_management/util/lootReference";
 import type { IMod } from "../../../mod_management/types/IMod";
 import { findModByRef } from "../../../mod_management/util/findModByRef";
 import { isDependencyRule } from "../../../mod_management/util/testModReference";
@@ -47,6 +48,8 @@ interface IUserlistEntry {
   name: string;
   group?: string;
   after?: Array<string | ILootReference>;
+  req?: Array<string | ILootReference>;
+  inc?: Array<string | ILootReference>;
 }
 
 interface IGamebryoRules {
@@ -59,7 +62,12 @@ function extractPluginRules(state: IStateWithLootLists, plugins: string[]): IGam
   const customisedPlugins = (state.userlist?.plugins ?? []).filter(
     (plug: IUserlistEntry) =>
       installedPlugins.has(plug.name.toLowerCase()) &&
-      (plug.after !== undefined || plug.group !== undefined),
+      // a plugin whose only rules are requires/incompatible still carries curator intent; the
+      // parser replays req/inc, so the export must not filter those entries out
+      (plug.after !== undefined ||
+        plug.group !== undefined ||
+        (plug.req?.length ?? 0) > 0 ||
+        (plug.inc?.length ?? 0) > 0),
   );
 
   // TODO this may be a bit overly simplified.
@@ -135,14 +143,6 @@ function toLootType(type: string): string {
       return "inc";
     default:
       return "after";
-  }
-}
-
-function refName(iter: string | { name: string }): string {
-  if (typeof iter === "string") {
-    return iter;
-  } else {
-    return iter.name;
   }
 }
 
@@ -263,8 +263,13 @@ export async function parser(
 
       ["requires", "incompatible", "after"].forEach((type) => {
         const lootType = toLootType(type);
-        (plugin[type] || []).forEach((ref) => {
-          const match = (iter) => refName(iter).toUpperCase() === ref.toUpperCase();
+        // The manifest carries userlist entries verbatim, so the rules sit under the LOOT keys
+        // (req/inc/after), not under the action names. Reading plugin[type] found nothing for
+        // requires/incompatible, silently dropping every such rule the curator had set.
+        const refs = plugin[lootType] ?? plugin[type] ?? [];
+        refs.forEach((ref) => {
+          // Conditions distinguish rules for the same plugin; display is only a label.
+          const match = (iter) => referencesMatch(iter, ref);
 
           if (getSafe(existing, [lootType], []).find(match) === undefined) {
             prev.push({
