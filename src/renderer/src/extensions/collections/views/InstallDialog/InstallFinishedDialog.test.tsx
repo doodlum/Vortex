@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import * as React from "react";
 import { Provider } from "react-redux";
 import { createStore, type Store } from "redux";
@@ -41,15 +41,18 @@ vi.mock("react-i18next", async (importOriginal) => {
 
 vi.mock("../CollectionTile", () => ({ default: () => null }));
 
+// SVG installation needs the app's icon container and files; the clone button's action remains real.
+vi.mock("../../../../controls/Icon", () => ({ default: () => null }));
+
 vi.mock("../../../gamemode_management/util/getGame", () => ({
   getGame: () => ({ name: "Test Game" }),
 }));
 
-const noFailures: unknown[] = [];
+const failures = { required: [] as unknown[], optional: [] as unknown[], stalled: false };
 vi.mock("../../../../util/collectionInstallSessionSelectors", () => ({
-  getFailedOptionalMods: () => noFailures,
-  getFailedRequiredMods: () => noFailures,
-  isActiveSessionStalled: () => false,
+  getFailedOptionalMods: () => failures.optional,
+  getFailedRequiredMods: () => failures.required,
+  isActiveSessionStalled: () => failures.stalled,
 }));
 
 const GAME_ID = "testgame";
@@ -104,7 +107,7 @@ interface IFakeDriver {
   step: string;
   profile: { id: string; gameId: string } | undefined;
   postprocessing: boolean;
-  collectionInfo: undefined;
+  collectionInfo: { user: { memberId: number } } | undefined;
   onUpdate: (cb: () => void) => () => void;
   continue: () => Promise<void>;
   installRecommended: () => void;
@@ -131,14 +134,14 @@ const setStep = (step: string) => {
   });
 };
 
-const renderDialog = () =>
+const renderDialog = (onClone = vi.fn(), editCollection = vi.fn()) =>
   render(
     <Provider store={store}>
       <InstallFinishedDialog
         api={{ NAMESPACE: "test", events: { emit: vi.fn() }, store } as unknown as IExtensionApi}
         driver={driver as unknown as InstallDriver}
-        editCollection={vi.fn()}
-        onClone={vi.fn()}
+        editCollection={editCollection}
+        onClone={onClone}
       />
     </Provider>,
   );
@@ -163,6 +166,9 @@ const clickFooterButton = async (index: number) => {
 
 beforeEach(() => {
   vi.mocked(findModByRef).mockClear();
+  failures.required = [];
+  failures.optional = [];
+  failures.stalled = false;
   store = createStore(modsReducer);
   for (let i = 0; i < INSTALLED_OPTIONALS; i++) {
     store.dispatch({ type: "ADD_TEST_MOD", payload: makeMod(i) });
@@ -323,5 +329,56 @@ describe("InstallFinishedDialog optional members", () => {
 
     expect(dialogShown()).toBe(false);
     expect(lookups()).toBe(0);
+  });
+
+  it.each(["required failure", "stalled session"])(
+    "keeps the incomplete review actions for a %s",
+    (reason) => {
+      driver.step = "review";
+      driver.collectionInfo = { user: { memberId: 1 } };
+      if (reason === "required failure") failures.required = [{}];
+      else failures.stalled = true;
+      renderDialog();
+
+      expect(dialogShown()).toBe(true);
+      expect(dialog().querySelector(".collection-finished-failures")).not.toBeNull();
+      expect(dialog().querySelector(".collection-finished-optionals")).toBeNull();
+      expect(dialog().querySelector(".collection-can-clone-container")).toBeNull();
+      expect(footerButtons()).toBe(2);
+    },
+  );
+
+  it("keeps the optional offer and failed-member action when a selected optional failed", () => {
+    driver.step = "review";
+    failures.optional = [{}];
+    renderDialog();
+
+    expect(dialogShown()).toBe(true);
+    expect(dialog().querySelector(".collection-finished-failures")).not.toBeNull();
+    expect(dialog().querySelector(".collection-finished-optionals")).not.toBeNull();
+    expect(lookups()).toBe(OPTIONAL_COUNT);
+    expect(footerButtons()).toBe(4);
+  });
+
+  it("offers cloning to the curator only after the remaining optionals are installed", async () => {
+    driver.step = "review";
+    driver.collectionInfo = { user: { memberId: 1 } };
+    const collectionId = driver.collection.id;
+    const onClone = vi.fn().mockResolvedValue("workshop-copy");
+    const editCollection = vi.fn();
+    renderDialog(onClone, editCollection);
+    expect(dialog().querySelector(".collection-can-clone-container")).toBeNull();
+
+    for (let i = INSTALLED_OPTIONALS; i < OPTIONAL_COUNT; i++) addMod(i);
+
+    const cloneControls = dialog().querySelector<HTMLElement>(".collection-can-clone-container");
+    expect(cloneControls).not.toBeNull();
+    expect(dialog().querySelector(".collection-finished-optionals")).toBeNull();
+    await act(async () => {
+      within(cloneControls).getByRole("button").click();
+    });
+    expect(onClone).toHaveBeenCalledWith(collectionId);
+    expect(editCollection).toHaveBeenCalledWith("workshop-copy");
+    expect(driver.continue).toHaveBeenCalledTimes(1);
   });
 });
