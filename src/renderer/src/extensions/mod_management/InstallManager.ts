@@ -18,6 +18,7 @@ import * as _ from "lodash";
 import type { IHashResult, ILookupResult, IRule } from "modmeta-db";
 import Zip from "node-7z";
 import type * as Redux from "redux";
+import { batch } from "redux-act";
 import { generate as shortid } from "shortid";
 
 /**
@@ -105,7 +106,6 @@ import {
   sessionWriteForDependency,
 } from "../../util/collectionSessionWrite";
 import { markCollectionMemberSkipped } from "../../util/collectionSkip";
-import ConcurrencyLimiter from "../../util/ConcurrencyLimiter";
 import {
   DataInvalid,
   NotFound,
@@ -194,10 +194,12 @@ import gatherDependencies, {
 } from "./util/dependencies";
 import filterModInfo from "./util/filterModInfo";
 import { findModByRef } from "./util/findModByRef";
+import { archiveSize, dependencySize, installPriority } from "./util/installOrder";
 import { InstallPhaseTracker, type IDeploymentDetails } from "./util/InstallPhaseTracker";
 import { isFuzzyVersion } from "./util/isFuzzyVersion";
 import metaLookupMatch from "./util/metaLookupMatch";
 import modName, { renderModReference } from "./util/modName";
+import PriorityLimiter from "./util/PriorityLimiter";
 import queryGameId from "./util/queryGameId";
 import { reconcileOrphanedArchive } from "./util/reconcileOrphanedArchive";
 import { selectRequeueCandidates } from "./util/requeueCandidates";
@@ -528,6 +530,10 @@ class InstallManager {
   // install actions) can size their own queue against the same, already-tuned budget instead of
   // picking an unrelated number.
   static readonly MAX_SIMULTANEOUS_INSTALLS = 5;
+  // Installs in flight at once. Only MAX_SIMULTANEOUS_INSTALLS of them extract at a time
+  // (mExtractLimit); the others do the work around extraction (file list, installer, FOMOD,
+  // linking into staging, attributes), so extraction never waits for that work to finish.
+  private static readonly INSTALL_SLOTS = InstallManager.MAX_SIMULTANEOUS_INSTALLS * 2;
   private mApi: IExtensionApi;
   private mInstallers: IModInstaller[] = [];
   private mGetInstallPath: (gameId: string) => string;
@@ -542,7 +548,8 @@ class InstallManager {
   // fetched ahead while a smaller number install. Must stay a DIFFERENT limiter from mInstallLimit
   // because the orchestration acquires a slot here and then calls this.install() (mInstallLimit) -
   // gating both on one limiter would nest it and deadlock the pipeline.
-  private mDependencyPipelineLimit: ConcurrencyLimiter = new ConcurrencyLimiter(10);
+  // Waiting members start largest archive first (see installPriority).
+  private mDependencyPipelineLimit: PriorityLimiter = new PriorityLimiter(10);
 
   // Queues installations for processing - primarily used to keep track of pending installations
   //  for the current dependency phase if/when concurrent download and installation is disabled.
@@ -570,7 +577,16 @@ class InstallManager {
   // installs - every install routes through this.install(), which acquires a slot here. This is
   // the real install-concurrency cap (MAX_SIMULTANEOUS_INSTALLS); it replaces the old sequential
   // mQueue. Dependency orchestration/look-ahead is bounded separately by mDependencyPipelineLimit.
-  private mInstallLimit: ConcurrencyLimiter = new ConcurrencyLimiter(
+  // Waiting installs start in installPriority order: dependencies largest archive first, so the
+  // longest extractions don't run alone at the end of a collection.
+  // Temporary install directories being removed in the background, by lower-cased path.
+  private mTempRemovals: Map<string, Promise<void>> = new Map();
+
+  private mInstallLimit: PriorityLimiter = new PriorityLimiter(InstallManager.INSTALL_SLOTS);
+
+  // Caps how many archives extract at once, across all installs. An install holds a slot here only
+  // while 7z runs, in the same priority order as mInstallLimit.
+  private mExtractLimit: PriorityLimiter = new PriorityLimiter(
     InstallManager.MAX_SIMULTANEOUS_INSTALLS,
   );
 
@@ -656,7 +672,7 @@ class InstallManager {
       // Clear the dependency installs map
       this.mDependencyInstalls = {};
 
-      this.mDependencyPipelineLimit = new ConcurrencyLimiter(10);
+      this.mDependencyPipelineLimit = new PriorityLimiter(10);
 
       // Clear all retry counters
       this.mDependencyRetryCount.clear();
@@ -1260,8 +1276,9 @@ class InstallManager {
     const installingReference = modReference;
 
     // Use parallel installation concurrency limiter instead of sequential mQueue
+    const priority = installPriority(sourceModId, archiveSize(api.getState(), archiveId));
     this.mInstallLimit
-      .do(() => {
+      .doAt(priority, () => {
         return new Promise<string>((resolve, reject) => {
           const installationZip = new Zip();
 
@@ -1720,6 +1737,7 @@ class InstallManager {
                     fileList,
                     unattended,
                     details,
+                    priority,
                   );
                 })
                 .then((result: IInstallResult & { installerId?: string }) => {
@@ -1821,11 +1839,12 @@ class InstallManager {
                   },
                 )
                 .finally(() => {
+                  // The temporary directory holds only links to the staged files. Removing it
+                  // doesn't have to hold up the install; an install into the same path waits for
+                  // it (awaitTempRemoval).
                   if (tempPath !== undefined) {
                     log("debug", "removing temporary path", tempPath);
-                    return fs.removeAsync(tempPath);
-                  } else {
-                    return Promise.resolve();
+                    this.removeTempInBackground(tempPath);
                   }
                 })
                 .then(() => {
@@ -2183,7 +2202,13 @@ class InstallManager {
 
     // a fresh round is a fresh attempt: clear the stalled marker so a retry that succeeds
     // presents as complete (no-op unless modId is the actively-installing collection)
-    api.store.dispatch(markSessionStalled(generateCollectionSessionId(modId, profile.id), false));
+    // The reducer ignores any other session id, so only dispatch when this is the active session:
+    // every collection member passes through here, and a no-op dispatch still runs the whole
+    // middleware and subscriber chain.
+    const stalledSessionId = generateCollectionSessionId(modId, profile.id);
+    if (getCollectionActiveSession(api.getState())?.sessionId === stalledSessionId) {
+      api.store.dispatch(markSessionStalled(stalledSessionId, false));
+    }
 
     const aggregationId = `install-dependencies-${modId}`;
     this.mNotificationAggregator.startAggregation(
@@ -2469,7 +2494,7 @@ class InstallManager {
     // MAX_SIMULTANEOUS_INSTALLS by that inner mInstallLimit; this outer limiter only bounds
     // how many downloaded dependencies are orchestrated/queued ahead.
     this.mDependencyPipelineLimit
-      .do(async () => {
+      .doAt(dependencySize(api.getState(), dep, downloadId), async () => {
         const startTime = Date.now();
 
         // Track this dependency installation
@@ -3880,12 +3905,46 @@ class InstallManager {
     return lowered.includes("not enough space") || lowered.includes("enospc");
   }
 
+  /**
+   * remove an install's temporary directory without waiting for it. Removals of one path run one
+   * after the other, and a failure is logged: the directory is only links to staged files, and the
+   * next install into it clears it first.
+   */
+  private removeTempInBackground(tempPath: string): void {
+    const key = tempPath.toLowerCase();
+    const removal: Promise<void> = (this.mTempRemovals.get(key) ?? Promise.resolve())
+      .then(() => fs.removeAsync(tempPath))
+      .then(
+        () => undefined,
+        (err: unknown) => {
+          log("warn", "failed to remove temporary path", {
+            tempPath,
+            error: getErrorMessageOrDefault(err),
+          });
+        },
+      )
+      .finally(() => {
+        if (this.mTempRemovals.get(key) === removal) {
+          this.mTempRemovals.delete(key);
+        }
+      });
+    this.mTempRemovals.set(key, removal);
+  }
+
+  /**
+   * resolves once no background removal of this temporary directory is running
+   */
+  private awaitTempRemoval(tempPath: string): Promise<void> {
+    return this.mTempRemovals.get(tempPath.toLowerCase()) ?? Promise.resolve();
+  }
+
   private extractWithRetry(
     zip: Zip,
     archivePath: string,
     tempPath: string,
     progress: (files: string[], percent: number) => void,
     queryPassword: () => PromiseLike<string>,
+    priority: number = Number.MAX_SAFE_INTEGER,
     maxRetries: number = 3,
     retryDelayMs: number = 1000,
   ): Promise<{ code: number; errors: string[] }> {
@@ -3918,35 +3977,48 @@ class InstallManager {
       //     errors[Math.floor(Math.random() * errors.length)](),
       //   );
       // }
-      // clean up any stale temp directory from a previous failed attempt
-      return Promise.resolve(fs.removeAsync(tempPath)).then(() =>
-        Promise.resolve(
-          zip
-            .extractFull(archivePath, tempPath, { ssc: false }, progress, queryPassword as any)
-            .then((result: { code: number; errors: string[] }) => {
-              // 7z can resolve (not reject) with a non-zero exit code and
-              // file-in-use errors. Retry in that case instead of proceeding
-              // with a partial extraction.
-              if (result.code !== 0) {
-                return retryIfFileInUse(result.errors ?? []) ?? result;
-              }
-              return result;
-            })
-            .catch((err) => {
-              const error = unknownToError(err);
-              return (
-                retryIfFileInUse([error.message]) ??
-                (this.isCritical(error.message)
-                  ? Promise.reject(
-                      new ArchiveBrokenError(path.basename(archivePath), error.message),
-                    )
-                  : Promise.reject(error))
-              );
-            }),
-        ),
-      );
+      // clean up any stale temp directory from a previous failed attempt, after a background
+      // removal of the same path has finished
+      return this.awaitTempRemoval(tempPath)
+        .then(() => fs.removeAsync(tempPath))
+        .then(() =>
+          Promise.resolve(
+            zip
+              .extractFull(archivePath, tempPath, { ssc: false }, progress, queryPassword as any)
+              .then((result: { code: number; errors: string[] }) => {
+                // 7z can resolve (not reject) with a non-zero exit code and
+                // file-in-use errors. Retry in that case instead of proceeding
+                // with a partial extraction.
+                if (result.code !== 0) {
+                  return retryIfFileInUse(result.errors ?? []) ?? result;
+                }
+                return result;
+              })
+              .catch((err) => {
+                const error = unknownToError(err);
+                return (
+                  retryIfFileInUse([error.message]) ??
+                  (this.isCritical(error.message)
+                    ? Promise.reject(
+                        new ArchiveBrokenError(path.basename(archivePath), error.message),
+                      )
+                    : Promise.reject(error))
+                );
+              }),
+          ),
+        );
     };
-    return attemptExtract(maxRetries);
+    return this.mExtractLimit.doAt(priority, () => {
+      // extractionTimeMs (installInner) includes the wait for a slot; this is the 7z run alone
+      const start = Date.now();
+      log("debug", "extraction slot acquired", { archivePath: path.basename(archivePath) });
+      return attemptExtract(maxRetries).finally(() => {
+        log("debug", "extraction slot released", {
+          archivePath: path.basename(archivePath),
+          durationMs: Date.now() - start,
+        });
+      });
+    });
   }
 
   /**
@@ -3965,6 +4037,7 @@ class InstallManager {
     extractList?: IFileListItem[],
     unattended?: boolean,
     details?: IInstallationDetails,
+    extractPriority?: number,
   ): Promise<IInstallResult> {
     let fileList: string[] = [];
     let phase = "Extracting";
@@ -3982,8 +4055,13 @@ class InstallManager {
         new ArchiveBrokenError(path.basename(archivePath), "file type on avoidlist"),
       );
     } else {
-      extractProm = this.extractWithRetry(installationZip, archivePath, tempPath, progress, () =>
-        this.queryPassword(api.store),
+      extractProm = this.extractWithRetry(
+        installationZip,
+        archivePath,
+        tempPath,
+        progress,
+        () => this.queryPassword(api.store),
+        extractPriority,
       );
       (extractProm as any).startTime = extractionStart;
     }
@@ -5756,10 +5834,6 @@ class InstallManager {
       return;
     }
 
-    if (extra.type !== undefined) {
-      api.store.dispatch(setModType(gameId, modId, extra.type));
-    }
-
     const attributes = {};
 
     if (extra.name !== undefined) {
@@ -5798,7 +5872,14 @@ class InstallManager {
       attributes["installerChoices"] = extra.installerChoices;
     }
 
-    api.store.dispatch(setModAttributes(gameId, modId, attributes));
+    // One synchronous batch instead of two dispatches: same actions, same order, same final
+    // state, but the subscriber chain runs once per collection member instead of twice.
+    const setAttributes = setModAttributes(gameId, modId, attributes);
+    if (extra.type !== undefined) {
+      api.store.dispatch(batch([setModType(gameId, modId, extra.type), setAttributes]));
+    } else {
+      api.store.dispatch(setAttributes);
+    }
   }
 
   private dropUnfulfilled(
@@ -7508,7 +7589,11 @@ class InstallManager {
     //  - unlink sources in parallel after successful transfers
     const sorted = copies.slice().sort((a, b) => a.destination.length - b.destination.length);
     const dirs = new Set<string>();
-    const jobs: Array<{ src: string; dst: string; rel: string }> = [];
+    // one job per destination: the files are linked in parallel, so with several instructions for
+    // one destination (a FOMOD installing two variants of a texture to the same path) the winner
+    // was whichever finished last. The last instruction wins, as when files were copied in order.
+    const jobsByDst = new Map<string, { src: string; dst: string; rel: string }>();
+    const dstKey = (dst: string) => (process.platform === "win32" ? dst.toLowerCase() : dst);
     const missingFiles = new Set<string>();
 
     const copyAsyncWrap = async (src: string, dst: string) => {
@@ -7534,7 +7619,18 @@ class InstallManager {
       const src = path.join(tempPath, copy.source);
       const dst = path.join(destinationPath, copy.destination);
       dirs.add(path.dirname(dst));
-      jobs.push({ src, dst, rel: copy.destination });
+      const key = dstKey(dst);
+      // delete first so the replacement also takes the later position
+      jobsByDst.delete(key);
+      jobsByDst.set(key, { src, dst, rel: copy.destination });
+    }
+    const jobs = Array.from(jobsByDst.values());
+    if (jobs.length < sorted.length - folderCopies.length) {
+      log("debug", "installer produced several instructions for the same destination", {
+        archivePath: path.basename(archivePath),
+        instructions: sorted.length - folderCopies.length,
+        destinations: jobs.length,
+      });
     }
     if (folderCopies.length > 0) {
       log("warn", "installer generated copy instructions for directories, these will be skipped", {

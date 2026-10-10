@@ -5,6 +5,7 @@ import { getGame } from "../../gamemode_management/util/getGame";
 import { activeGameId } from "../../profile_management/selectors";
 import type { IDeploymentMethod } from "../types/IDeploymentMethod";
 import allTypesSupported from "./allTypesSupported";
+import { withProbeScope } from "./probeScope";
 
 const activators: IDeploymentMethod[] = [];
 
@@ -28,6 +29,10 @@ export function getAllActivators(): IDeploymentMethod[] {
  * @returns {IDeploymentMethod[]}
  */
 export function getSupportedActivators(state: IState): IDeploymentMethod[] {
+  return withProbeScope(() => supportedActivators(state));
+}
+
+function supportedActivators(state: IState): IDeploymentMethod[] {
   const gameId = activeGameId(state);
   const discovery = state.settings.gameMode.discovered[gameId];
   if (discovery === undefined || discovery.path === undefined) {
@@ -52,11 +57,19 @@ export function getSelectedActivator(state: IState, gameId: string): IDeployment
     : undefined;
 }
 
+/**
+ * the deployment method in use for `gameId`: the selected one, or with `allowDefault` the first
+ * that supports every mod type. The support checks of one call share their staging folder probes.
+ */
 export function getCurrentActivator(
   state: IState,
   gameId: string,
   allowDefault: boolean,
 ): IDeploymentMethod {
+  return withProbeScope(() => currentActivator(state, gameId, allowDefault));
+}
+
+function currentActivator(state: IState, gameId: string, allowDefault: boolean): IDeploymentMethod {
   let activator: IDeploymentMethod = getSelectedActivator(state, gameId);
 
   const gameDiscovery = getSafe(state, ["settings", "gameMode", "discovered", gameId], undefined);

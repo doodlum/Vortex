@@ -61,6 +61,7 @@ import {
   buildCollectionItemRows,
   collectRemovalTargets,
   isRemovableItem,
+  makeRowFallbackCache,
 } from "../../installSession/itemRows";
 import type InstallDriver from "../../util/InstallDriver";
 import CollectionInstructions from "./CollectionInstructions";
@@ -1040,6 +1041,8 @@ function makeMapStateToProps(): (state: IState, ownProps: ICollectionPageProps) 
   // that only advances bytes rebuilds to a reference-equal map and connect skips the render.
   // Download state transitions (paused/failed/finished) flow through because they change row content.
   let lastRows: Record<string, ICollectionItemRow> = {};
+  // lets a rebuild search only the mods that changed for members it could not resolve last time
+  const fallbackCache = makeRowFallbackCache();
   const getItemRows = createSelector(
     (_state: IState, ownProps: ICollectionPageProps) => ownProps.collection?.rules,
     (state: IState, ownProps: ICollectionPageProps) =>
@@ -1053,6 +1056,7 @@ function makeMapStateToProps(): (state: IState, ownProps: ICollectionPageProps) 
       lastRows = buildCollectionItemRows(
         { rules: rules ?? [], mods, downloads, modState, sessionMods },
         lastRows,
+        fallbackCache,
       );
       return lastRows;
     },

@@ -97,6 +97,11 @@ export type DownloadProgress = Progress & {
   size: number | undefined;
   /** Filename from Content-Disposition header. Undefined until the probe response is received. */
   fileName: string | undefined;
+  /**
+   * MD5 (hex) of the finished file, computed while it was written. Absent when it could not be
+   * (a resumed download, chunks rewritten or too far out of order): hash the file instead.
+   */
+  md5?: string;
 } & ({ isChunked: false } | { isChunked: true; chunks: ChunkProgress[] });
 
 export type DownloadCheckpoint<T = unknown> = {

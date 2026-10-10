@@ -250,10 +250,14 @@ export class DownloadManager {
     // The consumer-facing promise. Cancellation rejections are swallowed so
     // that callers awaiting only pause() don't see unhandled rejections.
     // Non-cancellation errors still reject.
-    const promise = rawPromise.catch((err) => {
-      if (parseError(err).data.kind === "user-canceled") return;
-      throw err;
-    });
+    // the MD5 reaches callers through the progress reporter's state (getState)
+    const promise = rawPromise.then(
+      () => undefined,
+      (err) => {
+        if (parseError(err).data.kind === "user-canceled") return;
+        throw err;
+      },
+    );
 
     let terminalError: VortexError | null = null;
 
