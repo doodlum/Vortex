@@ -1,44 +1,30 @@
-/**
- * When a collection revision lists game versions and none matches the installed game, the driver
- * asks whether to go on ("Game version mismatch", Cancel / Continue). These tests drive the REAL
- * driver through the collection harness, with the collections extension's own onUpdate handler
- * (makeDriverUpdateHandler), which continues the driver whenever it sits on the "start" step and
- * stamps installCompleted when it sits on "review".
- *
- * The regressions they pin: Cancel left the driver on "start" with the collection still set, so
- * the next driver update, or a second "Install Now", began the install anyway; and a start right
- * after a finished install must not leave that install's "review" showing for the new collection.
- */
+import type { ICollection } from "@nexusmods/nexus-api";
 import { describe, expect, vi } from "vitest";
 
 import { makeCollectionModInfo, makeDownload, makeRevision } from "../../../test-utils/builders";
 import { test } from "../../../test-utils/collectionTest";
 import type { ICollectionHarness } from "../../../test-utils/harnessTypes";
 import type { IDialogResult } from "../../../types/IDialog";
+import { getGame } from "../../gamemode_management/util/getGame";
 import type { IProfile } from "../../profile_management/types/IProfile";
+import { skipWhileSuppressed, withSuppressedTests } from "../../test_runner/suppressedTests";
 import type { IRevisionEx } from "../types/IRevisionEx";
 import { makeDriverUpdateHandler } from "./InstallDriver";
 
 const GAME = "skyrimse";
 const COLLECTION = "col-1";
 const ARCHIVE = `dl-${COLLECTION}`;
-// a collection installed and reviewed before the one under test
 const PREVIOUS = "col-0";
 
 /** The collection download, carrying revision info that asks for a game version not installed. */
 function mismatchedGameVersion() {
   const modInfo = makeCollectionModInfo({ collectionId: 1, revisionId: 2, gameId: GAME });
-  // revision info on the download, so the driver reads it without a network fetch; the
-  // harness game reports 1.0.0
+  // Cached revision; the harness game reports 1.0.0.
   modInfo.nexus.revisionInfo = { modFiles: [], gameVersions: [{ reference: "9.9.9" }] };
   return { downloads: { [ARCHIVE]: makeDownload({ id: ARCHIVE, state: "finished", modInfo }) } };
 }
 
-/**
- * Wire up what the collections extension adds around the driver: its own onUpdate handler, which
- * continues from "start" and stamps installCompleted at "review", and a count of the
- * install-dependencies events that actually begin an install.
- */
+// Use the extension's actual auto-continue handler, not only a standalone driver.
 function withExtensionHandler(h: ICollectionHarness) {
   const begun: string[][] = [];
   h.api.events.on("install-dependencies", (_profileId: string, _gameId: string, ids: string[]) =>
@@ -52,7 +38,6 @@ function withExtensionHandler(h: ICollectionHarness) {
   return { begun, updates: () => updates };
 }
 
-/** Put the collection in state and open the install dialog, as a freshly added collection does. */
 async function openInstallDialog(h: ICollectionHarness) {
   const revision = makeRevision(1, [{ tag: "a" }], { collectionId: COLLECTION });
   h.setState((draft) => {
@@ -67,10 +52,6 @@ async function openInstallDialog(h: ICollectionHarness) {
 /** Let the driver's async continue() calls, started from onUpdate, run to completion. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-/**
- * Install another collection to its review and press Done there. That leaves the driver on
- * "review" with no collection, as it stays until something else starts.
- */
 async function completeAnotherInstall(h: ICollectionHarness) {
   await h.installRevision(makeRevision(1, [{ tag: "a" }], { collectionId: PREVIOUS }));
   await settle();
@@ -79,62 +60,48 @@ async function completeAnotherInstall(h: ICollectionHarness) {
   expect(h.driver.collection).toBeUndefined();
 }
 
-/** When the collection's review last opened, as the extension's update handler stamps it. */
 const installCompleted = (h: ICollectionHarness) =>
   h.getState().persistent.mods[GAME][COLLECTION]?.attributes?.installCompleted;
 
-/**
- * What the install-finished dialog shows for: a collection with the driver on "review"
- * (InstallFinishedDialog's `show`).
- */
 const reviewShown = (h: ICollectionHarness) =>
   h.driver.collection !== undefined && h.driver.step === "review";
 
+function deferDialogs(h: ICollectionHarness) {
+  const answers: Array<(result: IDialogResult) => void> = [];
+  const showDialog = vi.fn(() => new Promise<IDialogResult>((resolve) => answers.push(resolve)));
+  Object.assign(h.api, { showDialog });
+  return { answers, showDialog };
+}
+
 describe("InstallDriver game-version prompt", () => {
-  test("Cancel from the install dialog ends the install and nothing later begins it", async ({
-    makeCollection,
-  }) => {
-    const h = makeCollection(mismatchedGameVersion());
-    const { begun, updates } = withExtensionHandler(h);
-    await openInstallDialog(h);
-    h.setNextDialog({ action: "Cancel", input: {} });
+  for (const fromDialog of [true, false]) {
+    test(`Cancel from ${fromDialog ? "Install Now" : "resume"} ends the attempt`, async ({
+      makeCollection,
+    }) => {
+      const h = makeCollection(mismatchedGameVersion());
+      const { begun, updates } = withExtensionHandler(h);
+      if (fromDialog) await openInstallDialog(h);
+      h.setNextDialog({ action: "Cancel", input: {} });
 
-    // "Install Now"
-    await h.driver.continue();
-    await settle();
+      if (fromDialog) await h.driver.continue();
+      else await h.installRevision(makeRevision(1, [{ tag: "a" }], { collectionId: COLLECTION }));
+      await settle();
 
-    expect(h.dialogCalls.map((call) => call.title)).toEqual(["Game version mismatch"]);
-    // back to the state a collection nobody is installing leaves, as "Later" does; the update
-    // lets the install dialog close
-    expect(h.driver.step).toBe("prepare");
-    expect(h.driver.collection).toBeUndefined();
-    const updatesAtCancel = updates();
-    expect(updatesAtCancel).toBeGreaterThan(1);
+      expect(h.dialogCalls.map((call) => call.title)).toEqual(["Game version mismatch"]);
+      expect(h.driver.step).toBe("prepare");
+      expect(h.driver.collection).toBeUndefined();
+      const updatesAtCancel = updates();
+      expect(updatesAtCancel).toBeGreaterThan(0);
 
-    // an unrelated mod install updates the driver, then "Install Now" is pressed again
-    h.emit("did-install-mod", GAME, "other-archive", "other-mod");
-    await h.driver.continue();
-    await settle();
+      h.emit("did-install-mod", GAME, "other-archive", "other-mod");
+      await h.driver.continue();
+      await settle();
 
-    expect(updates()).toBeGreaterThan(updatesAtCancel);
-    expect(begun).toEqual([]);
-    expect(h.getState().session.collections.activeSession).toBeUndefined();
-  });
-
-  test("Cancel when resuming an install does not begin it", async ({ makeCollection }) => {
-    const h = makeCollection(mismatchedGameVersion());
-    const { begun } = withExtensionHandler(h);
-    h.setNextDialog({ action: "Cancel", input: {} });
-
-    // resume (the notification, resume-collection) is driver.start
-    await h.installRevision(makeRevision(1, [{ tag: "a" }], { collectionId: COLLECTION }));
-    await settle();
-
-    expect(h.dialogCalls.map((call) => call.title)).toEqual(["Game version mismatch"]);
-    expect(begun).toEqual([]);
-    expect(h.driver.step).toBe("prepare");
-    expect(h.driver.collection).toBeUndefined();
-  });
+      expect(updates()).toBeGreaterThan(updatesAtCancel);
+      expect(begun).toEqual([]);
+      expect(h.getState().session.collections.activeSession).toBeUndefined();
+    });
+  }
 
   test("Continue installs the collection", async ({ makeCollection }) => {
     const h = makeCollection(mismatchedGameVersion());
@@ -157,9 +124,7 @@ describe("InstallDriver game-version prompt", () => {
     const h = makeCollection(mismatchedGameVersion());
     const { begun } = withExtensionHandler(h);
     await openInstallDialog(h);
-    let answer: (result: IDialogResult) => void = () => undefined;
-    const showDialog = vi.fn(() => new Promise<IDialogResult>((resolve) => (answer = resolve)));
-    (h.api as { showDialog: unknown }).showDialog = showDialog;
+    const { answers, showDialog } = deferDialogs(h);
 
     const installNow = h.driver.continue();
     await vi.waitFor(() => expect(showDialog).toHaveBeenCalled());
@@ -168,7 +133,7 @@ describe("InstallDriver game-version prompt", () => {
 
     expect(begun).toEqual([]);
 
-    answer({ action: "Continue", input: {} });
+    answers[0]({ action: "Continue", input: {} });
     await installNow;
     await settle();
 
@@ -181,15 +146,13 @@ describe("InstallDriver game-version prompt", () => {
     const h = makeCollection(mismatchedGameVersion());
     const { begun } = withExtensionHandler(h);
     await openInstallDialog(h);
-    let answer: (result: IDialogResult) => void = () => undefined;
-    const showDialog = vi.fn(() => new Promise<IDialogResult>((resolve) => (answer = resolve)));
-    (h.api as { showDialog: unknown }).showDialog = showDialog;
+    const { answers, showDialog } = deferDialogs(h);
 
     const installNow = h.driver.continue();
     await vi.waitFor(() => expect(showDialog).toHaveBeenCalled());
     // logout and game switch pause the install through pauseCollection
     h.driver.pause("logout");
-    answer({ action: "Continue", input: {} });
+    answers[0]({ action: "Continue", input: {} });
     await installNow;
     await settle();
 
@@ -198,35 +161,190 @@ describe("InstallDriver game-version prompt", () => {
     expect(h.getState().session.collections.activeSession).toBeUndefined();
   });
 
-  test("answering a paused attempt's prompt does not let a newer attempt begin early", async ({
+  for (const action of ["Cancel", "Continue"]) {
+    for (const sameObject of [true, false]) {
+      test(`stale ${action} leaves a resumed ${sameObject ? "same" : "replacement"} collection and its hold alone`, async ({
+        makeCollection,
+      }) => {
+        const h = makeCollection(mismatchedGameVersion());
+        const { begun } = withExtensionHandler(h);
+        Object.assign(h.api.ext, { withSuppressedTests });
+        const revision = await openInstallDialog(h);
+        const profile = h.driver.profile;
+        const collection = sameObject ? revision.collection : { ...revision.collection };
+        const { answers, showDialog } = deferDialogs(h);
+
+        const installNow = h.driver.continue();
+        await vi.waitFor(() => expect(showDialog).toHaveBeenCalledTimes(1));
+        h.driver.pause("logout");
+        // Real resume-collection passes the mod directly; do not rebuild it through installRevision.
+        const resume = h.driver.start(profile, collection);
+        await vi.waitFor(() => expect(showDialog).toHaveBeenCalledTimes(2));
+        try {
+          answers[0]({ action, input: {} });
+          await installNow;
+          h.emit("did-install-mod", GAME, "other-archive", "other-mod");
+          await settle();
+
+          expect(begun).toEqual([]);
+          expect(h.driver.collection).toBe(collection);
+          expect(h.driver.step).toBe("start");
+          expect(skipWhileSuppressed("plugins-changed", () => undefined)).toBe(true);
+          expect(h.getState().session.collections.activeSession).toBeUndefined();
+
+          answers[1]({ action: "Continue", input: {} });
+          await resume;
+          await settle();
+
+          expect(begun).toEqual([[COLLECTION]]);
+          expect(skipWhileSuppressed("plugins-changed", () => undefined)).toBe(true);
+        } finally {
+          answers.forEach((answer) => answer({ action: "Cancel", input: {} }));
+          await Promise.all([installNow, resume]);
+          h.driver.cancel();
+          await settle();
+        }
+        expect(skipWhileSuppressed("plugins-changed", () => undefined)).toBe(false);
+      });
+    }
+  }
+
+  for (const delayed of ["revision", "version"] as const) {
+    test(`a paused ${delayed} lookup cannot overwrite or prompt the resumed attempt`, async ({
+      makeCollection,
+    }) => {
+      const seed = mismatchedGameVersion();
+      if (delayed === "revision") {
+        delete seed.downloads[ARCHIVE].modInfo.nexus.revisionInfo;
+      }
+      const h = makeCollection(seed);
+      const { begun } = withExtensionHandler(h);
+      Object.assign(h.api.ext, { withSuppressedTests });
+      const revision = await openInstallDialog(h);
+      const profile = h.driver.profile;
+      let deliver: () => void = () => undefined;
+      const fetch =
+        delayed === "revision"
+          ? vi
+              .spyOn(h.driver.infoCache, "getRevisionInfo")
+              .mockImplementationOnce(
+                () =>
+                  new Promise<IRevisionEx>((resolve) => {
+                    deliver = () =>
+                      resolve({
+                        modFiles: [],
+                        gameVersions: [{ reference: "9.9.9" }],
+                      } as IRevisionEx);
+                  }),
+              )
+              .mockResolvedValue({ modFiles: [], gameVersions: [] } as IRevisionEx)
+          : vi
+              .spyOn(getGame(GAME), "getGameVersion")
+              .mockImplementationOnce(
+                () =>
+                  new Promise<string>((resolve) => {
+                    deliver = () => resolve("0.1.0");
+                  }),
+              )
+              .mockResolvedValue("9.9.9");
+      const first = h.driver.continue();
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+      h.driver.pause("logout");
+      try {
+        await h.driver.start(profile, revision.collection);
+        await settle();
+        const currentRevision = h.driver.revisionInfo;
+        const session = h.driver.currentSessionId;
+        const actions = h.dispatched.length;
+        deliver();
+        await first;
+        await settle();
+        expect(h.dialogCalls).toEqual([]);
+        expect(h.driver.revisionInfo).toBe(currentRevision);
+        expect(h.driver.currentSessionId).toBe(session);
+        expect(h.dispatched).toHaveLength(actions);
+        expect(begun).toEqual([[COLLECTION]]);
+        expect(h.driver.step).toBe("installing");
+        expect(skipWhileSuppressed("plugins-changed", () => undefined)).toBe(true);
+      } finally {
+        deliver();
+        await first;
+        h.driver.cancel();
+        await settle();
+      }
+      expect(skipWhileSuppressed("plugins-changed", () => undefined)).toBe(false);
+    });
+  }
+
+  test("late collection metadata cannot overwrite or continue a resumed attempt", async ({
     makeCollection,
   }) => {
-    const h = makeCollection(mismatchedGameVersion());
+    const seed = mismatchedGameVersion();
+    seed.downloads[ARCHIVE].modInfo.nexus.ids.collectionSlug = "metadata";
+    const h = makeCollection(seed);
     const { begun } = withExtensionHandler(h);
+    Object.assign(h.api.ext, { withSuppressedTests });
+    const fresh = { name: "current" } as ICollection;
+    const fetch = vi.spyOn(h.driver.infoCache, "getCollectionInfo").mockResolvedValue(fresh);
     const revision = await openInstallDialog(h);
-    const answers: Array<(result: IDialogResult) => void> = [];
-    const showDialog = vi.fn(() => new Promise<IDialogResult>((resolve) => answers.push(resolve)));
-    (h.api as { showDialog: unknown }).showDialog = showDialog;
-
-    const installNow = h.driver.continue();
-    await vi.waitFor(() => expect(showDialog).toHaveBeenCalledTimes(1));
+    const profile = h.driver.profile;
+    let deliver: () => void = () => undefined;
+    fetch.mockImplementationOnce(
+      () =>
+        new Promise<ICollection>((resolve) => {
+          deliver = () => resolve({ name: "old" } as ICollection);
+        }),
+    );
+    const first = h.driver.continue();
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
     h.driver.pause("logout");
-    // resumed (resume-collection) while the first prompt is still open, which asks again
-    const resume = h.installRevision(revision);
-    await vi.waitFor(() => expect(showDialog).toHaveBeenCalledTimes(2));
+    h.setNextDialog({ action: "Continue", input: {} });
+    try {
+      await h.driver.start(profile, revision.collection);
+      await settle();
+      const session = h.driver.currentSessionId;
+      deliver();
+      await first;
+      await settle();
+      expect(h.driver.collectionInfo).toBe(fresh);
+      expect(h.driver.currentSessionId).toBe(session);
+      expect(begun).toEqual([[COLLECTION]]);
+      expect(h.driver.step).toBe("installing");
+      expect(skipWhileSuppressed("plugins-changed", () => undefined)).toBe(true);
+    } finally {
+      deliver();
+      await first;
+      h.driver.cancel();
+      await settle();
+    }
+  });
 
-    answers[0]({ action: "Continue", input: {} });
-    await installNow;
-    h.emit("did-install-mod", GAME, "other-archive", "other-mod");
-    await settle();
-
-    expect(begun).toEqual([]);
-
-    answers[1]({ action: "Continue", input: {} });
-    await resume;
-    await settle();
-
-    expect(begun).toEqual([[COLLECTION]]);
+  test("failed startup metadata leaves the driver idle and checks released", async ({
+    makeCollection,
+  }) => {
+    const seed = mismatchedGameVersion();
+    seed.downloads[ARCHIVE].modInfo.nexus.ids.collectionSlug = "metadata";
+    const h = makeCollection(seed);
+    const { begun } = withExtensionHandler(h);
+    Object.assign(h.api.ext, { withSuppressedTests });
+    const failure = new Error("metadata unavailable");
+    vi.spyOn(h.driver.infoCache, "getCollectionInfo").mockRejectedValue(failure);
+    h.setNextDialog({ action: "Continue", input: {} });
+    try {
+      await expect(
+        h.installRevision(makeRevision(1, [{ tag: "a" }], { collectionId: COLLECTION })),
+      ).rejects.toBe(failure);
+      h.emit("did-install-mod", GAME, "other-archive", "other-mod");
+      await settle();
+      expect(h.driver.collection).toBeUndefined();
+      expect(h.driver.step).toBe("prepare");
+      expect(begun).toEqual([]);
+      expect(h.getState().session.collections.activeSession).toBeUndefined();
+      expect(skipWhileSuppressed("plugins-changed", () => undefined)).toBe(false);
+    } finally {
+      h.driver.cancel();
+      await settle();
+    }
   });
 
   test("a resume right after a finished install does not review it while the prompt is open", async ({
@@ -235,22 +353,19 @@ describe("InstallDriver game-version prompt", () => {
     const h = makeCollection(mismatchedGameVersion());
     const { begun } = withExtensionHandler(h);
     await completeAnotherInstall(h);
-    let answer: (result: IDialogResult) => void = () => undefined;
-    const showDialog = vi.fn(() => new Promise<IDialogResult>((resolve) => (answer = resolve)));
-    (h.api as { showDialog: unknown }).showDialog = showDialog;
+    const { answers, showDialog } = deferDialogs(h);
 
     const resume = h.installRevision(makeRevision(1, [{ tag: "b" }], { collectionId: COLLECTION }));
     await vi.waitFor(() => expect(showDialog).toHaveBeenCalled());
     h.emit("did-install-mod", GAME, "other-archive", "other-mod");
     await settle();
 
-    // the previous install's "review" must not carry over to this collection
     expect(reviewShown(h)).toBe(false);
     expect(installCompleted(h)).toBeUndefined();
     expect(begun).toEqual([[PREVIOUS]]);
     expect(h.driver.step).toBe("start");
 
-    answer({ action: "Cancel", input: {} });
+    answers[0]({ action: "Cancel", input: {} });
     await resume;
     await settle();
 

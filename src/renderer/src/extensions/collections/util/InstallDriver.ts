@@ -103,6 +103,7 @@ class InstallDriver {
   // set while an attempt to start is still preparing the install (revision info, the game-version
   // prompt); the step is already "start" then, but nothing may begin the install yet
   private mStarting: object | undefined;
+  private mAttempt: object | undefined;
 
   // Throttle the progress notification to avoid flooding Redux/UI on every single mod
   // event. (Session status writes are dispatched directly now - InstallManager is the
@@ -384,8 +385,11 @@ class InstallDriver {
     this.mLastCollection = this.mCollection = collection;
     this.mGameId = profile?.gameId ?? activeGameId(this.mApi.getState());
     this.mStep = "query";
+    const attempt = (this.mAttempt = {});
     await this.initCollectionInfo();
-    this.triggerUpdate();
+    if (this.mAttempt === attempt) {
+      this.triggerUpdate();
+    }
   }
 
   public async start(profile: IProfile, collection: IMod) {
@@ -410,10 +414,9 @@ class InstallDriver {
     this.mLastCollection = this.mCollection = collection;
     this.mGameId = profile?.gameId ?? activeGameId(this.mApi.getState());
 
-    await this.startAttempt();
-    await this.initCollectionInfo();
-
-    this.triggerUpdate();
+    if ((await this.startAttempt()) !== false) {
+      this.triggerUpdate();
+    }
   }
 
   // returns a disposer that unregisters the handler. Callers (React components) MUST call it on
@@ -579,7 +582,12 @@ class InstallDriver {
 
   public async continue() {
     if (this.canContinue() && this.mCollection?.archiveId !== undefined) {
+      const attempt = this.mAttempt;
+      const step = this.mStep;
       await this.initCollectionInfo();
+      if (this.mAttempt !== attempt || this.mStep !== step || !this.canContinue()) {
+        return;
+      }
 
       const steps = {
         query: this.startAttempt,
@@ -623,9 +631,15 @@ class InstallDriver {
   /** startInstall, marked as preparing until it returns, which "start" waits for (canContinue) */
   private startAttempt = async () => {
     const attempt = {};
+    this.mAttempt = attempt;
     this.mStarting = attempt;
     try {
-      return await this.startInstall();
+      return await this.startInstall(attempt);
+    } catch (err) {
+      if (this.mAttempt === attempt) {
+        this.cancel();
+      }
+      throw err;
     } finally {
       // a later attempt, begun while this one's prompt was open, keeps its own mark
       if (this.mStarting === attempt) {
@@ -646,7 +660,8 @@ class InstallDriver {
     const state: IState = this.mApi.store.getState();
     const modInfo = state.persistent.downloads.files[this.mCollection.archiveId]?.modInfo;
     const nexusInfo = modInfo?.nexus;
-    this.mCollectionInfo =
+    const attempt = this.mAttempt;
+    const info =
       nexusInfo?.collectionInfo ??
       (await this.mInfoCache.getCollectionInfo(slug)) ??
       // this last fallback is for the weird case where we have revision info cached but
@@ -655,6 +670,9 @@ class InstallDriver {
       // Not sure if/why this would happen on live, it did occur during testing because the
       // stuff was getting deleted from the DB directly
       this.mRevisionInfo?.collection;
+    if (this.mAttempt === attempt) {
+      this.mCollectionInfo = info;
+    }
   }
 
   /**
@@ -787,6 +805,7 @@ class InstallDriver {
     outcome: "cancelled" | "paused" = "cancelled",
     context: CollectionInstallOutcomeContext = {},
   ) {
+    this.mAttempt = this.mStarting = undefined;
     this.mPostprocessing = false;
     if (this.mCollection !== undefined) {
       this.mApi.dismissNotification(INSTALLING_NOTIFICATION_ID + this.mCollection.id);
@@ -816,34 +835,42 @@ class InstallDriver {
     this.mOnStop?.();
   }
 
-  private startInstall = async () => {
+  private startInstall = async (attempt: object) => {
     // a restarted install replaces the hold it already has
     this.mOnStop?.();
+    let release: (() => void) | undefined;
     // hold off the checks while the collection installs
     this.mApi.ext.withSuppressedTests?.(
       ["plugins-changed", "settings-changed", "mod-activated", "mod-installed"],
       () =>
         new Promise<void>((resolve) => {
-          this.mOnStop = () => {
+          release = () => {
             resolve();
-            this.mOnStop = undefined;
+            if (this.mOnStop === release) {
+              this.mOnStop = undefined;
+            }
           };
+          this.mOnStop = release;
         }),
     );
 
     // release when the install never starts
-    let started: boolean | undefined = false;
+    let started = false;
     try {
-      started = await this.startImpl();
+      if ((await this.startImpl(attempt)) === false || this.mAttempt !== attempt) {
+        return false;
+      }
+      await this.initCollectionInfo();
+      started = this.mAttempt === attempt;
       return started;
     } finally {
       if (started === false) {
-        this.mOnStop?.();
+        release?.();
       }
     }
   };
 
-  private startImpl = async () => {
+  private startImpl = async (attempt: object) => {
     if (this.mCollection?.archiveId === undefined || this.mProfile === undefined) {
       return false;
     }
@@ -877,17 +904,25 @@ class InstallDriver {
 
     const slug = this.collectionSlug;
     const revisionId = this.revisionId;
+    const revisionNumber = this.revisionNumber;
 
     if (revisionId !== undefined) {
       try {
-        this.mRevisionInfo = Array.isArray(nexusInfo?.revisionInfo?.modFiles)
+        const revisionInfo = Array.isArray(nexusInfo?.revisionInfo?.modFiles)
           ? nexusInfo.revisionInfo
-          : await this.mInfoCache.getRevisionInfo(revisionId, slug, this.revisionNumber);
+          : await this.mInfoCache.getRevisionInfo(revisionId, slug, revisionNumber);
+        if (this.mAttempt !== attempt) {
+          return false;
+        }
+        this.mRevisionInfo = revisionInfo;
       } catch (err) {
+        if (this.mAttempt !== attempt) {
+          return false;
+        }
         log("error", "failed to get remote info for revision", {
           revisionId,
           slug,
-          revisionNumber: this.revisionNumber,
+          revisionNumber,
           error: getErrorMessageOrDefault(err),
         });
       }
@@ -903,6 +938,9 @@ class InstallDriver {
     const currentgame = getGame(gameMode);
     const discovery = discoveryByGame(state, gameMode);
     const gameVersion = await currentgame.getInstalledVersion(discovery);
+    if (this.mAttempt !== attempt) {
+      return false;
+    }
     const gvMatch = (gv) => gv.reference === gameVersion;
     const revGameVersions = this.mRevisionInfo?.gameVersions ?? [];
     if ((revGameVersions.length ?? 0 !== 0) && revGameVersions.find(gvMatch) === undefined) {
@@ -929,7 +967,7 @@ class InstallDriver {
         },
         [{ label: "Cancel" }, { label: "Continue" }],
       );
-      if (this.mCollection !== collection) {
+      if (this.mAttempt !== attempt || this.mCollection !== collection) {
         // the install was paused or cancelled while the prompt was open, which already reset
         // the driver; whatever the answer, this attempt is over
         return false;
@@ -1139,6 +1177,7 @@ class InstallDriver {
         ? "completed"
         : "failed";
     this.completeInstallationTracking(outcome);
+    this.mAttempt = this.mStarting = undefined;
     this.mCollection = undefined;
     this.setDependentMods([]);
     this.mInstallDone = true;
