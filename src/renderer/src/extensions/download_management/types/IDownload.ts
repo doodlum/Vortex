@@ -57,6 +57,10 @@ export interface INexusModMeta {
  * Extended mod info structure with common properties
  */
 export interface IModInfo {
+  /** Per-download install override survives restart: false opts out, true forces installation. */
+  allowInstall?: boolean;
+  /** New transfers keep this preservation mode across pause, restore and application restart. */
+  preserveExistingArchive?: boolean;
   collectionSlug?: string;
   game?: string;
   meta?: INexusModMeta;

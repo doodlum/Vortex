@@ -14,7 +14,7 @@ import { log } from "../../../util/log";
 import { activeGameId } from "../../../util/selectors";
 import { getSafe } from "../../../util/storeHelper";
 import { semverCoerce, truthy } from "../../../util/util";
-import type { IDependency, ILookupResultEx } from "../types/IDependency";
+import type { IDependency, ILookupResultEx, IModInfoEx } from "../types/IDependency";
 import type { IDownloadHint, IMod, IModReference, IModRule } from "../types/IMod";
 import { findModByRef } from "./findModByRef";
 import { isFuzzyVersion } from "./isFuzzyVersion";
@@ -151,6 +151,37 @@ function makeLookupResult(lookup: ILookupResult, fromHint: IBrowserResult): ILoo
       referer: fromHint.referer,
     },
   });
+}
+
+function lookupValueFromHint(
+  reference: IModReference,
+  hint: IDownloadHint,
+  source: IBrowserResult,
+): IModInfoEx {
+  return {
+    fileName: reference.logicalFileName,
+    fileSizeBytes: reference.fileSize,
+    gameId: reference.gameId,
+    domainName: reference.gameId,
+    fileVersion: undefined,
+    fileMD5: reference.fileMD5,
+    sourceURI: source.url,
+    referer: source.referer,
+    details: { homepage: hint.url },
+  };
+}
+
+/** Resolve a retained hint only when an existing archive cannot satisfy the dependency. */
+export async function resolveDependencyLookup(
+  api: IExtensionApi,
+  dep: IDependency,
+): Promise<IModInfoEx | undefined> {
+  const lookup = dep.lookupResults[0]?.value;
+  if (lookup?.sourceURI) return lookup;
+  const source = await lookupDownloadHint(api, dep.downloadHint);
+  return source === undefined
+    ? undefined
+    : lookupValueFromHint(dep.reference, dep.downloadHint, source);
 }
 
 function lookupFulfills(lookup: ILookupResult, reference: IReference) {
@@ -414,6 +445,7 @@ async function gatherDependenciesGraph(
 
     const node: IDependencyNode = {
       download: downloadId,
+      downloadHint: rule.downloadHint,
       mod,
       reference: rule.reference,
       lookupResults: lookupResults.map((iter) =>
@@ -431,19 +463,7 @@ async function gatherDependenciesGraph(
     if (urlFromHint) {
       node.lookupResults.unshift({
         key: "from-download-hint",
-        value: {
-          fileName: rule.reference.logicalFileName,
-          fileSizeBytes: rule.reference.fileSize,
-          gameId: rule.reference.gameId,
-          domainName: rule.reference.gameId,
-          fileVersion: undefined,
-          fileMD5: rule.reference.fileMD5,
-          sourceURI: urlFromHint.url,
-          referer: urlFromHint.referer,
-          details: {
-            homepage: rule.downloadHint.url,
-          },
-        },
+        value: lookupValueFromHint(rule.reference, rule.downloadHint, urlFromHint),
       });
       if (
         rule.downloadHint?.mode === "browse" ||

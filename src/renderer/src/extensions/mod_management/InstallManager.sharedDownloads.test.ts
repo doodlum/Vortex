@@ -6,6 +6,10 @@
  * The session is keyed by each member's rule identity. Without a terminal status the completion
  * poll requeues the member every tick and the install never finishes.
  */
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import * as path from "node:path";
+
 import { describe, expect, vi } from "vitest";
 
 import {
@@ -21,12 +25,23 @@ import {
 } from "../../test-utils/builders";
 import type { IDriverHarnessState, IInstallManagerHarness } from "../../test-utils/harnessTypes";
 import { test as imTest } from "../../test-utils/installManagerTest";
+import { makeTempDir } from "../../test-utils/tempDir";
 import { generateCollectionSessionId, modRuleId } from "../../util/collectionInstallSession";
 import { MOD_TYPE } from "../collections/constants";
+import { downloadPathForGame } from "../download_management/selectors";
 import { OPTIONAL_PHASE } from "./util/rulePhase";
 
 vi.mock("../../logging", () => ({ log: vi.fn() }));
 
+vi.mock("../../util/checksum", async (original) => ({
+  ...(await original<object>()),
+  fileMD5: async (filePath: string) =>
+    createHash("md5")
+      .update(await readFile(filePath))
+      .digest("hex"),
+}));
+const SHARED_BYTES = Buffer.alloc(1024);
+const SHARED_MD5 = createHash("md5").update(SHARED_BYTES).digest("hex");
 const GAME = "skyrimse";
 const PROFILE = "prof-1";
 const COLLECTION = "col-1";
@@ -39,7 +54,12 @@ const FOREIGN_TAG = "foreign-tag";
 // installed mod by identity even though neither carries its tag
 const memberRule = makeRule({
   type: "requires",
-  reference: makeExactRef({ tag: "member-orig", gameId: GAME, md5Hint: "abc123" }),
+  reference: makeExactRef({
+    tag: "member-orig",
+    gameId: GAME,
+    fileMD5: SHARED_MD5,
+    md5Hint: SHARED_MD5,
+  }),
 });
 
 // a member reference whose tag drifted away from the rule the session is keyed with
@@ -114,7 +134,7 @@ function makeSharedArchiveInstall(
           state: "installed",
           attributes: {
             referenceTag: FOREIGN_TAG,
-            fileMD5: "abc123",
+            fileMD5: SHARED_MD5,
             source: "nexus",
             modId: 100,
             fileId: 5,
@@ -131,7 +151,7 @@ function makeSharedArchiveInstall(
         game: [GAME],
         size: 1024,
         localPath: "shared.7z",
-        fileMD5: "abc123",
+        fileMD5: SHARED_MD5,
         modInfo: { referenceTag: FOREIGN_TAG, nexus: { ids: { modId: 100, fileId: 5 } } },
       }),
     },
@@ -258,6 +278,13 @@ describe("resolving a member's already-present download", () => {
   // one it already carries. The rule itself is left alone: the session is keyed from it.
   imTest("records this collection's tag on the download", async ({ makeInstallManager }) => {
     const { h } = makeSharedArchiveInstall(makeInstallManager);
+    const root = await makeTempDir("shared-verified-");
+    h.setState((draft) => {
+      draft.settings.downloads.path = root;
+    });
+    const folder = downloadPathForGame(h.getState(), GAME);
+    await mkdir(folder, { recursive: true });
+    await writeFile(path.join(folder, "shared.7z"), SHARED_BYTES);
 
     const installing = internals(h.manager).doInstallDependencies(
       h.api,

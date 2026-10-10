@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { access, copyFile, mkdir, rename, rm, stat } from "node:fs/promises";
+import { access, mkdir, open, rename, rm, stat } from "node:fs/promises";
 import * as path from "node:path";
 
 import { unknownToError } from "@vortex/shared";
@@ -46,10 +46,8 @@ import {
 } from "./extensions/download_management/actions/state";
 import { downloadPathForGame } from "./extensions/download_management/selectors";
 import type { IDownload } from "./extensions/download_management/types/IDownload";
-import {
-  freeDownloadName,
-  TEMP_DOWNLOAD_PREFIX,
-} from "./extensions/download_management/util/downloadNames";
+import { TEMP_DOWNLOAD_PREFIX } from "./extensions/download_management/util/downloadNames";
+import { preserveExistingDownload } from "./extensions/download_management/util/preserveExistingDownload";
 import { knownGames } from "./extensions/gamemode_management/selectors";
 import type { IGameStored } from "./extensions/gamemode_management/types/IGameStored";
 import { nxmUrlFromDownload } from "./extensions/nexus_integration/NXMUrl";
@@ -457,12 +455,17 @@ export class IPCDownloadAdapter {
 
       // Determine the final filename: server Content-Disposition > caller hint > temp name.
       const hint = activeDownload?.fileNameHint;
-      const finalName = wireState.fileName ?? hint ?? download.localPath;
-      const finalPath = path.join(dlPath, finalName);
+      let finalName = wireState.fileName ?? hint ?? download.localPath;
+      let finalPath = path.join(dlPath, finalName);
 
       if (finalPath !== tempPath) {
         try {
-          await rename(tempPath, finalPath);
+          if (download.modInfo?.preserveExistingArchive === true) {
+            finalPath = await preserveExistingDownload(tempPath, finalPath);
+            finalName = path.basename(finalPath);
+          } else {
+            await rename(tempPath, finalPath);
+          }
           this.#api.store.dispatch(setDownloadFilePath(downloadId, finalName));
         } catch (err) {
           log("warn", "failed to rename download to final name", {
@@ -471,6 +474,8 @@ export class IPCDownloadAdapter {
             finalPath,
             err,
           });
+          // The record still names the temp file; never hash a different existing destination.
+          finalPath = tempPath;
         }
       }
 
@@ -496,7 +501,7 @@ export class IPCDownloadAdapter {
     // after completion to trigger installation, matching DownloadObserver behaviour.
     activeDownload?.callback?.(null, downloadId);
 
-    const allowInstall = activeDownload?.allowInstall;
+    const allowInstall = activeDownload?.allowInstall ?? download?.modInfo?.allowInstall;
 
     const autoInstall =
       reduxState.settings.automation?.install || download?.modInfo?.["startedAsUpdate"] === true;
@@ -584,6 +589,7 @@ export class IPCDownloadAdapter {
     }
 
     const collationId = this.#nextCollationId++;
+    let reservedTemp: string | undefined;
     try {
       const info: StoredDownloadInfo = {
         encodedUrl: encodedUrl,
@@ -595,9 +601,12 @@ export class IPCDownloadAdapter {
       // Use a temporary filename so the main process can start writing immediately.
       // #completeDownload renames to the final name derived from Content-Disposition.
       // The real filename is passed as a hint; the server name takes priority.
-      const collationStr = collationId.toString().padStart(8, "0");
-      const tempName = `${TEMP_DOWNLOAD_PREFIX}${collationStr}`;
+      // IPC correlation IDs restart from zero; filenames must not reuse a resumed archive.
+      const tempName = `${TEMP_DOWNLOAD_PREFIX}${randomUUID()}`;
       const dest = path.join(dlPath, tempName);
+      const reservation = await open(dest, "wx");
+      reservedTemp = dest;
+      await reservation.close();
 
       log("debug", "starting download", {
         encodedUrl,
@@ -606,6 +615,7 @@ export class IPCDownloadAdapter {
       });
 
       const { downloadId } = await window.api.downloader.start(dest, collationId);
+      reservedTemp = undefined;
 
       const allowInstall = normalizeAllowInstall(options?.allowInstall);
 
@@ -621,7 +631,14 @@ export class IPCDownloadAdapter {
 
       // Create the Redux record. nexus_integration's onChangeDownloads watches
       // downloads.files and triggers metadata enrichment when nexus.ids is present.
-      this.#api.store.dispatch(initDownload(downloadId, rawUrls, modInfo, gameIds));
+      this.#api.store.dispatch(
+        initDownload(
+          downloadId,
+          rawUrls,
+          { ...modInfo, preserveExistingArchive: redownload !== "replace", allowInstall },
+          gameIds,
+        ),
+      );
       // Set localPath to the temp name so the UI has something to display.
       this.#api.store.dispatch(setDownloadFilePath(downloadId, tempName));
       // Fall back to the filename hint for the display name only when the caller didn't
@@ -649,7 +666,10 @@ export class IPCDownloadAdapter {
         }
       }
     } catch (err) {
+      this.#pending.delete(collationId);
       this.#resolvedMeta.delete(collationId);
+      if (reservedTemp !== undefined)
+        await rm(reservedTemp, { force: true }).catch(() => undefined);
       callback?.(unknownToError(err));
     }
   }
@@ -692,9 +712,10 @@ export class IPCDownloadAdapter {
       const { dlPath, gameIds } = await this.#resolveDownloadTarget(modInfo);
 
       const blobPath = path.join(getVortexPath("temp"), `${fileName}.tmp`);
-      const finalName = await freeDownloadName(dlPath, fileName);
-      const finalPath = path.join(dlPath, finalName);
-      await copyFile(blobPath, finalPath);
+      const finalPath = await preserveExistingDownload(blobPath, path.join(dlPath, fileName), {
+        keepSource: true,
+      });
+      const finalName = path.basename(finalPath);
       const { size } = await stat(finalPath);
       // The file is already safely in the download folder; a failed temp cleanup must not fail the
       // adoption (a lingering temp file is harmless).
@@ -704,7 +725,14 @@ export class IPCDownloadAdapter {
       // just hashes, marks it finished, fires the callback, and triggers install. A blob url isn't
       // fetchable, so the record stores no source urls.
       const id = randomUUID();
-      this.#api.store.dispatch(initDownload(id, [], modInfo, gameIds));
+      this.#api.store.dispatch(
+        initDownload(
+          id,
+          [],
+          { ...modInfo, allowInstall: normalizeAllowInstall(options?.allowInstall) },
+          gameIds,
+        ),
+      );
       this.#api.store.dispatch(setDownloadFilePath(id, finalName));
       this.#api.store.dispatch(downloadProgress(id, size, size, undefined));
 
@@ -800,6 +828,12 @@ export class IPCDownloadAdapter {
     try {
       const state = this.#api.getState();
       const checkpoint = state.persistent.downloads.checkpoints[downloadId];
+      if (options?.allowInstall !== undefined) {
+        const allowInstall = normalizeAllowInstall(options.allowInstall);
+        this.#api.store.dispatch(setDownloadModInfo(downloadId, "allowInstall", allowInstall));
+        const active = this.#activeDownloads.get(downloadId);
+        if (active !== undefined) active.allowInstall = allowInstall;
+      }
       if (!isResumableCheckpoint(checkpoint)) {
         // Interrupted rather than cleanly paused, or paused before any range completed: there is
         // nothing to resume from, so restart the download from scratch under the same id.
@@ -893,7 +927,7 @@ export class IPCDownloadAdapter {
       // Register the poll entry after start resolves (as #handleStartDownload does) so the poll
       // never acts on the previous attempt's terminal handle. allowInstall is threaded from the
       // resume caller: the collection installer and mod-update flow pass false because they own the
-      // install, while a manual resume leaves it undefined and defers to the automation setting.
+      // install, while an unspecified manual resume retains the persisted override or automation default.
       this.#activeDownloads.set(downloadId, {
         callback,
         allowInstall,
