@@ -137,6 +137,22 @@ spelled `neutral-on-scrim` - there is deliberately no way to ask for
 `success-on-scrim`. A branded icon on a scrim still takes its colour from the
 ordinary, theme-relative brand ramp, and will shift with the theme.
 
+## Modern title bar
+
+The right-hand controls are Account (Help when signed out), the membership
+slot, the preview build label, and then the version, divider and window controls.
+The membership slot shows Log in when signed out and Premium for premium
+members. Free users see Go premium unless they are supporters; supporters
+without premium membership see no membership control.
+The account menu opens below its trigger; Help's submenu uses the shared
+popover's available-space positioning, so it can open on either side.
+
+Keep the version, divider and window controls in their spacing group. The title
+can shrink and truncate; the controls must retain their widths. Preserve the
+title bar's drag region, its no-drag rule while a popover is expanded, and the
+controls' no-drag regions. The whole title bar follows the app's Electron zoom.
+The classic layout uses its own title bar.
+
 ## Motion
 
 Users can turn non-essential animation down: **Settings → Interface → Reduce motion**,
