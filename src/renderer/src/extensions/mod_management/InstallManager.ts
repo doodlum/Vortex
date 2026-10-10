@@ -280,10 +280,9 @@ export const VARIANT_ACTION = "Add Variant";
 // exe is a self-extracting archive and we would be able to handle it
 const FILETYPES_AVOID = [".dll"];
 
-// 7z names the archive type ("Cannot open the file as [7z] archive") only after it has read the
-// file and recognised its format, so that wording means the contents are unreadable, never that
-// another process holds the file. Without a type ("Cannot open the file as archive") 7z could not
-// identify the file at all, which is also how it reports a file it can't read.
+// A typed open error describes archive parsing, not a sharing violation by itself. Strip only
+// that phrase when looking for a file-in-use error; any accompanying system error still counts.
+// Keep untyped open errors retryable, including when Windows translates the system message.
 const ARCHIVE_UNREADABLE_AS_TYPE = /can ?not open the file as \[[^\]]*\] archive/gi;
 const ARCHIVE_UNREADABLE = /can ?not open the file as (\[[^\]]*\] )?archive/i;
 
@@ -1219,10 +1218,13 @@ class InstallManager {
     };
     this.mActiveInstalls.set(installId, installInfo);
 
-    // Wrap callback to ensure proper cleanup and tracking
+    // Both the installation handler and the limiter rejection can report the same failure.
+    let callbackCalled = false;
     const trackedCallback = (err: Error, id: string) => {
+      if (callbackCalled) return;
+      callbackCalled = true;
       const activeInstall = this.mActiveInstalls.get(installId);
-      if (activeInstall) {
+      if (activeInstall === installInfo) {
         activeInstall.modId = id || activeInstall.modId;
         if (!err) {
           log("info", "Installation completed successfully", {
@@ -1236,11 +1238,19 @@ class InstallManager {
         }
       }
 
-      // Call the original callback
-      callback?.(err, id);
-
-      // Clean up tracking
-      this.mActiveInstalls.delete(installId);
+      try {
+        callback?.(err, id);
+      } catch (callbackError) {
+        // Caller failures must not roll back an already completed installation.
+        log("error", "Installation callback failed", {
+          installId,
+          error: getErrorMessageOrDefault(callbackError),
+        });
+      } finally {
+        if (this.mActiveInstalls.get(installId) === installInfo) {
+          this.mActiveInstalls.delete(installId);
+        }
+      }
     };
 
     if (archiveId != null) {
@@ -1298,16 +1308,17 @@ class InstallManager {
           const promiseCallback = (err: Error, id: string) => {
             // Update the installation info with final details before calling tracked callback
             const activeInstall = this.mActiveInstalls.get(installId);
-            if (activeInstall) {
+            if (activeInstall === installInfo) {
               activeInstall.modId = id || modId;
               activeInstall.gameId = installGameId || "";
             }
-            trackedCallback(err, id);
+            // Settle the queue promise even if the caller callback throws.
             if (err) {
               reject(err);
             } else {
               resolve(id);
             }
+            trackedCallback(err, id);
           };
           let existingMod: IMod;
           let installingFileId: number;
@@ -1938,11 +1949,7 @@ class InstallManager {
                           }),
                         );
                       }
-                      if (unattended) {
-                        promiseCallback?.(err, null);
-                        return Promise.resolve();
-                      }
-                      if (installContext !== undefined) {
+                      if (!unattended && installContext !== undefined) {
                         api.sendNotification({
                           type: "info",
                           title: "Installation failed, archive is damaged",
@@ -1981,6 +1988,7 @@ class InstallManager {
                           ],
                         });
                       }
+                      promiseCallback?.(err, null);
                     });
                   } else if (err instanceof SetupError) {
                     return prom.then(() => {
@@ -2110,7 +2118,7 @@ class InstallManager {
             .then(() => {
               // Installation completed successfully - the callback should have been called
               // If we reach here without the callback being called, something went wrong
-              if (this.mActiveInstalls.has(installId)) {
+              if (this.mActiveInstalls.get(installId) === installInfo) {
                 log("warn", "Installation completed but callback was not called", {
                   installId,
                   modId,
@@ -2149,7 +2157,7 @@ class InstallManager {
             })
             .catch((unknownErr) => {
               const installError = unknownToError(unknownErr);
-              if (this.mActiveInstalls.has(installId)) {
+              if (this.mActiveInstalls.get(installId) === installInfo) {
                 log("warn", "Installation failed", {
                   installId,
                   error: installError.message,

@@ -5,16 +5,17 @@
  * localised one stands in for that lock on a non-English Windows, where 7z's own text stays English
  * and only the system message is translated.
  */
-import * as os from "node:os";
 import * as path from "node:path";
 
 import { describe, expect, vi } from "vitest";
 
+import { closeDialog } from "../../actions/notifications";
 import type { IInstallManagerHarness } from "../../test-utils/harnessTypes";
 import { test as imTest } from "../../test-utils/installManagerTest";
-import { ArchiveBrokenError } from "../../util/CustomErrors";
+import { makeTempDir } from "../../test-utils/tempDir";
+import { ArchiveBrokenError, UserCanceled } from "../../util/CustomErrors";
 
-vi.mock("../../util/log", () => {
+vi.mock("../../logging", () => {
   const log = vi.fn();
   return { default: log, log };
 });
@@ -68,35 +69,16 @@ function failingZip(errors: string[]) {
   return { extractFull: vi.fn(() => Promise.resolve({ code: 2, errors })) };
 }
 
-function tempDir(): string {
-  return path.join(os.tmpdir(), `vortex-laz1287-${process.pid}-${Math.random().toString(36)}`);
-}
-
 /** Labels of the "Archive damaged" dialog's buttons, or undefined while none was shown. */
 function damagedDialogActions(h: IInstallManagerHarness): string[] | undefined {
   const dialog = h.dispatched.find((action) => action.type === "SHOW_MODAL_DIALOG");
   return (dialog?.payload as { actions: string[] } | undefined)?.actions;
 }
 
-/** Settles with the install's outcome, or with "dialog" once the dialog is up (it never settles). */
-async function outcomeOf(h: IInstallManagerHarness, install: Promise<unknown>): Promise<unknown> {
-  const dialogShown = vi
-    .waitFor(
-      () => {
-        if (damagedDialogActions(h) === undefined) {
-          throw new Error("no dialog yet");
-        }
-      },
-      { timeout: 8000, interval: 20 },
-    )
-    .then(() => "dialog");
-  return Promise.race([
-    install.then(
-      () => "installed",
-      (err: unknown) => err,
-    ),
-    dialogShown,
-  ]);
+async function cancelDamagedDialog(h: IInstallManagerHarness): Promise<void> {
+  await vi.waitFor(() => expect(damagedDialogActions(h)).toBeDefined());
+  const dialog = h.dispatched.find((action) => action.type === "SHOW_MODAL_DIALOG");
+  h.api.store.dispatch(closeDialog((dialog.payload as { id: string }).id, "Cancel"));
 }
 
 describe("InstallManager extraction errors", () => {
@@ -111,15 +93,14 @@ describe("InstallManager extraction errors", () => {
       const install = internals.installInner(
         h.api,
         ARCHIVE,
-        tempDir(),
-        tempDir(),
+        await makeTempDir("vortex-archive-error-"),
+        await makeTempDir("vortex-archive-error-"),
         "skyrimse",
         undefined,
         zip,
       );
 
-      const outcome = await outcomeOf(h, install);
-      expect(outcome).toBeInstanceOf(ArchiveBrokenError);
+      await expect(install).rejects.toBeInstanceOf(ArchiveBrokenError);
       expect(zip.extractFull).toHaveBeenCalledTimes(1);
       expect(damagedDialogActions(h)).toBeUndefined();
     },
@@ -136,14 +117,16 @@ describe("InstallManager extraction errors", () => {
       const install = internals.installInner(
         h.api,
         ARCHIVE,
-        tempDir(),
-        tempDir(),
+        await makeTempDir("vortex-archive-error-"),
+        await makeTempDir("vortex-archive-error-"),
         "skyrimse",
         undefined,
         zip,
       );
 
-      expect(await outcomeOf(h, install)).toBe("dialog");
+      const canceled = expect(install).rejects.toBeInstanceOf(UserCanceled);
+      await cancelDamagedDialog(h);
+      await canceled;
       expect(zip.extractFull).toHaveBeenCalledTimes(1);
       expect(damagedDialogActions(h)).toEqual(["Cancel", "Delete"]);
     },
@@ -162,7 +145,7 @@ describe("InstallManager extraction errors", () => {
       const result = await internals.extractWithRetry(
         zip,
         ARCHIVE,
-        tempDir(),
+        await makeTempDir("vortex-archive-error-"),
         () => undefined,
         () => Promise.resolve(""),
         3,
@@ -180,8 +163,11 @@ describe("InstallManager extraction errors", () => {
       const h = makeInstallManager();
       const internals = h.manager as unknown as IExtractionInternals;
 
-      void internals.queryContinue(h.api, [LOCKED], ARCHIVE);
-
+      const canceled = expect(
+        internals.queryContinue(h.api, [LOCKED], ARCHIVE),
+      ).rejects.toBeInstanceOf(UserCanceled);
+      await cancelDamagedDialog(h);
+      await canceled;
       expect(damagedDialogActions(h)).toEqual(["Cancel", "Delete"]);
     },
   );
@@ -192,9 +178,38 @@ describe("InstallManager extraction errors", () => {
       const h = makeInstallManager();
       const internals = h.manager as unknown as IExtractionInternals;
 
-      void internals.queryContinue(h.api, ["ERROR: CRC Failed : data.bin\r\n"], ARCHIVE);
-
+      const continued = internals.queryContinue(
+        h.api,
+        ["ERROR: CRC Failed : data.bin\r\n"],
+        ARCHIVE,
+      );
       expect(damagedDialogActions(h)).toEqual(["Cancel", "Delete", "Continue"]);
+      const dialog = h.dispatched.find((action) => action.type === "SHOW_MODAL_DIALOG");
+      h.api.store.dispatch(closeDialog((dialog.payload as { id: string }).id, "Continue"));
+      await continued;
+    },
+  );
+  imTest.for([
+    ["typed truncation", TRUNCATED_7Z, 1],
+    ["typed invalid archive", NOT_AN_ARCHIVE, 1],
+    ["typed open with an accompanying lock", NOT_AN_ARCHIVE + LOCKED, 4],
+    ["typed open with access denied", NOT_AN_ARCHIVE + "Access is denied.", 4],
+  ] as const)(
+    "only retries genuine access/open errors: %s",
+    async ([, message, attempts], { makeInstallManager }) => {
+      const h = makeInstallManager();
+      const internals = h.manager as unknown as IExtractionInternals;
+      const zip = failingZip([message]);
+      await internals.extractWithRetry(
+        zip,
+        ARCHIVE,
+        await makeTempDir("vortex-archive-retry-"),
+        () => undefined,
+        () => Promise.resolve(""),
+        3,
+        0,
+      );
+      expect(zip.extractFull).toHaveBeenCalledTimes(attempts);
     },
   );
 });
