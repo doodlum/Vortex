@@ -196,6 +196,7 @@ import { getCSharpScriptAllowListForGame } from "./util/cSharpScriptAllowList";
 import gatherDependencies, {
   findDownloadByRef,
   lookupFromDownload,
+  resolveDependencyLookup,
   selectedOptionalRules,
 } from "./util/dependencies";
 import filterModInfo from "./util/filterModInfo";
@@ -3631,7 +3632,7 @@ class InstallManager {
         }),
         signal,
       )
-        .then((deps: IDependency[]): Promise<string | undefined> => {
+        .then(async (deps: IDependency[]): Promise<string | undefined> => {
           if (wasCanceled()) throw new UserCanceled(false);
           const dep = deps[0];
           if (dep === undefined) {
@@ -3649,13 +3650,37 @@ class InstallManager {
               signal,
             );
           }
-          if (dep.lookupResults?.[0]?.value == null) {
+          const existing = api.getState().persistent.downloads.files[dep.download];
+          if (pinsFileHash(dep.reference) && existing?.state === "finished") {
+            const matches = await archiveMatchesReference(api, existing, dep.reference, signal);
+            if (wasCanceled()) throw new UserCanceled(false);
+            const current = api.getState().persistent.downloads.files[dep.download];
+            if (
+              current?.state !== existing.state ||
+              current?.localPath !== existing.localPath ||
+              current?.game?.[0] !== existing.game?.[0]
+            )
+              throw new ProcessCanceled(
+                "Existing optional archive changed while it was being verified",
+              );
+            if (matches) {
+              if (!downloadHasReferenceTag(current, dep.reference.tag))
+                batchDispatch(
+                  api.store,
+                  appendReferenceTagActions(dep.download, current, dep.reference.tag),
+                );
+              return dep.download;
+            }
+          }
+          const lookup = await withArchiveCancellation(resolveDependencyLookup(api, dep), signal);
+          if (wasCanceled()) throw new UserCanceled(false);
+          if (lookup === undefined) {
             return Promise.reject(new ProcessCanceled("no download source for optional"));
           }
           return this.downloadDependencyAsync(
             dep.reference,
             api,
-            dep.lookupResults[0].value,
+            lookup,
             wasCanceled,
             dep.extra?.fileName,
             parentCollection,
@@ -6467,17 +6492,24 @@ class InstallManager {
       return abort.signal.aborted
         ? Promise.reject(new UserCanceled(false))
         : reconcileOrphanedArchive(api, gameId, dep.extra?.fileName)
-            .then(() =>
-              this.downloadDependencyAsync(
+            .then(async () => {
+              const lookup = await withArchiveCancellation(
+                resolveDependencyLookup(api, dep),
+                abort.signal,
+              );
+              if (abort.signal.aborted) throw new UserCanceled(false);
+              if (lookup === undefined)
+                throw new ProcessCanceled("No download source is available for dependency");
+              return this.downloadDependencyAsync(
                 dep.reference,
                 api,
-                dep.lookupResults[0].value,
+                lookup,
                 () => abort.signal.aborted,
                 dep.extra?.fileName,
                 parentCollection,
                 abort.signal,
-              ),
-            )
+              );
+            })
             .then((dlId) => {
               const idx = queuedDownloads.indexOf(dep.reference);
               queuedDownloads.splice(idx, 1);
@@ -6708,7 +6740,7 @@ class InstallManager {
         } else {
           // Always allow downloads to be queued - installations will be deferred if needed
           dlPromise =
-            (dep.lookupResults[0]?.value?.sourceURI ?? "") === ""
+            (dep.lookupResults[0]?.value?.sourceURI ?? "") === "" && dep.downloadHint === undefined
               ? Promise.reject(new ProcessCanceled("Failed to determine download url"))
               : queueDownload(dep);
         }
@@ -6728,7 +6760,8 @@ class InstallManager {
       ) {
         // resolved by tag or by mod/file id, neither of which proves it's the pinned file
         const existing = downloads[dep.download];
-        const hasSource = (dep.lookupResults[0]?.value?.sourceURI ?? "") !== "";
+        const hasSource =
+          (dep.lookupResults[0]?.value?.sourceURI ?? "") !== "" || dep.downloadHint !== undefined;
         dlPromise = archiveMatchesReference(api, existing, dep.reference, abort.signal).then(
           (matches) => {
             if (abort.signal.aborted) throw new UserCanceled(false);

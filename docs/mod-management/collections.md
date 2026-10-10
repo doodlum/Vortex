@@ -95,7 +95,12 @@ rules; an already-installed mod with the matching identity and install choices
 can be reused without reading an archive it does not need.
 
 When an existing archive does not satisfy the pin, Vortex fetches a separate
-copy. The existing file, download record and other collections' tags stay in
+copy. Dependency gathering retains the collection's download hint even when it
+finds a local record. If metadata has no URL, the installer resolves that hint
+only when it needs a replacement; valid local bytes do not trigger a browser or
+manual prompt. Selected optionals verify a gathered local candidate before
+resolving its hint, then use the normal trailing optional phase. A canceled
+check or changed download record cannot tag or queue that candidate. The existing file, download record and other collections' tags stay in
 place. Each new network transfer except explicit `replace` uses an exclusive
 destination, including transfers whose final server filename was not known at
 queue time, choosing a

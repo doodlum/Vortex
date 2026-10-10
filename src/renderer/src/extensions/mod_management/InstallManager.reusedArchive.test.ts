@@ -33,7 +33,9 @@ import { generateCollectionSessionId, modRuleId } from "../../util/collectionIns
 import { MOD_TYPE } from "../collections/constants";
 import { downloadPathForGame } from "../download_management/selectors";
 import type { IDownload } from "../download_management/types/IDownload";
+import type { IDependency } from "./types/IDependency";
 import type { IModReference } from "./types/IMod";
+import type * as Dependencies from "./util/dependencies";
 import { OPTIONAL_PHASE } from "./util/rulePhase";
 import { downloadReferenceTags } from "./util/testModReference";
 
@@ -205,6 +207,7 @@ async function installMember(
   rule: ReturnType<typeof makeRule>,
   queued: { mock: { calls: unknown[][] } },
   download?: string,
+  dependencies?: IDependency[],
 ): Promise<string> {
   const existing = h.getState().persistent.downloads.files["dl-existing"];
   const dlPath = downloadPathForGame(h.getState(), GAME);
@@ -221,7 +224,7 @@ async function installMember(
     h.api,
     GAME,
     COLLECTION,
-    [
+    dependencies ?? [
       {
         reference: rule.reference,
         sessionRuleId: modRuleId(rule),
@@ -247,9 +250,15 @@ async function installMember(
   try {
     // the first round in a file loads the manager's lazy modules, which can outlast waitFor's default
     // second on a loaded machine
-    await vi.waitFor(() => expect(queued.mock.calls.length).toBeGreaterThan(0), {
+    const failed = () =>
+      Object.values(h.getState().session.collections.activeSession.mods).some(
+        (mod) => mod.status === "failed",
+      );
+    await vi.waitFor(() => expect(queued.mock.calls.length > 0 || failed()).toBe(true), {
       timeout: 15_000,
     });
+    expect(failed()).toBe(false);
+    expect(queued.mock.calls.length).toBeGreaterThan(0);
     return queued.mock.calls[0][2] as string;
   } finally {
     internals(h.manager).mDependencyInstalls[COLLECTION]?.();
@@ -995,6 +1004,146 @@ describe("archive admission and dependency operation ownership", () => {
     },
   );
 
+  async function gatheredOptional(
+    makeInstallManager: (overrides?: object) => IInstallManagerHarness,
+    mode: "direct" | "browse",
+    invalid = false,
+  ) {
+    const fixture = await optionalInstall(makeInstallManager);
+    const { h, optional } = fixture;
+    optional.downloadHint = { mode, url: invalid ? "" : "https://files.example/Member.7z" };
+    const browse = vi.fn().mockResolvedValue(["https://files.example/Member.7z"]);
+    h.setState((draft) => {
+      draft.persistent.mods[GAME][COLLECTION].rules = [optional];
+      draft.persistent.downloads.files["dl-existing"].modInfo.referenceTags = ["foreign", TAG];
+    });
+    Object.assign(h.api, {
+      lookupModReference: vi.fn().mockResolvedValue([]),
+      lookupModMeta: vi.fn().mockResolvedValue([]),
+      emitAndAwait: browse,
+    });
+    const real = await vi.importActual<typeof Dependencies>("./util/dependencies");
+    const deps = await real.default([optional], h.api, true);
+    expect(deps).toHaveLength(1);
+    expect(deps[0].download).toBe("dl-existing");
+    expect(deps[0].lookupResults).toEqual([]);
+    expect(browse).not.toHaveBeenCalled();
+    // Gathering identified the candidate; tag admission must preserve another collection's tag.
+    h.setState((draft) => {
+      draft.persistent.downloads.files["dl-existing"].modInfo.referenceTags = ["foreign"];
+    });
+    gather.mockResolvedValue(deps);
+    return { ...fixture, browse, folder: downloadPathForGame(h.getState(), GAME) };
+  }
+
+  for (const mode of ["direct", "browse"] as const) {
+    imTest(
+      "reuses a gathered selected optional before resolving its " + mode + " hint",
+      async ({ makeInstallManager }) => {
+        const { h, mgr, optional, controller, browse } = await gatheredOptional(
+          makeInstallManager,
+          mode,
+          mode === "direct",
+        );
+        const disk = fakeAdapter(h, [ARCHIVE]);
+        try {
+          mgr.driveSelectedOptionals(h.api, COLLECTION);
+          await vi.waitFor(() =>
+            expect(
+              h.getState().session.collections.activeSession.mods[modRuleId(optional)].status,
+            ).not.toBe("downloading"),
+          );
+          expect(
+            h.getState().session.collections.activeSession.mods[modRuleId(optional)].status,
+          ).toBe("downloaded");
+          expect(h.phaseTracker.get(COLLECTION).pendingByPhase.get(OPTIONAL_PHASE)).toHaveLength(1);
+          expect(disk.starts).toEqual([]);
+          expect(browse).not.toHaveBeenCalled();
+          expect(tagsOf(h, "dl-existing")).toEqual(["foreign", TAG]);
+          expect(h.getState().persistent.downloads.files["dl-existing"].fileMD5).toBeUndefined();
+        } finally {
+          controller.abort();
+        }
+      },
+    );
+  }
+
+  imTest(
+    "a gathered stale selected optional resolves its replacement hint once",
+    async ({ makeInstallManager }) => {
+      const { h, mgr, optional, controller, folder } = await gatheredOptional(
+        makeInstallManager,
+        "direct",
+      );
+      await writeFile(path.join(folder, ARCHIVE), Buffer.alloc(GOOD_SIZE, 1));
+      const disk = fakeAdapter(h, [ARCHIVE]);
+      try {
+        mgr.driveSelectedOptionals(h.api, COLLECTION);
+        await vi.waitFor(() =>
+          expect(
+            h.getState().session.collections.activeSession.mods[modRuleId(optional)].status,
+          ).not.toBe("downloading"),
+        );
+        expect(
+          h.getState().session.collections.activeSession.mods[modRuleId(optional)].status,
+        ).toBe("downloaded");
+        expect(disk.starts).toHaveLength(1);
+        expect(tagsOf(h, "dl-existing")).toEqual(["foreign"]);
+        expect(tagsOf(h, "dl-fresh-1")).toContain(TAG);
+        expect(await readFile(path.join(folder, ARCHIVE))).toEqual(Buffer.alloc(GOOD_SIZE, 1));
+      } finally {
+        controller.abort();
+      }
+    },
+  );
+
+  for (const change of ["cancel", "record"] as const) {
+    imTest(
+      "a gathered optional cannot tag or queue after " + change + " during hashing",
+      async ({ makeInstallManager }) => {
+        const { h, mgr, optional, controller } = await gatheredOptional(
+          makeInstallManager,
+          "direct",
+          true,
+        );
+        let release!: (hash: string) => void;
+        hashFile.mockImplementation(
+          () =>
+            new Promise<string>((resolve) => {
+              release = resolve;
+            }),
+        );
+        const disk = fakeAdapter(h, [ARCHIVE]);
+        try {
+          mgr.driveSelectedOptionals(h.api, COLLECTION);
+          await vi.waitFor(() => expect(hashFile).toHaveBeenCalledTimes(1));
+          if (change === "cancel") controller.abort();
+          else
+            h.setState((draft) => {
+              draft.persistent.downloads.files["dl-existing"].localPath = "changed.7z";
+            });
+          release(GOOD_MD5);
+          await vi.waitFor(() =>
+            expect(
+              (mgr as typeof mgr & { mOptionalDownloadsInFlight: Map<string, () => void> })
+                .mOptionalDownloadsInFlight.size,
+            ).toBe(0),
+          );
+          expect(tagsOf(h, "dl-existing")).toEqual(["foreign"]);
+          expect(h.phaseTracker.get(COLLECTION).pendingByPhase.get(OPTIONAL_PHASE) ?? []).toEqual(
+            [],
+          );
+          expect(disk.starts).toEqual([]);
+          expect(
+            h.getState().session.collections.activeSession.mods[modRuleId(optional)].status,
+          ).toBe(change === "cancel" ? "downloading" : "failed");
+        } finally {
+          controller.abort();
+        }
+      },
+    );
+  }
+
   imTest(
     "a canceled optional gather cannot block or import into a new operation",
     async ({ makeInstallManager }) => {
@@ -1247,3 +1396,64 @@ for (const failed of [false, true]) {
     },
   );
 }
+
+describe("a rejected archive's retained collection hint", () => {
+  for (const mode of ["direct", "browse"] as const) {
+    imTest(
+      "resolves a " + mode + " hint after real gathering found a stale same-named archive",
+      async ({ makeInstallManager }) => {
+        const { h, rule, queued } = await makeInstall(
+          makeInstallManager,
+          exactRef,
+          onDisk({ fileMD5: GOOD_MD5, modInfo: { referenceTags: ["foreign", TAG] } }),
+        );
+        rule.downloadHint = { mode, url: "https://files.example/Member.7z" };
+        rule.extra = { name: "Member" };
+        const browse = vi.fn().mockResolvedValue(["https://files.example/Member.7z"]);
+        Object.assign(h.api, {
+          lookupModReference: vi.fn().mockResolvedValue([]),
+          lookupModMeta: vi.fn().mockResolvedValue([]),
+          emitAndAwait: browse,
+        });
+        const real = await vi.importActual<typeof Dependencies>("./util/dependencies");
+        const deps = await real.default([rule], h.api, false);
+        expect(deps[0].download).toBe("dl-existing");
+        expect(deps[0].lookupResults).toEqual([]);
+        expect(deps[0].downloadHint).toEqual(rule.downloadHint);
+        expect(browse).not.toHaveBeenCalled();
+        const folder = downloadPathForGame(h.getState(), GAME);
+        await mkdir(folder, { recursive: true });
+        await writeFile(path.join(folder, ARCHIVE), Buffer.alloc(GOOD_SIZE, 1));
+        const disk = fakeAdapter(h, [ARCHIVE]);
+        const id = await installMember(h, rule, queued, undefined, deps);
+        expect(id).not.toBe("dl-existing");
+        expect(disk.starts).toHaveLength(1);
+        expect(browse).toHaveBeenCalledTimes(mode === "browse" ? 1 : 0);
+        expect(tagsOf(h, "dl-existing")).toEqual(["foreign", TAG]);
+        expect(await readFile(path.join(folder, ARCHIVE))).toEqual(Buffer.alloc(GOOD_SIZE, 1));
+      },
+    );
+  }
+  imTest(
+    "does not resolve an invalid retained hint when actual archive bytes already match",
+    async ({ makeInstallManager }) => {
+      const { h, rule, queued } = await makeInstall(
+        makeInstallManager,
+        exactRef,
+        onDisk({ fileMD5: GOOD_MD5, modInfo: { referenceTags: ["foreign", TAG] } }),
+      );
+      rule.downloadHint = { mode: "direct", url: "" };
+      Object.assign(h.api, {
+        lookupModReference: vi.fn().mockResolvedValue([]),
+        lookupModMeta: vi.fn().mockResolvedValue([]),
+      });
+      const real = await vi.importActual<typeof Dependencies>("./util/dependencies");
+      const deps = await real.default([rule], h.api, false);
+      expect(deps).toHaveLength(1);
+      expect(deps[0].download).toBe("dl-existing");
+      const disk = fakeAdapter(h, [ARCHIVE]);
+      expect(await installMember(h, rule, queued, undefined, deps)).toBe("dl-existing");
+      expect(disk.starts).toEqual([]);
+    },
+  );
+});
