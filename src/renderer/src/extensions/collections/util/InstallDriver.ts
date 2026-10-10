@@ -708,6 +708,7 @@ class InstallDriver {
 
   private async onDidInstallDependencies(gameId: string, modId: string, recommendations: boolean) {
     const mods = this.mApi.getState().persistent.mods[gameId];
+    const attempt = this.mAttempt;
 
     if (mods[modId]?.type === MOD_TYPE) {
       log("info", "did install dependencies", { gameId, modId });
@@ -722,6 +723,9 @@ class InstallDriver {
         if (!recommendations) {
           if (this.isInstallComplete(false)) {
             await this.initCollectionInfo();
+            if (this.mAttempt !== attempt) {
+              return;
+            }
             this.mStep = "review";
           } else {
             this.mInstallDone = true;
@@ -738,6 +742,9 @@ class InstallDriver {
           if (this.isInstallComplete(true)) {
             // revisit review screen
             await this.initCollectionInfo();
+            if (this.mAttempt !== attempt) {
+              return;
+            }
             this.mStep = "review";
           } else {
             this.onStop();

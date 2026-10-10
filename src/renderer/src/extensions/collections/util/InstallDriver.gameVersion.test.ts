@@ -328,7 +328,9 @@ describe("InstallDriver game-version prompt", () => {
     const { begun } = withExtensionHandler(h);
     Object.assign(h.api.ext, { withSuppressedTests });
     const failure = new Error("metadata unavailable");
-    vi.spyOn(h.driver.infoCache, "getCollectionInfo").mockRejectedValue(failure);
+    vi.spyOn(h.driver.infoCache, "getCollectionInfo")
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValue(undefined);
     h.setNextDialog({ action: "Continue", input: {} });
     try {
       await expect(
@@ -346,6 +348,55 @@ describe("InstallDriver game-version prompt", () => {
       await settle();
     }
   });
+
+  for (const recommendations of [false, true]) {
+    test(`late ${recommendations ? "optional" : "required"} completion metadata leaves a resumed prompt alone`, async ({
+      makeCollection,
+    }) => {
+      const seed = mismatchedGameVersion();
+      seed.downloads[ARCHIVE].modInfo.nexus.ids.collectionSlug = "metadata";
+      const h = makeCollection(seed);
+      const { begun } = withExtensionHandler(h);
+      Object.assign(h.api.ext, { withSuppressedTests });
+      h.setNextDialog({ action: "Continue", input: {} });
+      const fetch = vi.spyOn(h.driver.infoCache, "getCollectionInfo").mockResolvedValue(undefined);
+      const revision = makeRevision(1, [{ tag: "a" }], { collectionId: COLLECTION });
+      await h.installRevision(revision);
+      await settle();
+      h.setState((draft) => {
+        for (const member of Object.values(draft.session.collections.activeSession.mods))
+          member.status = "installed";
+      });
+      const profile = h.driver.profile;
+      let deliver: () => void = () => undefined;
+      fetch.mockClear().mockImplementationOnce(
+        () =>
+          new Promise<ICollection>((resolve) => {
+            deliver = () => resolve(undefined);
+          }),
+      );
+      h.emit("did-install-dependencies", GAME, COLLECTION, recommendations);
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+      h.driver.pause("logout");
+      const { answers, showDialog } = deferDialogs(h);
+      const resume = h.driver.start(profile, revision.collection);
+      await vi.waitFor(() => expect(showDialog).toHaveBeenCalledTimes(1));
+      try {
+        deliver();
+        await settle();
+        expect(h.driver.step).toBe("start");
+        expect(installCompleted(h)).toBeUndefined();
+        expect(begun).toEqual([[COLLECTION]]);
+        expect(skipWhileSuppressed("plugins-changed", () => undefined)).toBe(true);
+      } finally {
+        deliver();
+        answers[0]({ action: "Cancel", input: {} });
+        await resume;
+        h.driver.cancel();
+        await settle();
+      }
+    });
+  }
 
   test("a resume right after a finished install does not review it while the prompt is open", async ({
     makeCollection,
