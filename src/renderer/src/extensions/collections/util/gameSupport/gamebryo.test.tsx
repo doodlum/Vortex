@@ -239,6 +239,37 @@ describe("gamebryo collection parser plugin force-enable", () => {
 describe("gamebryo collection parser plugin rules", () => {
   const collectionMod = () => makeMod({ id: COLLECTION_ID, type: MOD_TYPE, rules: [] });
 
+  it.each([false, true])(
+    "honours skipPluginRules=%s while enabling member plugins",
+    async (skip) => {
+      seedReaddir();
+      const harness = makeHarness();
+      harness.setState((draft) => {
+        draft.persistent.mods[GAME_ID][COLLECTION_ID].attributes.skipPluginRules = skip;
+      });
+      const collection = makeRuleCollection([
+        { name: "BijinAIO.esp", group: "curator", req: ["RaceCompatibility.esm"] },
+      ]);
+      (collection.pluginRules as any).groups = [{ name: "curator", after: ["default"] }];
+      await parser(harness.api, GAME_ID, collection, collectionMod());
+      expect(pluginEnableActions(harness)).toHaveLength(ALL_PLUGINS.length);
+      expect(
+        harness.dispatched
+          .filter((action) =>
+            [
+              "ADD_PLUGIN_GROUP",
+              "ADD_GROUP_RULE",
+              "SET_PLUGIN_GROUP",
+              "ADD_USERLIST_RULE",
+            ].includes(action.type),
+          )
+          .map((action) => action.type),
+      ).toEqual(
+        skip ? [] : ["ADD_PLUGIN_GROUP", "ADD_GROUP_RULE", "SET_PLUGIN_GROUP", "ADD_USERLIST_RULE"],
+      );
+    },
+  );
+
   it("replays requires and incompatible rules, which the manifest stores as req and inc", async () => {
     seedReaddir();
     const harness = makeHarness();

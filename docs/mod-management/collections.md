@@ -80,6 +80,8 @@ Reinstalling does not duplicate equivalent rules. Both the rule editor and
 the plugin dependency popover remove the selected condition while retaining
 other conditions for that plugin. A plain-name removal selects only the
 unconditional rule.
+Cycle recovery offers a separate choice for each stored condition; the cycle
+itself does not identify which condition created the dependency.
 
 ## Tests
 
