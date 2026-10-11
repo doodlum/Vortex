@@ -32,6 +32,10 @@ Scripts wired into `package.json` can also be called with `pnpm run <name>`.
 
 ## Build and Assets
 
+- `ensure-electron.mjs` -- installs the main package's pinned Electron binary before
+  parallel work and verifies the resulting executable path without launching it. The root
+  test command and CI invoke it; an installer failure stops before test workers start.
+
 - `download-duckdb-extensions.ts` -- downloads platform-specific DuckDB
   extensions listed in `duckdb-extensions.json`. Run via `pnpm run assets`.
 
