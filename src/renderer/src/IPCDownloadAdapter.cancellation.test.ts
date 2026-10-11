@@ -1,13 +1,31 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
+
 import { UserCanceled } from "@vortex/shared/errors";
 import type { WireDownloadCheckpoint } from "@vortex/shared/ipc";
-import { describe, expect, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, vi } from "vitest";
 
 import { finishDownload, pauseDownload } from "./extensions/download_management/actions/state";
 import { NxmProtocol } from "./extensions/nexus_integration/nxmProtocol";
 import { makeNxmHarness, makeUserInfo } from "./test-utils/builders";
 import { test } from "./test-utils/downloadAdapterTest";
 
-vi.mock("./util/getVortexPath", () => ({ default: () => "/vortex-userdata" }));
+const paths = vi.hoisted(() => ({ root: "" }));
+vi.mock("./util/getVortexPath", () => ({ default: () => paths.root }));
+
+// Start-download creates a real directory before reaching the mocked IPC boundary.
+beforeAll(async () => {
+  paths.root = await mkdtemp(path.join(tmpdir(), "adapter-cancellation-"));
+});
+
+afterAll(async () => {
+  const relative = path.relative(tmpdir(), paths.root);
+  if (!relative.startsWith("adapter-cancellation-") || relative.includes(path.sep)) {
+    throw new Error("Cancellation fixture root escaped its temporary directory");
+  }
+  await rm(paths.root, { recursive: true, force: true });
+});
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -27,6 +45,33 @@ const checkpoint = (downloadId: string): WireDownloadCheckpoint => ({
 });
 
 describe("pending download cancellation", () => {
+  test("returns a directory-creation error once without handing off to IPC", async ({
+    makeDownloadAdapter,
+  }) => {
+    const h = makeDownloadAdapter();
+    const blocked = path.join(paths.root, "not-a-directory");
+    await writeFile(blocked, "A regular file cannot contain the download folder");
+    h.setState((state) => {
+      state.settings.downloads.path = blocked;
+    });
+    const failed = vi.fn();
+    h.events.emit(
+      "start-download",
+      ["https://cdn.example/file"],
+      { game: "skyrimse", referenceTag: "preparation-failure" },
+      undefined,
+      failed,
+      "always",
+    );
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
+    expect(failed).toHaveBeenCalledWith(expect.objectContaining({ code: expect.any(String) }));
+    expect(h.start).not.toHaveBeenCalled();
+    expect(h.dispatched.some((action) => action.type === "INIT_DOWNLOAD")).toBe(false);
+    h.events.emit("intercept-download", "preparation-failure");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(failed).toHaveBeenCalledTimes(1);
+  });
+
   test("pause settles restore cleanup before its callback immediately resumes again", async ({
     makeDownloadAdapter,
   }) => {

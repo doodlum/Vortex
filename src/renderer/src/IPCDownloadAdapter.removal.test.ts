@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { UserCanceled } from "@vortex/shared/errors";
-import { afterEach, beforeEach, describe, expect, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, vi } from "vitest";
 
 const realTimers = vi.hoisted(() => ({ setTimeout: globalThis.setTimeout }));
 const paths = vi.hoisted(() => ({ root: "" }));
@@ -17,10 +17,15 @@ function deferred() {
   });
   return { promise, resolve };
 }
-beforeEach(async () => {
+// The download selector caches userData, so this root must live for the whole suite.
+beforeAll(async () => {
   paths.root = await mkdtemp(path.join(os.tmpdir(), "adapter-removal-"));
 });
-afterEach(async () => {
+afterAll(async () => {
+  const relative = path.relative(os.tmpdir(), paths.root);
+  if (!relative.startsWith("adapter-removal-") || relative.includes(path.sep)) {
+    throw new Error("Removal fixture root escaped its temporary directory");
+  }
   await rm(paths.root, { recursive: true, force: true });
 });
 
