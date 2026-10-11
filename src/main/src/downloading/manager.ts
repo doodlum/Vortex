@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
+import * as path from "node:path";
 
-import { type VortexError, parseError } from "@vortex/shared";
+import { VortexError, parseError } from "@vortex/shared";
 import type {
   ByteRange,
   Chunker,
@@ -16,7 +17,7 @@ import PQueue from "p-queue";
 import type { CookieJar } from "tough-cookie";
 
 import { log } from "../logging";
-import { defaultRetryStrategy } from "../transfer/retry";
+import { defaultDownloadRetryStrategy } from "../transfer/retry";
 import type { TimeoutOptions } from "./downloader";
 import { download } from "./downloader";
 import { ProgressReporter } from "./progress";
@@ -32,15 +33,14 @@ export type DownloadHandle<T = unknown> = {
   getState: () => DownloadState;
 
   /**
-   * Cancels the download if it is running. Returns the resulting state.
-   * If the download is not running, returns the current state unchanged.
+   * Cancels a queued or running download. Returns the resulting state.
+   * A terminal or already-paused download is unchanged.
    */
   cancel: () => DownloadState;
 
   /**
-   * Pauses the download if it is running. Returns the resulting state with
-   * a checkpoint for later resumption. If the download is not running,
-   * returns the current state unchanged.
+   * Pauses a queued or running download and waits for it to settle, returning
+   * a checkpoint for later resumption. Other states are unchanged.
    */
   pause: () => Promise<PauseResult<T>>;
 };
@@ -74,6 +74,9 @@ export class DownloadManager {
   readonly #userAgent: string | undefined;
   readonly #cookieJar: CookieJar | undefined;
   readonly #downloads: Map<string, DownloadHandle> = new Map();
+
+  readonly #activeDownloadIds = new Set<string>();
+  readonly #activeDestinations = new Set<string>();
 
   #rateLimiter: RateLimiter | undefined;
 
@@ -175,7 +178,7 @@ export class DownloadManager {
     checkpoint: DownloadCheckpoint<T>,
     resolver: Resolver<T>,
     chunker: Chunker<T>,
-    retry: RetryStrategy = defaultRetryStrategy(),
+    retry: RetryStrategy = defaultDownloadRetryStrategy(),
   ): DownloadHandle<T> {
     return this.#download(
       checkpoint.resource,
@@ -193,14 +196,15 @@ export class DownloadManager {
    * from scratch under that id, replacing any previous attempt tracked for it. Used
    * when the previous attempt left nothing resumable (no checkpoint, or none with
    * completed ranges). Restore is only issued for a settled (paused or failed) attempt,
-   * so the replaced handle is never mid-transfer.
+   * so the replaced handle is never mid-transfer. An attempt with an id or destination
+   * still owned by an unsettled transfer is rejected before any work is queued.
    */
   download<T>(
     resource: T,
     dest: string,
     resolver: Resolver<T>,
     chunker: Chunker<T> = staticChunker(),
-    retry: RetryStrategy = defaultRetryStrategy(),
+    retry: RetryStrategy = defaultDownloadRetryStrategy(),
     downloadId?: string,
   ): DownloadHandle<T> {
     return this.#download(resource, dest, resolver, chunker, retry, undefined, downloadId);
@@ -215,37 +219,70 @@ export class DownloadManager {
     checkpoint?: DownloadCheckpoint<T>,
     downloadId: string = randomUUID(),
   ): DownloadHandle<T> {
+    const absoluteDest = path.resolve(dest);
+    const destinationKey = process.platform === "win32" ? absoluteDest.toLowerCase() : absoluteDest;
+    if (this.#activeDownloadIds.has(downloadId) || this.#activeDestinations.has(destinationKey)) {
+      throw new Error("A download already owns this id or destination");
+    }
+    this.#activeDownloadIds.add(downloadId);
+    this.#activeDestinations.add(destinationKey);
+    const releaseOwnership = () => {
+      this.#activeDownloadIds.delete(downloadId);
+      this.#activeDestinations.delete(destinationKey);
+    };
     const progressReporter = new ProgressReporter();
+    let started = false;
     const abortController = new AbortController();
+    // Abort the queue only while waiting: racing an active queue task against its
+    // signal would settle pause() before the downloader closed its file handle.
+    const queuedAbortController = new AbortController();
+    const observedRetry: RetryStrategy = (context) => {
+      const verdict = retry(context);
+      if (verdict.retry) {
+        const { data } = parseError(context.error);
+        log("info", "retrying download transfer", {
+          downloadId,
+          attempt: context.attempt,
+          delayMs: verdict.delayMs,
+          kind: data.kind,
+          code: data.kind === "http:generic" ? data.originalCode : undefined,
+        });
+      }
+      return verdict;
+    };
 
     log("debug", "queuing download", { downloadId, dest });
 
-    const rawPromise = this.#downloadQueue.add(() => {
-      log("debug", "download starting", { downloadId });
-      progressReporter.status = "running";
-      return download(
-        resource,
-        dest,
-        {
-          chunker,
-          rateLimiter: this.#rateLimiter,
-          resolver,
-          retry: retry,
-        },
-        {
-          abortSignal: abortController.signal,
-          checkpoint,
-          cookieJar: this.#cookieJar,
-          progressReporter,
-          timeout: this.#timeout,
-          userAgent: this.#userAgent,
-        },
-      );
-    });
+    const rawPromise = this.#downloadQueue.add(
+      () => {
+        started = true;
+        log("debug", "download starting", { downloadId });
+        progressReporter.status = "running";
+        return download(
+          resource,
+          dest,
+          {
+            chunker,
+            rateLimiter: this.#rateLimiter,
+            resolver,
+            retry: observedRetry,
+          },
+          {
+            abortSignal: abortController.signal,
+            checkpoint,
+            cookieJar: this.#cookieJar,
+            progressReporter,
+            timeout: this.#timeout,
+            userAgent: this.#userAgent,
+          },
+        );
+      },
+      { signal: queuedAbortController.signal },
+    );
 
     // Swallow all rejections on one fork so that pause()/cancel() flows
     // never surface as unhandled rejections.
-    const settled = rawPromise.catch(() => {});
+    const settled = rawPromise.then(releaseOwnership, releaseOwnership);
 
     // The consumer-facing promise. Cancellation rejections are swallowed so
     // that callers awaiting only pause() don't see unhandled rejections.
@@ -258,15 +295,23 @@ export class DownloadManager {
     let terminalError: VortexError | null = null;
 
     const cancel = (): DownloadState => {
-      if (progressReporter.status === "running") {
+      if (["queued", "running"].includes(progressReporter.status)) {
+        const wasQueued = progressReporter.status === "queued";
         log("debug", "cancelling download", { downloadId });
         progressReporter.status = "canceled";
         abortController.abort();
+        if (wasQueued)
+          queuedAbortController.abort(
+            new VortexError("Download cancelled", { kind: "user-canceled", skipped: false }),
+          );
       }
       return getState();
     };
 
     const buildCheckpoint = (): DownloadCheckpoint<T> => {
+      // A queued resume has not touched the partial file or initialized progress.
+      // Retain its existing checkpoint rather than replacing it with zero bytes.
+      if (!started && checkpoint !== undefined) return checkpoint;
       const progress = progressReporter.getProgress();
       let completedRanges: ByteRange[] = [];
 
@@ -278,7 +323,7 @@ export class DownloadManager {
           })
           .map((c) => c.chunkRange);
       } else if (progress.bytesWritten > 0) {
-        completedRanges = [{ start: 0, end: progress.bytesWritten }];
+        completedRanges = [{ start: 0, end: progress.bytesWritten - 1 }];
       }
 
       return {
@@ -294,6 +339,8 @@ export class DownloadManager {
       const currentStatus = progressReporter.status;
 
       if (currentStatus === "paused") {
+        await settled;
+        if (progressReporter.status !== "paused") return getState() as PauseResult<T>;
         return {
           ...getState(),
           status: currentStatus,
@@ -301,7 +348,7 @@ export class DownloadManager {
         };
       }
 
-      if (currentStatus !== "running") {
+      if (currentStatus !== "running" && currentStatus !== "queued") {
         if (currentStatus === "failed") {
           return { ...getState(), status: currentStatus, error: terminalError! };
         }
@@ -312,9 +359,14 @@ export class DownloadManager {
       log("debug", "pausing download", { downloadId });
       progressReporter.status = "paused";
       abortController.abort();
+      if (currentStatus === "queued")
+        queuedAbortController.abort(
+          new VortexError("Download paused", { kind: "user-canceled", skipped: false }),
+        );
       // Wait for the download to fully settle (settled never rejects).
       await settled;
       log("debug", "download paused", { downloadId });
+      if (progressReporter.status !== "paused") return getState() as PauseResult<T>;
 
       return { ...getState(), status: "paused", checkpoint: buildCheckpoint() };
     };
@@ -346,6 +398,7 @@ export class DownloadManager {
     // precedence.
     void rawPromise.then(
       () => {
+        if (progressReporter.status !== "running") return;
         log("debug", "download completed", { downloadId });
         progressReporter.status = "completed";
       },

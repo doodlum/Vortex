@@ -56,8 +56,9 @@ function fuzzyChainMatch(identifiers: ISkippedDownloadIdentifiers, ref: IModRefe
     const names = new Set(fileNames.map(sanitizeFileName));
     return names.has(sanitizeFileName(ref.logicalFileName));
   }
-  // same mod page, fuzzy version, no file names to disambiguate - good enough to match
-  return true;
+  // A mod page can have several distinct fuzzy members. File aliases or names
+  // must identify the skipped file; modId alone must never persist a guess.
+  return false;
 }
 
 /**

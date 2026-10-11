@@ -185,7 +185,12 @@ describe("runtime restore", () => {
     await h.started.promise;
 
     // the rebuilt nxm url is resolved through the normal protocol flow
-    expect(nxmHandler).toHaveBeenCalledWith("nxm://skyrimse/mods/123/files/456");
+    expect(nxmHandler).toHaveBeenCalledWith(
+      "nxm://skyrimse/mods/123/files/456",
+      undefined,
+      undefined,
+      expect.any(AbortSignal),
+    );
     // and healed back onto the record
     expect(h.dispatched).toContainEqual(
       downloadProgress(h.downloadId, 0, 100, ["nxm://skyrimse/mods/123/files/456"]),

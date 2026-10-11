@@ -10,7 +10,7 @@ import { RateLimiter } from "limiter";
 import { CookieJar } from "tough-cookie";
 import { assert, describe, it, expect, vi, beforeAll, afterAll, test } from "vitest";
 
-import { defaultRetryStrategy } from "../transfer/retry";
+import { defaultDownloadRetryStrategy, defaultRetryStrategy } from "../transfer/retry";
 import { download, type TimeoutOptions } from "./downloader";
 import { ProgressReporter } from "./progress";
 import { urlResolver } from "./resolver";
@@ -998,6 +998,31 @@ describe("download", () => {
   describe("retry", () => {
     const noChunks = () => [];
 
+    it("fails after the bounded retries when responses remain truncated", async () => {
+      const complete = serveFile({ body: SMALL_FILE, acceptRanges: false });
+      let gets = 0;
+      using route = server.route(async (ctx) => {
+        if (ctx.req.method !== "GET") return complete(ctx);
+        gets++;
+        ctx.res.writeHead(200, { "content-length": SMALL_FILE.length });
+        ctx.res.write(SMALL_FILE.subarray(0, 128));
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        ctx.res.destroy();
+      });
+      await using tmp = await makeTmpDir();
+
+      await expect(
+        download(route.url, path.join(tmp.dir, "output"), {
+          resolver: urlResolver,
+          chunker: noChunks,
+          retry: defaultDownloadRetryStrategy(2, 150, 150),
+        }),
+      ).rejects.toMatchObject({
+        data: { kind: "http:generic", originalCode: "ERR_HTTP_CONTENT_LENGTH_MISMATCH" },
+      });
+      expect(gets).toBe(3);
+    });
+
     // ── probe retries ──────────────────────────────────────────────
 
     it("retries a failed probe and succeeds", async () => {
@@ -1350,6 +1375,7 @@ describe("download", () => {
         { cookieJar: jar },
       );
 
+      expect(await readFile(path.join(tmp.dir, "output"))).toEqual(SMALL_FILE);
       const cookies = await jar.getCookies(route.url.toString());
       expect(cookies).toHaveLength(1);
       expect(cookies[0]!.key).toBe("token");
@@ -1374,6 +1400,7 @@ describe("download", () => {
         { cookieJar: jar },
       );
 
+      expect(await readFile(path.join(tmp.dir, "output"))).toEqual(SMALL_FILE);
       // First request is the HEAD probe; second is the GET download.
       const [head, get] = route.requests;
       expect(head!.method).toBe("HEAD");
