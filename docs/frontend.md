@@ -20,7 +20,8 @@ precedent.
 
 If you change exported types in `types/api.ts` (for example
 `IMainPageOptions`), run `pnpm run api` and commit the regenerated
-`etc/vortex.api.md`. Add a one-line TSDoc `/** ... */` so the entry isn't
+`etc/vortex.api.md`. The report target hashes the declaration output of `api:dts` after
+that dependency runs, so a cached report matches the generated types. Add a one-line TSDoc `/** ... */` so the entry isn't
 `(undocumented)` in the report.
 
 This is the one renderer-specific step that isn't covered by the standard

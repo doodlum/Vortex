@@ -1,7 +1,10 @@
+import { createAction } from "redux-act";
+
 import safeCreateAction from "../../../actions/safeCreateAction";
 import { UserCanceled } from "../../../util/CustomErrors";
 import type { IFileChange } from "../types/IDeploymentMethod";
 import type { IFileEntry } from "../types/IFileEntry";
+import type { IDeploymentFeedback, IDeploymentControl } from "../util/deploymentFeedback";
 import { changeToEntry } from "../util/externalChanges";
 
 export interface IDeploymentProblem {
@@ -90,3 +93,26 @@ export function confirmExternalChanges(changes: IFileEntry[], canceled: boolean)
     dispatch(setExternalChanges([]));
   };
 }
+
+/** Starts a deployment outcome owned by one request. */
+export const beginDeploymentFeedback = createAction(
+  "BEGIN_DEPLOYMENT_FEEDBACK",
+  (feedback: IDeploymentFeedback) => feedback,
+);
+
+/** Settles only the still-running matching request. */
+export const updateDeploymentFeedback = createAction(
+  "UPDATE_DEPLOYMENT_FEEDBACK",
+  (feedback: IDeploymentFeedback) => feedback,
+);
+
+/** Registers the visible menu status control. */
+export const setDeploymentControl = createAction(
+  "SET_DEPLOYMENT_CONTROL",
+  (control: IDeploymentControl) => control,
+);
+
+/** Releases only the control belonging to this mount. */
+export const clearDeploymentControl = createAction("CLEAR_DEPLOYMENT_CONTROL", (owner: string) => ({
+  owner,
+}));

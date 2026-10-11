@@ -9,6 +9,7 @@ import type { IGameStored } from "@/extensions/gamemode_management/types/IGameSt
 import type { IHealthCheckPersistentState } from "@/extensions/health_check/reducers/persistent";
 import type { IHealthCheckSessionState } from "@/extensions/health_check/reducers/session";
 import type { IHistoryPersistent, IHistoryState } from "@/extensions/history_management/reducers";
+import type { IModsSessionState } from "@/extensions/mod_management/reducers/session";
 import type { IMod } from "@/extensions/mod_management/types/IMod";
 import type { IProfile } from "@/extensions/profile_management/types/IProfile";
 import type { IUpdaterSessionState } from "@/extensions/updater/reducers";
@@ -425,6 +426,8 @@ export interface ICollectionsPersistentState {
 }
 
 export interface ISessionState {
+  /** Session-only mod deployment, file failures and pending external changes. */
+  mods: IModsSessionState;
   base: ISession;
   collections: ICollectionInstallState;
   gameMode: ISessionGameMode;

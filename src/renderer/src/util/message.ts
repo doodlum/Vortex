@@ -142,22 +142,29 @@ const hasStringStack = (v: unknown): v is { stack: string } =>
   typeof (v as { stack: unknown }).stack === "string";
 
 /**
- * show an error notification with an optional "more" button that displays further details
- * in a modal dialog.
- *
- * @export
- * @param {Redux.Dispatch<S>} dispatch
- * @param {string} title
- * @param {any} [details] further details about the error (stack and such). The api says we only
- *                        want string or Errors but since some node apis return non-Error objects
- *                        where Errors are expected we have to be a bit more flexible here.
+ * What an error shows the user in its details dialog, worked out once: the dialog's
+ * content, and where a Report button would take them, if anywhere. Plain data, so it can
+ * be kept in the store and the dialog opened later - see {@link errorDialogActions}.
  */
-export function showError(
-  dispatch: ThunkDispatch<IState, null, Redux.Action>,
+export interface IErrorDescription {
+  title: string;
+  content: IDialogContent;
+  /** The third-party extension's issue tracker, when the error came from one. */
+  reportURL?: string;
+}
+
+/**
+ * Logs an error, records it for telemetry when it is reportable, and describes the
+ * details dialog {@link showError} offers for it. Set recordSpan=false only when an
+ * enclosing tracked activity records this failure; formatting and logging still run.
+ */
+export function describeError(
   title: string,
   details?: string | Error | any,
   options?: IErrorOptions,
-) {
+  record = true,
+  recordSpan = true,
+): IErrorDescription {
   if (options === undefined) {
     options = {};
   }
@@ -166,15 +173,15 @@ export function showError(
     options.extensionName = details["extensionName"];
   }
 
-  const err = renderError(details, options);
+  const err = renderError(details, options, record);
 
   const allowReport =
     err.allowReport !== undefined ? err.allowReport : shouldAllowReport(details, options);
 
-  log(allowReport ? "error" : "warn", title, err);
+  if (record) log(allowReport ? "error" : "warn", title, err);
 
   const isCommunityExtension = options.extensionName !== undefined;
-  if (allowReport && !isOutdated() && !didIgnoreError()) {
+  if (record && recordSpan && allowReport && !isOutdated() && !didIgnoreError()) {
     let error: Error;
     if (details instanceof Error) {
       error = details;
@@ -241,47 +248,97 @@ export function showError(
       "it to the extension author.";
   }
 
-  const actions: IDialogAction[] = [];
+  const canReport = !isOutdated() && !didIgnoreError() && allowReport;
 
-  if (!isOutdated() && !didIgnoreError() && allowReport) {
-    if (extIssueTrackerURL !== undefined) {
-      actions.push({
-        label: "Report",
-        action: () => {
-          dispatch(
-            showDialog(
-              "info",
-              "Reporting to extension author",
-              {
-                bbcode:
-                  "Since this error was very likely caused by a third-party extension, " +
-                  "we will now take you to their issue tracker at [b]{{url}}[/b].<br/><br/>" +
-                  "It usually helps a lot investigating issues if you provide your log files " +
-                  "(found at [url]{{logPath}}[/url]) " +
-                  "but please do keep in mind that those can contain personally identifiable " +
-                  "information (like folder names that include your windows account name) " +
-                  "or stuff like information about mods you are using.",
-                parameters: {
-                  url: extIssueTrackerURL,
-                  logPath: getVortexPath("userData"),
-                },
+  return {
+    title,
+    content,
+    reportURL: canReport ? extIssueTrackerURL : undefined,
+  };
+}
+
+/** The buttons of an error's details dialog: Report, where it can go somewhere, and Close. */
+export function errorDialogActions(
+  dispatch: ThunkDispatch<IState, null, Redux.Action>,
+  description: IErrorDescription,
+): IDialogAction[] {
+  const actions: IDialogAction[] = [];
+  const { reportURL } = description;
+
+  if (reportURL !== undefined) {
+    actions.push({
+      label: "Report",
+      action: () => {
+        dispatch(
+          showDialog(
+            "info",
+            "Reporting to extension author",
+            {
+              bbcode:
+                "Since this error was very likely caused by a third-party extension, " +
+                "we will now take you to their issue tracker at [b]{{url}}[/b].<br/><br/>" +
+                "It usually helps a lot investigating issues if you provide your log files " +
+                "(found at [url]{{logPath}}[/url]) " +
+                "but please do keep in mind that those can contain personally identifiable " +
+                "information (like folder names that include your windows account name) " +
+                "or stuff like information about mods you are using.",
+              parameters: {
+                url: reportURL,
+                logPath: getVortexPath("userData"),
               },
-              [
-                { label: "Cancel" },
-                {
-                  label: "Continue",
-                  action: () => opn(extIssueTrackerURL).catch(() => null),
-                },
-              ],
-            ),
-          );
-        },
-      });
-    }
+            },
+            [
+              { label: "Cancel" },
+              {
+                label: "Continue",
+                action: () => opn(reportURL).catch(() => null),
+              },
+            ],
+          ),
+        );
+      },
+    });
   }
 
   actions.push({ label: "Close", default: true });
 
+  return actions;
+}
+
+/**
+ * show an error notification with an optional "more" button that displays further details
+ * in a modal dialog.
+ *
+ * @export
+ * @param {Redux.Dispatch<S>} dispatch
+ * @param {string} title
+ * @param {any} [details] further details about the error (stack and such). The api says we only
+ *                        want string or Errors but since some node apis return non-Error objects
+ *                        where Errors are expected we have to be a bit more flexible here.
+ */
+export function showError(
+  dispatch: ThunkDispatch<IState, null, Redux.Action>,
+  title: string,
+  details?: string | Error | any,
+  options?: IErrorOptions,
+) {
+  if (options === undefined) {
+    options = {};
+  }
+
+  const description = describeError(title, details, options);
+
+  showErrorDescription(dispatch, description, options, details !== undefined);
+}
+
+/** Displays already-recorded diagnostics without logging or recording them again. */
+export function showErrorDescription(
+  dispatch: ThunkDispatch<IState, null, Redux.Action>,
+  description: IErrorDescription,
+  options: IErrorOptions = {},
+  hasDetails = true,
+) {
+  const { title } = description;
   const haveMessage = options.message !== undefined;
 
   dispatch(
@@ -292,18 +349,24 @@ export function showError(
       message: haveMessage ? options.message : title,
       allowSuppress: options.allowSuppress,
       replace: options.replace,
-      actions:
-        details !== undefined
-          ? [
-              ...(options.actions ?? []),
-              {
-                title: "More",
-                action: (dismiss: () => void) => {
-                  dispatch(showDialog("error", "Error", content, actions));
-                },
+      actions: hasDetails
+        ? [
+            ...(options.actions ?? []),
+            {
+              title: "More",
+              action: (dismiss: () => void) => {
+                dispatch(
+                  showDialog(
+                    "error",
+                    "Error",
+                    description.content,
+                    errorDialogActions(dispatch, description),
+                  ),
+                );
               },
-            ]
-          : [],
+            },
+          ]
+        : [],
     }),
   );
 }
@@ -651,12 +714,32 @@ function isPrivateField(key: string): boolean {
   return key[0] === "m" && key[1].toUpperCase() === key[1];
 }
 
-function renderCustomError(err: any) {
+/**
+ * Run the existing normalizer on a shadow that keeps property writability and
+ * enumerability. Read getters against the real Error, so private-field accessors
+ * keep their receiver while preview writes stay separate from its state.
+ */
+function previewError(err: Error): Error {
+  const shadow = Object.create(Object.getPrototypeOf(err), Object.getOwnPropertyDescriptors(err));
+  if (!Object.isExtensible(err)) Object.preventExtensions(shadow);
+  return new Proxy(shadow, {
+    get: (target, key) => {
+      const own = Object.getOwnPropertyDescriptor(target, key);
+      return own !== undefined && "value" in own ? own.value : Reflect.get(err, key, err);
+    },
+  });
+}
+
+function renderCustomError(err: any, mutate = true) {
   const res: ICustomErrorType = { wrap: false };
   if (err.error !== undefined && err.error instanceof Error) {
     // there's probably different fields in a custom error that might contain file path
     const fileName = err.executable;
-    const pretty = prettifyNodeErrorMessage(err.error, undefined, fileName);
+    const pretty = prettifyNodeErrorMessage(
+      mutate ? err.error : previewError(err.error),
+      undefined,
+      fileName,
+    );
     if (err.message !== undefined) {
       res.text = err.message;
       res.message = pretty.message;
@@ -746,7 +829,11 @@ export interface IErrorRendered {
  * render error message for display to the user
  * @param err
  */
-export function renderError(err: string | Error | any, options?: IErrorOptions): IErrorRendered {
+export function renderError(
+  err: string | Error | any,
+  options?: IErrorOptions,
+  mutate = true,
+): IErrorRendered {
   if (Array.isArray(err)) {
     err = err[0];
   } else if (err === undefined || err === null) {
@@ -775,9 +862,9 @@ export function renderError(err: string | Error | any, options?: IErrorOptions):
       allowReport: false,
     };
   } else if (err instanceof Error) {
-    const errMessage = prettifyNodeErrorMessage(err, options);
-
-    const flatErr = flatten(err || {}, { maxLength: 5 });
+    const input = mutate ? err : previewError(err);
+    const errMessage = prettifyNodeErrorMessage(input, options);
+    const flatErr = flatten(input || {}, { maxLength: 5 });
     delete flatErr["allowReport"];
 
     let attributes = Object.keys(flatErr || {}).filter((key) => key[0].toUpperCase() === key[0]);
@@ -803,6 +890,6 @@ export function renderError(err: string | Error | any, options?: IErrorOptions):
       translated: true,
     };
   } else {
-    return renderCustomError(err);
+    return renderCustomError(err, mutate);
   }
 }
