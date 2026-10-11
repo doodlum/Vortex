@@ -45,7 +45,12 @@ script.
     node scripts/verify-packaged-asar.mjs
     ```
 
-    It compares every nested `node_modules` dependency version in the deploy
+    It first requires the hash worker and its source map in the deployed build and
+    ASAR, with identical bytes. A missing cached worker can let the app launch but
+    make archive hashing fail at the first install. Both files are declared in
+    `src/main/package.json` as outputs of the Nx main build so a cache hit restores them.
+
+    It also compares every nested `node_modules` dependency version in the deploy
     tree against what actually landed in the asar, and fails on mismatches. This guard
     exists because electron-builder 26's pnpm module collector shipped a build
     with ~50 wrong nested dependency versions (we are pinned to 24.13.3 until
