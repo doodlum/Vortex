@@ -80,14 +80,14 @@ export const Header: FC<React.PropsWithChildren<unknown>> = () => {
       </div>
 
       <div className="flex shrink-0 items-center gap-x-2 [-webkit-app-region:no-drag]">
-        <StagingIndicator />
-
-        <VersionIndicator />
+        <ProfileSection />
 
         <PremiumIndicator />
 
+        <StagingIndicator />
+
         <div className="flex items-center gap-x-5">
-          <ProfileSection />
+          <VersionIndicator />
 
           <div className="h-6 w-0.5 rounded-md bg-stroke-weak" />
 
