@@ -137,6 +137,25 @@ spelled `neutral-on-scrim` - there is deliberately no way to ask for
 `success-on-scrim`. A branded icon on a scrim still takes its colour from the
 ordinary, theme-relative brand ramp, and will shift with the theme.
 
+## Modern title bar
+
+The version sits in the title bar's middle column. It is centered in the bar
+after the game spine, rather than in the whole window. The right-hand controls
+are Account (Help when signed out), the membership slot, the preview build
+label, and window controls. There is no divider.
+
+The membership slot shows Log in when signed out and Premium for premium
+members. Free users see Go premium unless they are supporters; supporters
+without premium membership see no membership control. Menus open at their
+triggers; shared submenu positioning chooses the side with available space.
+
+The title shrinks and truncates. If the controls need more than half the bar,
+the version moves left rather than covering or squeezing them. Keep the
+right column's minimum content width and the left column's menu-button inset.
+Preserve the drag region, the no-drag rule while a popover is expanded, and
+the controls' no-drag regions. The whole title bar follows Electron zoom.
+The classic layout uses its own title bar.
+
 ## Motion
 
 Users can turn non-essential animation down: **Settings → Interface → Reduce motion**,
