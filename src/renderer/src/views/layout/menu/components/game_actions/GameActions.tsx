@@ -2,6 +2,8 @@ import { Transition } from "@headlessui/react";
 import React, { useMemo } from "react";
 
 import { useMainContext, useWindowContext } from "@/contexts";
+import { useDeploymentControl } from "@/extensions/mod_management/hooks/useDeploymentControl.hook";
+import { useDeploymentStatus } from "@/extensions/mod_management/hooks/useDeploymentStatus.hook";
 import { useDeployMods } from "@/extensions/mod_management/hooks/useDeployMods.hook";
 import { joinClasses } from "@/ui/utils/joinClasses";
 import { useSpineContext } from "@/views/components/Spine/SpineContext";
@@ -31,8 +33,14 @@ export const GameActions = () => {
   } = useToolsContext();
   const { needToDeploy, autoDeploy, isDeploying, deployProgress, deployStep, deploy } =
     useDeployMods();
+  const { feedback, showFailure } = useDeploymentStatus(deploy);
+  useDeploymentControl(gameId, selection.type === "game" && selection.gameId === gameId);
   // With auto deploy on, changes deploy on their own, so Apply only shows its progress.
-  const showApply = isDeploying || (needToDeploy && !autoDeploy);
+  const showApply =
+    isDeploying ||
+    (needToDeploy && !autoDeploy) ||
+    feedback?.state === "failed" ||
+    feedback?.state === "deployed";
 
   if (gameId === undefined || selection.type !== "game") {
     return null;
@@ -85,9 +93,11 @@ export const GameActions = () => {
 
         {showApply && (
           <ApplyButton
+            feedback={feedback}
             isCollapsed={menuIsCollapsed}
             progress={deployProgress}
             step={deployStep}
+            onShowFailure={showFailure}
             onClick={() => {
               trackApplyClicked();
               deploy();

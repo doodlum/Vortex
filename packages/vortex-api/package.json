@@ -71,7 +71,9 @@
         "inputs": [
           "default",
           "{projectRoot}/api-extractor.json",
-          "{projectRoot}/lib/api.d.ts"
+          {
+            "dependentTasksOutputFiles": "packages/vortex-api/lib/api.d.ts"
+          }
         ],
         "outputs": [
           "{workspaceRoot}/etc/vortex.api.md",

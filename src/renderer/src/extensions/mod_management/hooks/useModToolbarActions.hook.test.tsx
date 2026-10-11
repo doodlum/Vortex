@@ -38,12 +38,17 @@ vi.mock("@/ExtensionProvider", async (importOriginal) => ({
 
 const state = {
   settings: {
+    profiles: {},
     mods: { activator: {}, confirmPurge: true },
     downloads: { copyOnIFF: false },
     automation: { install: false },
   },
-  session: { discovery: {} },
-  persistent: { mods: {} },
+  session: {
+    discovery: {},
+    base: { activity: { mods: [] as string[] } },
+    mods: { deploymentFeedback: {} },
+  },
+  persistent: { mods: {}, profiles: {} },
 };
 
 vi.mock("react-redux", async () => {
@@ -241,22 +246,22 @@ describe("useModToolbarActions deploy", () => {
   const deployAction = () => actionsFor([]).find((action) => action.id === "deploy");
 
   const setModActivity = (activity: string[] | undefined) => {
-    (state.session as { base?: unknown }).base =
-      activity === undefined ? undefined : { activity: { mods: activity } };
+    state.session.base = { activity: { mods: activity ?? [] } };
   };
 
   /** Gives the fixture an active game with changes waiting to deploy, or takes it away. */
   const setPending = (pending: boolean) => {
     const settings = state.settings as { profiles?: unknown };
     const persistent = state.persistent as { profiles?: unknown; deployment?: unknown };
-    settings.profiles = pending ? { activeProfileId: "p1" } : undefined;
-    persistent.profiles = pending ? { p1: { id: "p1", gameId: "skyrimse" } } : undefined;
+    settings.profiles = pending ? { activeProfileId: "p1" } : {};
+    persistent.profiles = pending ? { p1: { id: "p1", gameId: "skyrimse" } } : {};
     persistent.deployment = pending ? { needToDeploy: { skyrimse: true } } : undefined;
   };
 
   afterEach(() => {
     setModActivity(undefined);
     setPending(false);
+    state.session.mods.deploymentFeedback = {};
   });
 
   it("says it applies changes", () => {
@@ -273,6 +278,26 @@ describe("useModToolbarActions deploy", () => {
     setModActivity([]);
     expect(deployAction()?.brand).toBe("primary");
   });
+
+  it.each(["p1", "other-profile"])(
+    "uses only this active profile's waiting request: %s",
+    (profileId) => {
+      setPending(true);
+      setModActivity([]);
+      state.session.mods.deploymentFeedback = {
+        skyrimse: {
+          gameId: "skyrimse",
+          profileId,
+          requestId: "queued",
+          state: "running",
+          changedAt: Date.now(),
+        },
+      };
+      const action = deployAction();
+      expect(action?.disabled).toBe(profileId === "p1");
+      expect(action?.brand).toBe(profileId === "p1" ? "neutral" : "primary");
+    },
+  );
 
   it.each(["deployment", "deployment_pending"])(
     "is disabled, says so and drops its brand while %s",

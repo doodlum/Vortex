@@ -1,7 +1,8 @@
-import { mdiAutorenew } from "@mdi/js";
+import { mdiAlertOutline, mdiAutorenew, mdiCheck } from "@mdi/js";
 import React from "react";
 import { useTranslation } from "react-i18next";
 
+import type { IDeploymentFeedback } from "@/extensions/mod_management/util/deploymentFeedback";
 import { Button } from "@/ui/components/button/Button";
 import { Icon } from "@/ui/components/icon/Icon";
 import { Tooltip } from "@/ui/components/tooltip/Tooltip";
@@ -10,6 +11,8 @@ import { joinClasses } from "@/ui/utils/joinClasses";
 
 interface IApplyButtonProps {
   isCollapsed: boolean;
+  feedback?: IDeploymentFeedback;
+  onShowFailure?: () => void;
   /** 0-100 while a deployment runs; undefined when idle. */
   progress?: number;
   /** What the deploy is doing, e.g. the mod it's on, shown under the tooltip while applying. */
@@ -21,10 +24,12 @@ const Content = ({
   isApplying = false,
   isCollapsed,
   label,
+  icon = mdiAutorenew,
 }: {
   isApplying?: boolean;
   isCollapsed: boolean;
   label: string;
+  icon?: string;
 }) => (
   <>
     <Icon
@@ -32,7 +37,7 @@ const Content = ({
         "nxm-button-icon",
         { "animate-spin reduce-motion:animate-none": isApplying },
       ])}
-      path={mdiAutorenew}
+      path={icon}
       size="lg"
     />
 
@@ -41,7 +46,7 @@ const Content = ({
         // While applying the bar sets the colour, so the text picks it up from there.
         {...(isApplying ? { brand: "none" as const } : { appearance: "inverted" as const })}
         as="span"
-        className="font-semibold"
+        className="min-w-0 font-semibold break-words whitespace-normal"
         typographyType="body-lg"
       >
         {label}
@@ -55,18 +60,37 @@ const Content = ({
  * While it deploys, the whole button becomes a progress bar: not a button at all, so it has
  * no hover or press state and can't start a second deployment.
  */
-export const ApplyButton = ({ isCollapsed, progress, step, onClick }: IApplyButtonProps) => {
+export const ApplyButton = ({
+  isCollapsed,
+  progress,
+  step,
+  feedback,
+  onClick,
+  onShowFailure,
+}: IApplyButtonProps) => {
   const { t } = useTranslation();
   const isApplying = progress !== undefined;
-  const label = isApplying ? t("Applying") : t("Apply");
+  const failed = !isApplying && feedback?.state === "failed";
+  const deployed = !isApplying && feedback?.state === "deployed";
+  const label = isApplying
+    ? t("Applying")
+    : failed
+      ? t("Deployment failed")
+      : deployed
+        ? t("Mods deployed")
+        : t("Apply");
   const showStep = isApplying && !!step;
   const height = isCollapsed ? "h-10" : "h-12";
 
-  const headline = !isApplying
-    ? t("Apply your mod changes to the game")
-    : showStep
-      ? t("Applying mod changes")
-      : t("Applying mod changes…");
+  const headline = failed
+    ? t(feedback.error?.title ?? "Deployment failed")
+    : deployed
+      ? t("Mods deployed")
+      : !isApplying
+        ? t("Apply your mod changes to the game")
+        : showStep
+          ? t("Applying mod changes")
+          : t("Applying mod changes…");
 
   return (
     <div className={joinClasses(["relative", isCollapsed ? "w-full" : "min-w-0 flex-1"])}>
@@ -103,14 +127,34 @@ export const ApplyButton = ({ isCollapsed, progress, step, onClick }: IApplyButt
               <Content isApplying isCollapsed={isCollapsed} label={label} />
             </span>
           </div>
+        ) : deployed ? (
+          <div
+            aria-label={label}
+            className={joinClasses([
+              "flex w-full items-center justify-center gap-x-2 rounded-sm bg-success-weak px-2 text-success-strong",
+              height,
+            ])}
+            data-testid="menu-apply"
+            role="status"
+          >
+            <Icon path={mdiCheck} size="lg" />
+            {!isCollapsed && <span className="font-semibold">{label}</span>}
+            {isCollapsed && <span className="sr-only">{label}</span>}
+          </div>
         ) : (
           <Button
-            aria-label={isCollapsed ? label : undefined}
-            brand="primary"
+            aria-label={label}
+            brand={failed ? "danger" : "primary"}
             className={joinClasses(["w-full transition-all", height])}
-            customContent={<Content isCollapsed={isCollapsed} label={label} />}
+            customContent={
+              <Content
+                icon={failed ? mdiAlertOutline : mdiAutorenew}
+                isCollapsed={isCollapsed}
+                label={label}
+              />
+            }
             data-testid="menu-apply"
-            onClick={onClick}
+            onClick={failed ? onShowFailure : onClick}
           />
         )}
       </Tooltip>

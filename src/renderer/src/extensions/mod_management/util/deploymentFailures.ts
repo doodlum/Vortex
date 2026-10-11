@@ -50,10 +50,6 @@ function byMod(failures: IDeploymentFailure[]): Map<string, IDeploymentFailure[]
  * is a link that opens it in the game directory.
  */
 export function reportDeploymentFailures(api: IExtensionApi, failures: IDeploymentFailure[]): void {
-  const t = api.translate;
-  const grouped = byMod(failures);
-  const truncated = failures.length >= MAX_STORED_DEPLOYMENT_FAILURES;
-
   api.sendNotification({
     id: DEPLOYMENT_FAILED_NOTIFICATION_ID,
     type: "error",
@@ -62,47 +58,53 @@ export function reportDeploymentFailures(api: IExtensionApi, failures: IDeployme
       {
         title: "More",
         action: (dismiss: () => void) => {
-          const modSections = Array.from(grouped.entries()).map(([mod, modFailures]) =>
-            [
-              `[b]${mod}[/b]`,
-              ...modFailures.map(
-                (failure) =>
-                  `[url=cb://reveal/${encodeURIComponent(failure.outputPath)}]${failure.relPath}[/url]`,
-              ),
-            ].join("<br/>"),
-          );
-
-          api
-            .showDialog(
-              "info",
-              "Files could not be deployed",
-              {
-                bbcode:
-                  t(
-                    "These files could not be written to the game directory, usually because " +
-                      "another application had them open. Close it and deploy again.",
-                  ) +
-                  "<br/><br/>" +
-                  modSections.join("<br/><br/>") +
-                  (truncated
-                    ? "<br/><br/>" +
-                      t("Only the first {{count}} are listed, the log has the rest.", {
-                        replace: { count: failures.length },
-                      })
-                    : ""),
-                options: {
-                  bbcodeContext: {
-                    callbacks: {
-                      reveal: (outputPath: string) => window.api.shell.showItemInFolder(outputPath),
-                    },
-                  },
-                },
-              },
-              [{ label: "Close" }],
-            )
-            .then(() => dismiss());
+          void showDeploymentFailureFiles(api, failures).then(() => dismiss());
         },
       },
     ],
   });
+}
+
+/** Opens the same file list from a notification or the menu status. */
+export function showDeploymentFailureFiles(api: IExtensionApi, failures: IDeploymentFailure[]) {
+  const t = api.translate;
+  const grouped = byMod(failures);
+  const truncated = failures.length >= MAX_STORED_DEPLOYMENT_FAILURES;
+  const modSections = Array.from(grouped.entries()).map(([mod, modFailures]) =>
+    [
+      `[b]${mod}[/b]`,
+      ...modFailures.map(
+        (failure) =>
+          `[url=cb://reveal/${encodeURIComponent(failure.outputPath)}]${failure.relPath}[/url]`,
+      ),
+    ].join("<br/>"),
+  );
+
+  return api.showDialog(
+    "info",
+    "Files could not be deployed",
+    {
+      bbcode:
+        t(
+          "These files could not be written to the game directory, usually because " +
+            "another application had them open. Close it and deploy again.",
+        ) +
+        "<br/><br/>" +
+        modSections.join("<br/><br/>") +
+        (truncated
+          ? "<br/><br/>" +
+            t("Only the first {{count}} are listed, the log has the rest.", {
+              replace: { count: failures.length },
+            })
+          : ""),
+      options: {
+        bbcodeContext: {
+          callbacks: {
+            reveal: (outputPath: string) => window.api.shell.showItemInFolder(outputPath),
+          },
+        },
+      },
+    },
+    [{ label: "Close" }],
+  );
 }

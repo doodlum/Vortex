@@ -3,9 +3,16 @@ import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { IDeploymentFeedback } from "@/extensions/mod_management/util/deploymentFeedback";
+
 /** The context values under test, set per case. */
 const context = vi.hoisted(() => ({
   menuIsCollapsed: false,
+  selectionType: "game" as "game" | "home",
+  selectedGameId: "stardewvalley",
+  control: vi.fn(),
+  feedback: undefined as IDeploymentFeedback | undefined,
+  showFailure: vi.fn(),
   needToDeploy: false,
   autoDeploy: false,
   isDeploying: false,
@@ -24,7 +31,9 @@ vi.mock("@/contexts", () => ({
 }));
 
 vi.mock("@/views/components/Spine/SpineContext", () => ({
-  useSpineContext: () => ({ selection: { type: "game", gameId: "stardewvalley" } }),
+  useSpineContext: () => ({
+    selection: { type: context.selectionType, gameId: context.selectedGameId },
+  }),
 }));
 
 vi.mock("../../context/ToolsContext", () => ({
@@ -40,6 +49,14 @@ vi.mock("../../context/ToolsContext", () => ({
     startTool: vi.fn(),
     handlePlay: context.handlePlay,
   }),
+}));
+
+vi.mock("@/extensions/mod_management/hooks/useDeploymentControl.hook", () => ({
+  useDeploymentControl: (...args: unknown[]) => context.control(...args),
+}));
+
+vi.mock("@/extensions/mod_management/hooks/useDeploymentStatus.hook", () => ({
+  useDeploymentStatus: () => ({ feedback: context.feedback, showFailure: context.showFailure }),
 }));
 
 vi.mock("@/extensions/mod_management/hooks/useDeployMods.hook", () => ({
@@ -64,6 +81,11 @@ import { GameActions } from "./GameActions";
 describe("GameActions", () => {
   beforeEach(() => {
     context.menuIsCollapsed = false;
+    context.selectionType = "game";
+    context.selectedGameId = "stardewvalley";
+    context.control = vi.fn();
+    context.feedback = undefined;
+    context.showFailure = vi.fn();
     context.needToDeploy = false;
     context.autoDeploy = false;
     context.isDeploying = false;
@@ -73,6 +95,22 @@ describe("GameActions", () => {
     context.handlePlay = vi.fn();
     context.primaryStarter = undefined;
     context.visibleTools = [{ id: "tool-1", exePath: "a.exe" }];
+  });
+
+  it("registers feedback only for the selected game control", async () => {
+    const { rerender } = render(<GameActions />);
+    expect(context.control).toHaveBeenLastCalledWith("stardewvalley", true);
+    context.selectedGameId = "another-game";
+    rerender(<GameActions />);
+    expect(context.control).toHaveBeenLastCalledWith("stardewvalley", false);
+    await settleTransitions();
+  });
+
+  it("does not register a hidden control on Home", () => {
+    context.selectionType = "home";
+    render(<GameActions />);
+    expect(context.control).toHaveBeenLastCalledWith("stardewvalley", false);
+    expect(screen.queryByTestId("menu-tools")).toBeNull();
   });
 
   it("lays the row out for the width the menu is at", async () => {
@@ -250,6 +288,66 @@ describe("GameActions", () => {
 
     expect(await screen.findByText("Applying mod changes…")).toBeInTheDocument();
 
+    await settleTransitions();
+  });
+
+  for (const isCollapsed of [false, true]) {
+    it(
+      "keeps a failed result reachable with auto deployment enabled, collapsed=" + isCollapsed,
+      async () => {
+        context.menuIsCollapsed = isCollapsed;
+        context.autoDeploy = true;
+        context.feedback = {
+          gameId: "stardewvalley",
+          profileId: "p",
+          requestId: "r",
+          state: "failed",
+          changedAt: 1,
+          error: { title: "Failure", content: { text: "Detail" } },
+        };
+        render(<GameActions />);
+        const apply = screen.getByRole("button", { name: "Deployment failed" });
+        fireEvent.click(apply);
+        expect(context.showFailure).toHaveBeenCalledOnce();
+        expect(context.deploy).not.toHaveBeenCalled();
+        expect(context.emit).not.toHaveBeenCalled();
+        await settleTransitions();
+      },
+    );
+  }
+
+  it("shows a successful result as a status rather than another deploy button", async () => {
+    context.feedback = {
+      gameId: "stardewvalley",
+      profileId: "p",
+      requestId: "r",
+      state: "deployed",
+      changedAt: 1,
+    };
+    render(<GameActions />);
+    const status = screen.getByRole("status", { name: "Mods deployed" });
+    fireEvent.click(status);
+    expect(context.deploy).not.toHaveBeenCalled();
+    expect(context.emit).not.toHaveBeenCalled();
+    await settleTransitions();
+  });
+
+  it("busy progress takes precedence over a retained failure", async () => {
+    context.feedback = {
+      gameId: "stardewvalley",
+      profileId: "p",
+      requestId: "r",
+      state: "failed",
+      changedAt: 1,
+    };
+    context.isDeploying = true;
+    context.deployProgress = 42;
+    render(<GameActions />);
+    expect(screen.getByRole("progressbar", { name: "Applying" })).toHaveAttribute(
+      "aria-valuenow",
+      "42",
+    );
+    expect(screen.queryByRole("button", { name: "Deployment failed" })).toBeNull();
     await settleTransitions();
   });
 
