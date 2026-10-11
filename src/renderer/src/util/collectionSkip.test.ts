@@ -289,9 +289,7 @@ describe("markCollectionMemberSkipped - free-user skip (identifiers)", () => {
     expect(statusOf(h, rule)).toBe("ignored");
   });
 
-  test("ignores a fuzzy member matched by modId when the skip carries no file names", ({
-    makeApi,
-  }) => {
+  test("fuzzy skip leaves a modId-only decision unresolved", ({ makeApi }) => {
     // fixed bug: the previous inline handler dereferenced fileNames before guarding it and threw
     const rule = repoRule({ versionMatch: "1.0.0+prefer" });
     const h = makeApi(ruleOverrides(rule));
@@ -300,8 +298,8 @@ describe("markCollectionMemberSkipped - free-user skip (identifiers)", () => {
       identifiers: { gameId: GAME_ID, modId: 42 },
     });
 
-    expect(matched).toBe(true);
-    expect(statusOf(h, rule)).toBe("ignored");
+    expect(matched).toBe(false);
+    expect(statusOf(h, rule)).toBe("pending");
   });
 });
 
@@ -314,5 +312,67 @@ describe("markCollectionMemberSkipped - no active session", () => {
     });
 
     expect(matched).toBe(false);
+  });
+});
+
+describe("free-user Skip needs a file identity", () => {
+  test("does not ignore the first fuzzy rule on a shared mod page", ({ makeApi }) => {
+    const first = repoRule({
+      tag: "first",
+      versionMatch: "1.0.0+prefer",
+      logicalFileName: "First.7z",
+    });
+    const second = repoRule({
+      tag: "second",
+      versionMatch: "1.0.0+prefer",
+      logicalFileName: "Second.7z",
+      repo: { repository: "nexus", modId: "42", fileId: "200" },
+    });
+    const h = makeApi({
+      mods: {
+        [GAME_ID]: { [COLLECTION_ID]: makeMod({ id: COLLECTION_ID, rules: [first, second] }) },
+      },
+      session: makeInstallState({
+        activeSession: makeSession({
+          sessionId: SESSION_ID,
+          collectionId: COLLECTION_ID,
+          gameId: GAME_ID,
+          mods: {
+            [modRuleId(first)]: makeModInstallInfo({ rule: first, status: "pending" }),
+            [modRuleId(second)]: makeModInstallInfo({ rule: second, status: "pending" }),
+          },
+        }),
+      }),
+    });
+    expect(
+      markCollectionMemberSkipped(h.api, {
+        identifiers: { gameId: GAME_ID, modId: 42, fileIds: ["200"] },
+      }),
+    ).toBe(true);
+    expect(statusOf(h, first)).toBe("pending");
+    expect(statusOf(h, second)).toBe("ignored");
+    expect(
+      h
+        .getState()
+        .persistent.mods[GAME_ID][COLLECTION_ID].rules?.filter((rule) => rule.ignored)
+        .map((rule) => rule.reference.tag),
+    ).toEqual(["second"]);
+  });
+  test("leaves an ambiguous changed file pending until update names identify it", ({ makeApi }) => {
+    const rule = repoRule({ versionMatch: "1.0.0+prefer", logicalFileName: "Fuzzy Mod.7z" });
+    const h = makeApi(ruleOverrides(rule));
+    expect(
+      markCollectionMemberSkipped(h.api, {
+        identifiers: { gameId: GAME_ID, modId: 42, fileIds: ["999"] },
+      }),
+    ).toBe(false);
+    expect(statusOf(h, rule)).toBe("pending");
+    expect(durableIgnored(h)).toBeUndefined();
+    expect(
+      markCollectionMemberSkipped(h.api, {
+        identifiers: { gameId: GAME_ID, modId: 42, fileIds: ["999"], fileNames: ["Fuzzy Mod.7z"] },
+      }),
+    ).toBe(true);
+    expect(statusOf(h, rule)).toBe("ignored");
   });
 });

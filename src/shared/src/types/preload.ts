@@ -529,7 +529,8 @@ export interface DownloaderApi {
   /** Resumes a download from a checkpoint. */
   resume(checkpoint: WireDownloadCheckpoint): Promise<void>;
 
-  /** Cancels an active download. */
+  /** Cancels a queued/active download; resolves after native workers and file handles stop.
+   * Partial-file deletion is owned by the renderer removal operation. */
   cancel(downloadId: string): Promise<void>;
 
   /** Returns the current state of a download, including status and any terminal error. */

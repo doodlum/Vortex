@@ -63,8 +63,11 @@ export function init(manager: DownloadManager): void {
     return { downloadId: handle.downloadId };
   });
 
-  betterIpcMain.handle("download:cancel", (_event, downloadId) => {
+  betterIpcMain.handle("download:cancel", async (_event, downloadId) => {
+    const handle = manager.get(downloadId);
     manager.cancel(downloadId);
+    // The acknowledgement releases renderer file ownership only after physical stop.
+    await handle!.promise.catch(() => {});
   });
 
   betterIpcMain.handle("download:pause", async (_event, downloadId) => {

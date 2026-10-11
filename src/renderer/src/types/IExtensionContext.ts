@@ -7,6 +7,7 @@ import type { ComplexActionCreator } from "redux-act";
 import type { ThunkDispatch } from "redux-thunk";
 
 import type { IDownloadsAPIExtension } from "../extensions/download_management/types/IDownloadsAPIExtension";
+import type { DownloadProtocolHandler } from "../extensions/download_management/types/ProtocolHandlers";
 import type { ILoadOrderGameInfo } from "../extensions/file_based_loadorder/types/types";
 import type { IHistoryEvent, IHistoryStack } from "../extensions/history_management/types";
 import type { IGameLoadOrderEntry } from "../extensions/mod_load_order/types/types";
@@ -1228,14 +1229,10 @@ export interface IExtensionContext {
   /**
    * registers a handler for a download URL scheme (e.g. "nxm"). The handler
    * resolves the scheme-specific URL to a plain http/https URL that can be
-   * downloaded directly.
+   * downloaded directly. The optional fourth callback argument is an AbortSignal:
+   * stop owned work when aborted. Late results are discarded even if it is ignored.
    */
-  registerDownloadProtocol: (
-    scheme: string,
-    handler: (
-      inputUrl: string,
-    ) => PromiseLike<{ urls: string[]; updatedUrl?: string; meta: unknown }>,
-  ) => void;
+  registerDownloadProtocol: (scheme: string, handler: DownloadProtocolHandler) => void;
 
   /**
    * register a new persistor that will hook a data file into the application store,

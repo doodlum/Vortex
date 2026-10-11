@@ -56,9 +56,32 @@ export function defaultRetryStrategy(
   baseDelayMs: number = 1000,
   maxDelayMs: number = 30_000,
 ): RetryStrategy {
+  return retryStrategy(maxRetries, baseDelayMs, maxDelayMs, retryableErrorCodes);
+}
+
+/** Retries interrupted download responses without replaying upload requests. */
+export function defaultDownloadRetryStrategy(
+  maxRetries: number = 3,
+  baseDelayMs: number = 1000,
+  maxDelayMs: number = 30_000,
+): RetryStrategy {
+  return retryStrategy(
+    maxRetries,
+    baseDelayMs,
+    maxDelayMs,
+    new Set([...retryableErrorCodes, "ERR_HTTP_CONTENT_LENGTH_MISMATCH"]),
+  );
+}
+
+function retryStrategy(
+  maxRetries: number,
+  baseDelayMs: number,
+  maxDelayMs: number,
+  codes: Set<string>,
+): RetryStrategy {
   return ({ attempt, error }: RetryContext): RetryVerdict => {
     if (attempt > maxRetries) return { retry: false };
-    if (!isRetryableError(error, retryableErrorCodes, retryableStatusCodes)) {
+    if (!isRetryableError(error, codes, retryableStatusCodes)) {
       return { retry: false };
     }
 
