@@ -1,6 +1,6 @@
 import * as path from "path";
 
-import type { VortexGameId } from "@vortex/shared";
+import { VortexGameId } from "@vortex/shared";
 import PromiseBB from "bluebird";
 import * as _ from "lodash";
 import type * as Redux from "redux";
@@ -15,7 +15,9 @@ import type { IGameStore } from "@/types/IGameStore";
 import type { IGameStoreSnapshot } from "@/types/IGameStore";
 import type { IState } from "@/types/IState";
 import type { ITool } from "@/types/ITool";
+import { resolveLegacyGamePath, withGameUserPaths } from "@/util/gameUserContext";
 import { GoGLauncher } from "@/util/GOGLauncher";
+import { isWindowsGame } from "@/util/isWindowsGame";
 import { OriginLauncher } from "@/util/OriginStore";
 import { getSafe } from "@/util/storeHelper";
 import { UPlayLauncher } from "@/util/UplayStore";
@@ -63,6 +65,7 @@ export class GameModeManager {
   private mKnownGames: IGame[];
   private mGameStubs: IGameStub[];
   private mKnownGameStores: IGameStore[];
+  private mInitialScan?: Promise<void>;
   private mActiveSearch: PromiseBB<void>;
   private mQuickDiscoveryAbort: AbortController | null;
   private mOnGameModeActivated: (mode: string) => void;
@@ -173,7 +176,9 @@ export class GameModeManager {
 
     let modPath;
     try {
-      modPath = game.queryModPath(gameDiscovery.path);
+      modPath = withGameUserPaths(VortexGameId(game.id), gameDiscovery, () =>
+        resolveLegacyGamePath(game.queryModPath(gameDiscovery.path)),
+      );
       if (!path.isAbsolute(modPath)) {
         modPath = path.resolve(gameDiscovery.path, modPath);
       }
@@ -237,6 +242,22 @@ export class GameModeManager {
    * @memberOf GameModeManager
    */
   public setupGameMode(gameMode: string): PromiseBB<void> {
+    const discovery = this.mStore.getState().settings.gameMode.discovered[gameMode];
+    if (
+      process.platform === "linux" &&
+      discovery?.store === "steam" &&
+      isWindowsGame(getGame(gameMode), discovery)
+    ) {
+      // Prefix-dependent queryModPath/setup callbacks are synchronous. Populate
+      // their associated store snapshot before entering those callbacks.
+      return PromiseBB.resolve(this.startInitialScan()).then(() =>
+        this.setupGameModeReady(gameMode),
+      );
+    }
+    return this.setupGameModeReady(gameMode);
+  }
+
+  private setupGameModeReady(gameMode: string): PromiseBB<void> {
     const game = getGame(gameMode);
     const gameDiscovery = this.mStore.getState().settings.gameMode.discovered[gameMode];
 
@@ -284,6 +305,10 @@ export class GameModeManager {
         return PromiseBB.reject(err);
       }
     }
+  }
+
+  public getDiscovery(gameId: string): IDiscoveryResult | undefined {
+    return this.mStore?.getState().settings.gameMode.discovered[gameId];
   }
 
   public get games(): IGame[] {
@@ -538,12 +563,11 @@ export class GameModeManager {
    * kicks the first store scan right after construction, so store
    * snapshots are populated independently of quick discovery
    */
-  public async startInitialScan(): Promise<void> {
-    try {
-      await this.reloadStoreGames();
-    } catch (err) {
-      log("error", "inital store scan failed", err);
-    }
+  public startInitialScan(): Promise<void> {
+    this.mInitialScan ??= this.reloadStoreGames().catch((err) => {
+      log("error", "initial store scan failed", err);
+    });
+    return this.mInitialScan;
   }
 
   /** Reloads the stores' games, then starts detection unless the caller will run it itself. */

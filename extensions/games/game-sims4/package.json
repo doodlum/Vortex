@@ -16,7 +16,8 @@
     "game": "The Sims 4"
   },
   "devDependencies": {
-    "@nexusmods/vortex-api": "workspace:*"
+    "@nexusmods/vortex-api": "workspace:*",
+    "@nexusmods/ini-parser": "workspace:*"
   },
   "nx": {
     "tags": [

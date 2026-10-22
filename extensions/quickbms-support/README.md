@@ -16,6 +16,42 @@ https://aluigi.altervista.org/papers/quickbms.txt
 
 The purpose of this module is to provide Vortex game extension developers the ability to view, replace, extract and modify game files which are generally not exposed to direct manipulation due to them being compressed, encrypted or both. It is currently used to mod Resident Evil 2 (2019) and Devil May Cry 5 which require file entries to be invalidated/revalidated in order for the games to load/unload modded files.
 
+## Linux runtime and verification
+
+Linux x64 and x86 builds include the author's static 32-bit QuickBMS 0.12.0
+`quickbms_4gb_files` executable. The kernel must support 32-bit x86 programs;
+this is not an ARM runtime. Vortex runs it directly, independently of a game's
+Proton selection. Windows keeps the existing Windows executable. Scripts that
+depend on Windows-only DLLs or external programs need separate compatibility checks.
+
+The build downloads from the author's HTTPS mirror only when the selected
+executable is missing or fails its pinned hash. `artifacts.json` records the
+version, source URL, license and archive/executable hashes. Download, extraction
+and checksum failures stop the build; a failed replacement leaves the previous
+file in place but does not accept it as verified. The build removes a stale
+executable for the other platform and preserves executable permissions on Linux.
+Changing these pins or the downloader invalidates the build cache, as does the
+target platform/architecture. No system QuickBMS install, Wine or .NET SDK is needed.
+
+Install the pinned workspace dependencies, then run from the repository root:
+
+```sh
+pnpm -F quickbms-support build
+pnpm -F quickbms-support test
+pnpm -F quickbms-support typecheck
+```
+
+The first build needs HTTPS access to the author mirror. Tests need a writable
+temporary directory and the built extension/runtime, with no account, game,
+compiler or running Vortex. Offline fixtures verify download failures, pins,
+cache repair, cleanup and the extractor's exit status. The public API test loads
+the actual built extension with a minimal external Vortex API adapter and runs
+both reimport modes, list, extract and write against self-authored inert archives.
+It checks literal path characters, filenames with spaces and physical output
+hashes shared by Windows and Linux. It executes no downloaded BMS or mod script.
+Run on both hosts. The Unix executable-mode assertion runs only on Linux. This test does not establish a live Vortex UI, every game
+script, or packaged/distro compatibility; validate those consumers separately.
+
 ## **Implemented Operations**
 
 **Extract**

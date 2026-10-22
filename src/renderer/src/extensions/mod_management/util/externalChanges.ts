@@ -90,14 +90,14 @@ async function applyFileActions(
   await Promise.all(
     (actionGroups["delete"] || []).map((entry) =>
       truthy(entry.filePath)
-        ? fs.removeAsync(path.join(sourcePath, entry.source, entry.filePath))
+        ? fs.removeAsync(path.join(sourcePath, entry.source, entry.sourceRelPath ?? entry.filePath))
         : Promise.reject(new Error("invalid file path")),
     ),
   );
 
   await Promise.all(
     (actionGroups["import"] || []).map((entry) => {
-      const source = path.join(sourcePath, entry.source, entry.filePath);
+      const source = path.join(sourcePath, entry.source, entry.sourceRelPath ?? entry.filePath);
       const deployed = deployedPath(entry);
       // Very rarely we have a case where the files are links of each other
       // (or at least node reports that) so the copy would fail.
@@ -152,7 +152,7 @@ async function applyFileActions(
     if (action.type === "srcdeleted" && action.action === "drop") {
       // A file has been deleted from the staging folder - we need to check whether
       //  the user had set a file override for it.
-      (testFileOverrides[modId] ??= []).push(action.filePath);
+      (testFileOverrides[modId] ??= []).push(action.sourceRelPath ?? action.filePath);
     }
   });
 
@@ -220,6 +220,7 @@ function fileEntry(modTypeId: string, change: IFileChange, action: FileAction): 
   return {
     modTypeId,
     filePath: change.filePath,
+    sourceRelPath: change.sourceRelPath,
     source: change.source,
     target: change.target,
     type: change.changeType,

@@ -12,7 +12,8 @@ pnpm package:nosign
 ```
 
 This runs the full production build and produces an unsigned installer in the
-repo-root `dist/`. Expect it to take several minutes.
+repo-root `dist/`. Expect it to take several minutes. For the native Linux output and
+its scratch-space prerequisites, see [the Linux packaging procedure](../linux-filesystem-compatibility.md#unsigned-linux-package).
 
 The version baked into the installer comes from `src/main/package.json`,
 which holds the placeholder `1.0.0`. To package a specific version, inject it

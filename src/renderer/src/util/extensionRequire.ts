@@ -1,4 +1,5 @@
 import {} from "module";
+import * as path from "node:path";
 // tslint:disable-next-line:no-var-requires
 const Module = require("module");
 import * as reduxAct from "redux-act";
@@ -10,17 +11,26 @@ import { findInstalled } from "../extensions/extension_manager/queries";
 import type { IRegisteredExtension } from "../types/extensions";
 import type { IExtensionState } from "../types/IState";
 import { deprecatedApiGet } from "./deprecatedApiUsage";
+import { extensionGameUserContext, gameUserPathNamespace } from "./gameUserContext";
 import type { LogLevel } from "./log";
 import { webpackRequireHack } from "./webpack-hacks";
 
 const identity = (input) => input;
 
+function belongsToExtension(filename: string, root: string): boolean {
+  const relative = path.relative(root, filename);
+  return relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative);
+}
+
 class ExtProxyHandler implements ProxyHandler<typeof api> {
   private mExt: IRegisteredExtension;
   private mState: IExtensionState | undefined;
+  private mGameContext: ReturnType<typeof extensionGameUserContext>;
+  private mPathNamespaces = new Map<PropertyKey, { original: object; wrapped: object }>();
   constructor(ext: IRegisteredExtension, state: IExtensionState | undefined) {
     this.mExt = ext;
     this.mState = state;
+    this.mGameContext = extensionGameUserContext(ext.path);
   }
 
   public get(target: typeof api, p: PropertyKey, receiver: any): any {
@@ -29,7 +39,22 @@ class ExtProxyHandler implements ProxyHandler<typeof api> {
         target.log(level, `[${this.mExt.namespace}] ${message}`, metadata);
       };
     }
-    return deprecatedApiGet(target, p as keyof typeof api, "", this.mExt, this.mState, receiver);
+    const value = deprecatedApiGet(
+      target,
+      p as keyof typeof api,
+      "",
+      this.mExt,
+      this.mState,
+      receiver,
+    );
+    if ((p === "fs" || p === "util") && value !== null && typeof value === "object") {
+      const existing = this.mPathNamespaces.get(p);
+      if (existing?.original === value) return existing.wrapped;
+      const wrapped = gameUserPathNamespace(p, value, this.mGameContext);
+      this.mPathNamespaces.set(p, { original: value, wrapped });
+      return wrapped;
+    }
+    return value;
   }
 }
 
@@ -105,15 +130,24 @@ const handlerMapReactAct: { [extId: string]: typeof reduxAct } = {};
  * @param {any} orig
  * @returns
  */
-function extensionRequire(
+export function extensionRequire(
   orig,
   getExtensions: () => IRegisteredExtension[],
   getInstalled: () => Record<string, IExtensionState>,
 ) {
   const extensionPaths = ExtensionManager.getExtensionPaths();
+  const gameContexts = new Map<string, ReturnType<typeof extensionGameUserContext>>();
+  const gameContextFor = (extensionPath: string) => {
+    let getter = gameContexts.get(extensionPath);
+    if (getter === undefined) {
+      getter = extensionGameUserContext(extensionPath);
+      gameContexts.set(extensionPath, getter);
+    }
+    return getter;
+  };
   return function (id) {
     if (id === "vortex-api" || id === "@nexusmods/vortex-api") {
-      const ext = getExtensions().find((iter) => this.filename.startsWith(iter.path));
+      const ext = getExtensions().find((iter) => belongsToExtension(this.filename, iter.path));
       if (ext !== undefined) {
         if (handlerMapAPI[ext.name] === undefined) {
           const state = findInstalled(getInstalled(), { path: ext.path })?.extension;
@@ -128,7 +162,7 @@ function extensionRequire(
     } else if (id === "react-select") {
       return reactSelect;
     } else if (id === "redux-act") {
-      const ext = getExtensions().find((iter) => this.filename.startsWith(iter.path));
+      const ext = getExtensions().find((iter) => belongsToExtension(this.filename, iter.path));
       if (ext !== undefined) {
         if (handlerMapReactAct[ext.name] === undefined) {
           handlerMapReactAct[ext.name] = new Proxy(reduxAct, new ExtProxyHandlerReduxAct(ext));
@@ -136,7 +170,7 @@ function extensionRequire(
         return handlerMapReactAct[ext.name];
       }
     }
-    if (extensionPaths.find((iter) => this.filename.startsWith(iter.path)) !== undefined) {
+    if (extensionPaths.find((iter) => belongsToExtension(this.filename, iter.path)) !== undefined) {
       let res;
       try {
         res = webpackRequireHack(id);
@@ -146,6 +180,14 @@ function extensionRequire(
       if (res === undefined) {
         res = orig.apply(this, arguments);
       }
+      const ext = getExtensions().find((iter) => belongsToExtension(this.filename, iter.path));
+      if (
+        ext !== undefined &&
+        ["fs", "node:fs", "fs/promises", "node:fs/promises", "fs-extra"].includes(id) &&
+        res !== null &&
+        typeof res === "object"
+      )
+        return gameUserPathNamespace("fs", res, gameContextFor(ext.path));
       return res;
     } else {
       return orig.apply(this, arguments);

@@ -1,5 +1,5 @@
 import type { SpawnOptions } from "child_process";
-import { spawn } from "child_process";
+import childProcess from "child_process";
 import { EventEmitter } from "events";
 import * as net from "net";
 import * as path from "path";
@@ -92,6 +92,7 @@ import { fileMD5 } from "./util/checksum";
 import { COMPANY_ID } from "./util/constants";
 import {
   MissingDependency,
+  MissingInterpreter,
   NotSupportedError,
   ProcessCanceled,
   ThirdPartyError,
@@ -105,6 +106,8 @@ import getVortexPath from "./util/getVortexPath";
 import type { i18n } from "./util/i18n";
 import { TString } from "./util/i18n";
 import lazyRequire from "./util/lazyRequire";
+import { isWindowsExecutable } from "./util/linux/proton";
+import { resolveProtonLaunch } from "./util/linux/protonLaunch";
 import { showError } from "./util/message";
 import { deregisterProtocolHandler, registerProtocolHandler } from "./util/protocolRegistration";
 import runElevatedCustomTool from "./util/runElevatedCustomTool";
@@ -2325,6 +2328,39 @@ class ExtensionManager {
     args: string[],
     options: IRunOptions,
   ): PromiseBB<void> => {
+    // An explicitly registered interpreter gets its usual chance to rewrite the
+    // command. Otherwise Windows tools require their actual Steam Proton game.
+    if (
+      process.platform === "linux" &&
+      isWindowsExecutable(executable) &&
+      this.mInterpreters[path.extname(executable).toLowerCase()] === undefined
+    ) {
+      const gamePath =
+        options.gameId === undefined
+          ? undefined
+          : this.mApi.getState().settings.gameMode.discovered[options.gameId]?.path;
+      if (options.gameId !== undefined && gamePath === undefined) {
+        return PromiseBB.reject(
+          new MissingInterpreter(
+            "The associated game has no discovered install path. Refresh Games before launching its Windows tools.",
+          ),
+        );
+      }
+      return PromiseBB.resolve(
+        resolveProtonLaunch(executable, { gamePath, cwd: options.cwd }),
+      ).then(({ store, game }) =>
+        store.runToolWithProton(this.mApi, executable, args, options, game),
+      );
+    }
+
+    return this.runExecutableDirect(executable, args, options);
+  };
+
+  private runExecutableDirect = (
+    executable: string,
+    args: string[],
+    options: IRunOptions,
+  ): PromiseBB<void> => {
     if (!truthy(executable)) {
       return PromiseBB.reject(new ProcessCanceled("Executable not set"));
     }
@@ -2374,6 +2410,11 @@ class ExtensionManager {
       this.applyStartHooks({ executable, args, options })
         .then((updatedParameters) => {
           ({ executable, args, options } = updatedParameters);
+          if (process.platform === "linux" && isWindowsExecutable(executable)) {
+            throw new MissingInterpreter(
+              "A Windows executable needs an explicit Linux interpreter or an associated Steam Proton game.",
+            );
+          }
           return PromiseBB.resolve();
         })
         .then(
@@ -2399,7 +2440,7 @@ class ExtensionManager {
 
                 args = args.map((arg) => applyVariables(arg, vars));
 
-                const child = spawn(
+                const child = childProcess.spawn(
                   runExe,
                   options.shell ? args : args.map((arg) => arg.replace(/"/g, "")),
                   spawnOptions,
@@ -3061,6 +3102,7 @@ class ExtensionManager {
       null_activator: () => require("./extensions/null_activator/index.ts"),
       onboarding_dashlet: () => require("./extensions/onboarding_dashlet/index.ts"),
       profile_management: () => require("./extensions/profile_management/index.ts"),
+      proton_management: () => require("./extensions/proton_management/index.ts"),
       // NOTE: intentionally placed after its dependencies (mod_management,
       // download_management, gamemode_management, profile_management,
       // nexus_integration) rather than alphabetically. The static map is

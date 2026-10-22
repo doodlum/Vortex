@@ -7,6 +7,9 @@ import {
   TCPTransport,
 } from "@nexusmods/fomod-installer-ipc";
 
+import type { INativeFomodRuntime } from "./BundledRuntime";
+import { NativeProcessLauncher } from "./NativeProcessLauncher";
+
 /**
  * Helper function to create connection strategies from launcher options
  */
@@ -14,7 +17,15 @@ export const createConnectionStrategies = (options?: {
   securityLevel?: SecurityLevel;
   allowFallback?: boolean;
   containerName?: string;
+  nativeRuntime?: INativeFomodRuntime;
 }): ConnectionStrategy[] => {
+  if (process.platform === "linux") {
+    if (options?.nativeRuntime === undefined)
+      throw new Error("Native C# runtime has not been prepared");
+    return [
+      { transport: new TCPTransport(), launcher: new NativeProcessLauncher(options.nativeRuntime) },
+    ];
+  }
   const strategies: ConnectionStrategy[] = [];
 
   const securityLevel = options?.securityLevel || SecurityLevel.Sandbox;

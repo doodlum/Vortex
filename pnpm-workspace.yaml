@@ -32,13 +32,14 @@ catalog:
   "@eslint/js": 10.0.1
   "@floating-ui/react": 0.27.20
   "@headlessui/react": 2.2.10
+  "@homebridge/dbus-native": 0.7.9
   "@hot-updater/bsdiff": 0.30.6
   "@iarna/toml": 2.2.5
   "@mdi/js": 7.4.47
   "@microsoft/api-extractor": 7.58.9
   "@msgpack/msgpack": 2.8.0
-  "@nexusmods/fomod-installer-ipc": 0.13.4
-  "@nexusmods/fomod-installer-native": 0.13.4
+  "@nexusmods/fomod-installer-ipc": https://github.com/doodlum/fomod-installer/releases/download/v0.13.4-linux.3/nexusmods-fomod-installer-ipc-0.13.4-linux.3.tgz
+  "@nexusmods/fomod-installer-native": https://github.com/doodlum/fomod-installer/releases/download/v0.13.4-linux.3/nexusmods-fomod-installer-native-0.13.4-linux.3.tgz
   "@nexusmods/nexus-api": github:Nexus-Mods/node-nexus-api#c5eda4a46cafb5dc8000ed2a7986b22132625e2e
   "@nosferatu500/react-sortable-tree": 4.4.0
   "@nosferatu500/theme-file-explorer": 3.0.21
@@ -321,7 +322,7 @@ overrides:
   react-dnd: 14.0.5
 
 allowBuilds:
-  "@nexusmods/fomod-installer-native": true
+  "@nexusmods/fomod-installer-native@https://github.com/doodlum/fomod-installer/releases/download/v0.13.4-linux.3/nexusmods-fomod-installer-native-0.13.4-linux.3.tgz": true
   "@parcel/watcher": true
   core-js: true
   core-js-pure: false

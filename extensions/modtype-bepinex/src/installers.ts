@@ -1,8 +1,8 @@
 /* eslint-disable */
 import path from "path";
 
+import Parser, { IniFile, WinapiFormat } from "@nexusmods/ini-parser";
 import { types } from "@nexusmods/vortex-api";
-import Parser, { IniFile, WinapiFormat } from "vortex-parse-ini";
 
 import {
   BEPINEX_CONFIG_REL_PATH,

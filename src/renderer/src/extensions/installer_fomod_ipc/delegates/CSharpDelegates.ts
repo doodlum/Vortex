@@ -1,12 +1,14 @@
 import path from "path";
 
+import IniParser, { WinapiFormat } from "@nexusmods/ini-parser";
 import minimatch from "minimatch";
 import type { IEntry } from "turbowalk";
 import turbowalk from "turbowalk";
-import IniParser, { WinapiFormat } from "vortex-parse-ini";
 
 import type { IExtensionApi } from "../../../types/IExtensionContext";
+import { resolveCasePath } from "../../../util/casePath";
 import { statAsync, readFileAsync } from "../../../util/fs";
+import { isWindowsGame } from "../../../util/isWindowsGame";
 import { showError } from "../../../util/message";
 import { isNullOrWhitespace } from "../../../util/util";
 import { currentGame, currentGameDiscovery } from "../../gamemode_management/selectors";
@@ -145,10 +147,13 @@ export class CSharpDelegates {
     const gameInfo = getGame(game.id);
 
     let iniValue: string;
-    let baseIniFile = getIniFilePath(gameInfo.id);
+    let baseIniFile = await getIniFilePath(gameInfo.id, currentGameDiscovery(state));
 
     if (!isNullOrWhitespace(selectedFile)) {
-      baseIniFile = path.join(path.dirname(baseIniFile), selectedFile);
+      baseIniFile =
+        process.platform === "linux" && isWindowsGame(gameInfo, currentGameDiscovery(state))
+          ? resolveCasePath(path.dirname(baseIniFile), selectedFile)
+          : path.join(path.dirname(baseIniFile), selectedFile);
     }
 
     const iniFile = await this.parser.read(baseIniFile);
@@ -173,10 +178,13 @@ export class CSharpDelegates {
     const gameInfo = getGame(game.id);
 
     let iniValue: number;
-    let baseIniFile = getIniFilePath(gameInfo.id);
+    let baseIniFile = await getIniFilePath(gameInfo.id, currentGameDiscovery(state));
 
     if (!isNullOrWhitespace(selectedFile)) {
-      baseIniFile = path.join(path.dirname(baseIniFile), selectedFile);
+      baseIniFile =
+        process.platform === "linux" && isWindowsGame(gameInfo, currentGameDiscovery(state))
+          ? resolveCasePath(path.dirname(baseIniFile), selectedFile)
+          : path.join(path.dirname(baseIniFile), selectedFile);
     }
 
     const iniFile = await this.parser.read(baseIniFile);

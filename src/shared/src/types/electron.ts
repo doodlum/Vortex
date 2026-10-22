@@ -297,6 +297,8 @@ export interface LaunchItems {
 
 export interface LoginItemSettings {
   openAtLogin: boolean;
+  /** Confirmed Linux startup arguments; absent on Electron-backed platforms. */
+  startMinimized?: boolean;
   wasOpenedAtLogin: boolean;
   status: "not-registered" | "enabled" | "requires-approval" | "not-found";
   executableWillLaunchAtLogin: boolean;

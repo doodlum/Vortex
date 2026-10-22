@@ -40,6 +40,7 @@ export class VortexIPCConnection extends BaseIPCConnection {
     strategies: ConnectionStrategy | ConnectionStrategy[],
     connectionTimeout: number = 10000,
     modName?: string,
+    private readonly executablePath?: string,
   ) {
     // Create timeout options with Vortex dialog integration
     const timeoutOptions: TimeoutOptions = {
@@ -85,6 +86,7 @@ export class VortexIPCConnection extends BaseIPCConnection {
   }
 
   protected getExecutablePaths(exeName: string): string[] {
+    if (this.executablePath !== undefined) return [this.executablePath];
     const paths = super.getExecutablePaths(exeName);
     paths.push(
       path.join(

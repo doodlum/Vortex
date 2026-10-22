@@ -56,6 +56,13 @@ The majority of Vortex code is open-source. We are committed to a transparent de
 
 To build and run Vortex from source, start with [CONTRIBUTING.md](./CONTRIBUTING.md). It covers setup for each platform, the build/run/hot-reload workflow, debugging, and packaging. Deeper guides (debugging, packaging, the auto-updater, release process) are indexed in [docs/README.md](./docs/README.md).
 
+## Experimental Linux installers
+
+The Linux branch bundles a native Mono runtime for legacy C# FOMOD installers;
+Basic/XML installers use the portable TypeScript engine. Normal Linux builds and
+installer use do not require a system .NET SDK or Mono installation. See the
+[Linux C# runtime procedure and verification limits](docs/legacy-csharp-runtime.md).
+
 ## License
 
 This project is licensed under the [GPL-3.0](https://github.com/Nexus-Mods/Vortex/blob/master/LICENSE.md) license.

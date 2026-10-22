@@ -1,24 +1,22 @@
-# .NET probe
+# Windows Desktop Runtime probe
 
-Simple executable that checks the installed .NET version of the host system.
+This executable checks the installed Windows .NET Desktop Runtime. Normal Linux
+builds skip it and its Nx SDK-version input; Linux C# installers use the
+[bundled Mono/helper runtime](../../docs/legacy-csharp-runtime.md).
 
-## Usage
+## Usage on Windows
 
-`dotnetprobe <version>`
+`dotnetprobe 9` checks for the required runtime version. Vortex's Windows startup
+check and automatic runtime installation remain unchanged.
 
-Example:
+## Maintainer build
 
-`dotnetprobe 9` will check if the user has installed .NET 9 or higher.
+With a .NET 9 SDK available, from this directory:
 
-## Buildling
-
+```sh
+dotnet publish -r win-x64 -o dist
 ```
-dotnet publish -r <runtime-identifier> -o out
-```
 
-Output can be found in `out` directory after publishing.
-
-Valid runtime identifiers:
-
-- Windows: `win-x64`
-- Linux: `linux-x64`
+The normal Windows build runs this through `build.mjs`. `build:win` remains an
+explicit SDK-dependent target; PE/icon package tests use the committed fixture
+and no longer depend on that target.

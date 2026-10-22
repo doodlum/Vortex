@@ -31,10 +31,13 @@ import type { IGame } from "../../types/IGame";
 import type { NotificationDismiss } from "../../types/INotification";
 import type { IProfile, IRunningTool, IState, ITierZeroGame } from "../../types/IState";
 import type { IEditChoice, ITableAttribute } from "../../types/ITableAttribute";
+import { resolveCasePath } from "../../util/casePath";
 import { DataInvalid, ProcessCanceled, SetupError, UserCanceled } from "../../util/CustomErrors";
 import * as fs from "../../util/fs";
 import GameStoreHelperInstance from "../../util/GameStoreHelper";
 import { isContributed } from "../../util/isContributed";
+import { isWindowsGame } from "../../util/isWindowsGame";
+import { isWindowsExecutable } from "../../util/linux/proton";
 import local from "../../util/local";
 import { showError } from "../../util/message";
 import opn from "../../util/opn";
@@ -206,7 +209,13 @@ function refreshGameInfo(store: Redux.Store<IState>, gameId: string): PromiseBB<
 
 function verifyGamePath(game: IGame, gamePath: string): PromiseBB<void> {
   return PromiseBB.map(game.requiredFiles || [], (file) =>
-    PromiseBB.resolve(fsExtra.stat(path.join(gamePath, file))),
+    PromiseBB.resolve(
+      fsExtra.stat(
+        isWindowsExecutable(game.executable(gamePath))
+          ? resolveCasePath(gamePath, file)
+          : path.join(gamePath, file),
+      ),
+    ),
   )
     .then(() => undefined)
     .catch((err) => {
@@ -519,7 +528,15 @@ function removeDisappearedGames(
       return PromiseBB.resolve();
     }
     return PromiseBB.map(requiredFiles, (file) =>
-      fsExtra.stat(path.join(discovered[gameId].path, file)),
+      fsExtra.stat(
+        isWindowsExecutable(
+          discovered[gameId].executable ??
+            known.find((game) => game.id === gameId)?.executable ??
+            "",
+        )
+          ? resolveCasePath(discovered[gameId].path, file)
+          : path.join(discovered[gameId].path, file),
+      ),
     )
       .then(() => undefined)
       .catch((err) => {
@@ -1297,11 +1314,31 @@ function init(context: IExtensionContext): boolean {
     interface IRunningMap {
       [exePath: string]: IRunningTool;
     }
+
+    /**
+     * The monitor runs while a game is managed, not only while Vortex has something recorded as
+     * running.
+     *
+     * It used to start only once `toolsRunning` was non-empty, which made it purely a confirmation
+     * mechanism: something had to launch a process through Vortex first. Its game matching is
+     * deliberately written to accept a process that is *not* one of Vortex's children -- that is what
+     * `considerDetached` is for, so that a game still running when Vortex is reopened is recognised --
+     * but that code could never run, because nothing had seeded the state.
+     *
+     * On Linux that is the normal case rather than an edge case: a game is handed to Steam, which
+     * launches it (and, for Skyrim, the script extender) outside Vortex's process tree entirely. The
+     * launch therefore left no trace, the Play button never showed a running game, and nothing that
+     * waits for the game to exit ever fired.
+     *
+     * Cost of polling while idle is one process list every 2s focused, 5s unfocused, which is the
+     * cadence already accepted while a tool runs.
+     */
+    const gameIsManaged = () => activeGameId(context.api.store.getState()) !== undefined;
+
     context.api.onStateChange(
       ["session", "base", "toolsRunning"],
       (prev: IRunningMap, current: IRunningMap) => {
-        const exePaths = Object.keys(current);
-        if (exePaths.length > 0) {
+        if (Object.keys(current).length > 0 || (process.platform === "linux" && gameIsManaged())) {
           // no effect if it's already running
           processMonitor.start();
         } else {
@@ -1309,6 +1346,20 @@ function init(context: IExtensionContext): boolean {
         }
       },
     );
+
+    context.api.events.on("gamemode-activated", () => {
+      if (process.platform === "linux") processMonitor.start();
+    });
+
+    context.api.onStateChange(["settings", "gameMode", "next"], () => {
+      if (
+        process.platform === "linux" &&
+        !gameIsManaged() &&
+        Object.keys(context.api.getState().session.base.toolsRunning).length === 0
+      ) {
+        processMonitor.end();
+      }
+    });
 
     {
       // login/logout transitions: favourites are user-scoped, so they are cleared
@@ -1359,6 +1410,18 @@ function init(context: IExtensionContext): boolean {
         // (e.g. community extension pending install). Don't clear the profile —
         // removeDisappearedGames/stubs will handle offering to install it.
       }
+    }
+
+    const activeId = activeGameId(store.getState());
+    const activeDiscovery = store.getState().settings.gameMode.discovered[activeId];
+    if (
+      process.platform === "linux" &&
+      activeDiscovery?.store === "steam" &&
+      isWindowsGame(getGame(activeId), activeDiscovery)
+    ) {
+      // The active Proton game's prefix folders are resolved synchronously from the first store
+      // scan. Extensions initialize in order after this one, so let them start with it complete.
+      return $.gameModeManager.startInitialScan();
     }
   });
 

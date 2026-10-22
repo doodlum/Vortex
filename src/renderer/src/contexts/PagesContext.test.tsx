@@ -1,9 +1,10 @@
-import { render } from "@testing-library/react";
+import { act, render } from "@testing-library/react";
 import React from "react";
 import type * as ReactReduxTypes from "react-redux";
 import { describe, expect, it, vi } from "vitest";
 
 import type { IMainPage } from "../types/IMainPage";
+import { notifySteamGamesChanged } from "../util/linux/steamRevision";
 
 const registered = vi.hoisted(() => ({ current: [] as IMainPage[] }));
 const store = vi.hoisted(() => ({ useModernLayout: true }));
@@ -72,6 +73,35 @@ const resolvedNewLayout = (newLayout: IMainPage["newLayout"], useModernLayout: b
 // --- Tests ---
 
 describe("PagesProvider", () => {
+  it.skipIf(process.platform !== "linux")(
+    "refreshes page visibility after a Steam snapshot changes without a profile change",
+    () => {
+      let visible = false;
+      registered.current = [{ ...page(true), visible: () => visible }];
+      let count = 0;
+      const Probe = () => {
+        const pages = usePagesContext().mainPages;
+        count = React.useMemo(() => pages.filter((entry) => entry.visible()).length, [pages]);
+        return null;
+      };
+      render(
+        <PagesProvider>
+          <Probe />
+        </PagesProvider>,
+      );
+      expect(count).toBe(0);
+      act(() => {
+        visible = true;
+        notifySteamGamesChanged();
+      });
+      expect(count).toBe(1);
+      act(() => {
+        visible = false;
+        notifySteamGamesChanged();
+      });
+      expect(count).toBe(0);
+    },
+  );
   it("passes a hardcoded newLayout through untouched", () => {
     expect(resolvedNewLayout(true, true)).toBe(true);
     expect(resolvedNewLayout(true, false)).toBe(true);

@@ -37,8 +37,8 @@
   },
   "linux": {
     "target": ["zip"],
-    "icon": "../../../assets/images/vortex.png",
-    "category": "Network;Development;Game;",
+    "icon": "../../../assets/linux",
+    "category": "Game;",
     "synopsis": "Mod Manager",
     "description": "The elegant, powerful, and open-source mod manager from Nexus Mods.",
     "maintainer": "Black Tree Gaming Ltd. <support@nexusmods.com> (https://www.nexusmods.com/)",
@@ -61,7 +61,8 @@
     "!node_modules/@nexusmods/fomod-installer-native/*.{h,lib,dll}",
     "!node_modules/@nexusmods/fomod-installer-native/build/*.{vcxproj,filters}",
     "!node_modules/@nexusmods/fomod-installer-native/build/Release/*.{exp,iobj,ipdb,lib,pdb}",
-    "!node_modules/@nexusmods/fomod-installer-native/build/Release/obj/**"
+    "!node_modules/@nexusmods/fomod-installer-native/build/Release/obj/**",
+    "!node_modules/@nexusmods/fomod-installer-ipc/dist/mono/**"
   ],
   "asar": true,
   "asarUnpack": [
@@ -77,8 +78,21 @@
     "assets/*.exe",
     "assets/css/**",
     "**/*.node",
-    "duckdb-extensions"
+    "duckdb-extensions",
+    "assets/fomod-csharp/**"
   ],
   "buildDependenciesFromSource": false,
-  "npmRebuild": false
+  "npmRebuild": false,
+  "pacman": {
+    "synopsis": null,
+    "artifactName": "vortex-${version}-${arch}.pkg.tar.xz",
+    "packageName": "vortex",
+    "fpm": ["--description", "Mod manager for PC games from Nexus Mods."]
+  },
+  "deb": {
+    "packageName": "vortex"
+  },
+  "rpm": {
+    "packageName": "vortex"
+  }
 }

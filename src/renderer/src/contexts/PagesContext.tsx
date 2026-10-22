@@ -12,6 +12,7 @@ import { setOpenMainPage } from "../actions/session";
 import { useMainPages } from "../hooks/useMainPages";
 import type { IMainPage } from "../types/IMainPage";
 import type { IState } from "../types/IState";
+import { useSteamGamesRevision } from "../util/linux/steamRevision";
 import {
   activeGameId as activeGameIdSelector,
   activeProfileId as activeProfileIdSelector,
@@ -51,6 +52,7 @@ export const PagesProvider: FC<React.PropsWithChildren<IPagesProviderProps>> = (
   const activeGameId = useSelector(activeGameIdSelector);
   const useModernLayout = useSelector((state: IState) => state.settings.window.useModernLayout);
   const profilesVisible = useSelector((state: IState) => state.settings.interface.profilesVisible);
+  const steamRevision = useSteamGamesRevision();
 
   const sortedPages = useMemo(
     () =>
@@ -75,7 +77,7 @@ export const PagesProvider: FC<React.PropsWithChildren<IPagesProviderProps>> = (
           ...page,
           newLayout: typeof page.newLayout === "function" ? page.newLayout() : page.newLayout,
         })),
-    [mainPages, useModernLayout],
+    [mainPages, useModernLayout, steamRevision],
   );
 
   // Redirect to first visible page when current page becomes invisible

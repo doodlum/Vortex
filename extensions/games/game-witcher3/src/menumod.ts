@@ -3,7 +3,7 @@ import path from "path";
 
 import { actions, fs, log, selectors, types, util } from "@nexusmods/vortex-api";
 import Bluebird from "bluebird";
-const IniParser = require("vortex-parse-ini");
+const IniParser = require("@nexusmods/ini-parser");
 import { generate } from "shortid";
 
 import { prepareFileData, restoreFileData } from "./collections/util";

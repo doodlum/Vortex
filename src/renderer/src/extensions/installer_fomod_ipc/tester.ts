@@ -1,63 +1,26 @@
 import type { IExtensionApi, ISupportedResult } from "../../types/api";
-import { log } from "../../util/log";
 import type { ITestSupportedDetails } from "../mod_management/types/TestSupported";
-import { createConnectionStrategies } from "./utils/connectionStrategy";
-import { VortexIPCConnection } from "./utils/VortexIPCConnection";
 
-/**
- * Test if files are supported by the FOMOD installer
- */
+/** Identify legacy C# from archive metadata. Running its helper belongs to installation. */
 export const testSupported = async (
-  api: IExtensionApi,
+  _api: IExtensionApi,
   files: string[],
   gameId: string,
   details?: ITestSupportedDetails,
 ): Promise<ISupportedResult> => {
-  if (!["oblivion", "fallout3", "falloutnv"].includes(gameId)) {
-    return {
-      supported: false,
-      requiredFiles: [],
-    };
-  }
+  const unsupported = { supported: false, requiredFiles: [] };
+  if (!["oblivion", "fallout3", "falloutnv"].includes(gameId)) return unsupported;
+  if (details?.hasCSScripts === false) return unsupported;
 
-  if (details && details.hasCSScripts === false) {
-    return {
-      supported: false,
-      requiredFiles: [],
-    };
-  }
+  const entries = files.map((file) => file.replace(/\\/g, "/"));
+  if (
+    entries.some(
+      (entry) => entry.startsWith("/") || /[:\0]/.test(entry) || entry.split("/").includes(".."),
+    )
+  )
+    return unsupported;
+  if (!entries.some((entry) => /(?:^|\/)fomod\/script\.cs$/i.test(entry))) return unsupported;
 
-  let connection: VortexIPCConnection | null = null;
-
-  try {
-    const strategies = createConnectionStrategies();
-    connection = new VortexIPCConnection(api, strategies, 10000);
-    await connection.initialize();
-
-    const result = await connection.testSupported(files, ["CSharpScript"]);
-
-    log("debug", "FOMOD testSupported result", {
-      supported: result.supported,
-      requiredFiles: result.requiredFiles,
-      gameId,
-    });
-
-    return result;
-  } catch (err: any) {
-    const errorName = err.name || "Error";
-    log("error", "FOMOD testSupported failed", {
-      errorName,
-      error: err.message,
-      gameId,
-    });
-
-    return {
-      supported: false,
-      requiredFiles: [],
-    };
-  } finally {
-    if (connection) {
-      await connection.dispose();
-    }
-  }
+  // C# can request any listed asset, not just predictable XML/image inputs.
+  return { supported: true, requiredFiles: [...files] };
 };

@@ -194,6 +194,12 @@ class DeploymentMethod extends LinkingDeployment {
     this.context.newDeployment = Object.keys(deployment).reduce(
       (prev: IDeployment, key: string) => {
         const file = deployment[key];
+        if (
+          file.sourceRelPath !== undefined &&
+          this.normalize(path.extname(file.sourceRelPath)) === lnkExt
+        ) {
+          file.sourceRelPath = file.sourceRelPath.slice(0, -extLen);
+        }
         // the key also holds the mod's subfolder and is normalized, so trim each by its own length
         if (this.normalize(path.extname(file.relPath)) === lnkExt) {
           file.relPath = file.relPath.slice(0, -extLen);
@@ -210,26 +216,20 @@ class DeploymentMethod extends LinkingDeployment {
   }
 
   public deactivate(sourcePath: string, dataPath: string, sourceName: string): PromiseBB<void> {
-    return turbowalk(sourcePath, (entries) => {
-      if (this.context === undefined) {
-        return;
-      }
-      entries.forEach((entry) => {
-        if (!entry.isDirectory && path.extname(entry.filePath) === LNK_EXT) {
-          const relPath: string = path.relative(
-            sourcePath,
-            entry.filePath.substring(0, entry.filePath.length - LNK_EXT.length),
-          );
-          const normPath = this.normalize(path.join(dataPath, relPath));
-          if (
-            this.context.newDeployment[normPath] !== undefined &&
-            this.context.newDeployment[normPath].source === sourceName
-          ) {
-            delete this.context.newDeployment[normPath];
+    const paths = new Set<string>();
+    return PromiseBB.resolve(
+      turbowalk(sourcePath, (entries) => {
+        for (const entry of entries) {
+          if (!entry.isDirectory && path.extname(entry.filePath) === LNK_EXT) {
+            const relPath = path.relative(
+              sourcePath,
+              entry.filePath.substring(0, entry.filePath.length - LNK_EXT.length),
+            );
+            paths.add(this.normalize(path.join(dataPath, relPath)));
           }
         }
-      });
-    });
+      }),
+    ).then(() => this.deactivateFiles(paths, sourceName));
   }
 
   public getDeployedPath(input: string): string {

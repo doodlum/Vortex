@@ -1,8 +1,11 @@
+export { resolveCasePath } from "./casePath";
 // rollup module for just the modules we want to be
 // part of the api
 // (excluding log, which is exported separately to give
 //  it a more accessible name)
 
+export type { GameUserPath } from "./getGameUserPath";
+export type { IGameStoreHelper } from "./GameStoreHelper";
 export type { Normalize } from "./getNormalizeFunc.ts";
 export {
   calcDuration,
@@ -81,6 +84,7 @@ import {
 import extractExeIcon from "./exeIcon";
 import GameStoreHelperInstance from "./GameStoreHelper";
 import type { IGameStoreHelper } from "./GameStoreHelper";
+import { getGameUserPath, resolveGameWindowsPath } from "./getGameUserPath";
 import { normalizeStoreQuery } from "./storeQuery";
 
 const GameStoreHelper: IGameStoreHelper = GameStoreHelperInstance;
@@ -229,6 +233,8 @@ export {
   GameNotFound,
   GameStoreHelper,
   normalizeStoreQuery,
+  getGameUserPath,
+  resolveGameWindowsPath,
   generateCollectionSessionId,
   getActivator,
   getApplication,

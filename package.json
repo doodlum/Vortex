@@ -42,7 +42,8 @@
     "e2e:headed": "pnpm nx run @vortex/e2e:e2e:headed",
     "e2e:debug": "pnpm nx run @vortex/e2e:e2e:debug",
     "e2e:report": "pnpm nx run @vortex/e2e:e2e:report",
-    "generate:query-types": "pnpm tsx scripts/generate-query-types.ts"
+    "generate:query-types": "pnpm tsx scripts/generate-query-types.ts",
+    "package:linux": "node scripts/package-linux.mjs"
   },
   "lint-staged": {
     "*": "pnpm exec oxfmt --no-error-on-unmatched-pattern"

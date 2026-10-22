@@ -1,0 +1,128 @@
+{
+  "basic": {
+    "before": {
+      "General": {
+        "Key": "value",
+        "Quoted": "\" x \"",
+        "Single": "' y '",
+        "Empty": "",
+        "#Hash": "hash"
+      },
+      "Other": {
+        "Keep": "untouched"
+      }
+    },
+    "after": {
+      "General": {
+        "Key": "updated",
+        "Quoted": "\" x \"",
+        "Single": "' y '",
+        "#Hash": "hash",
+        "Added": "new"
+      },
+      "Other": {
+        "Keep": "untouched"
+      }
+    },
+    "text": "; heading\r\nglobal=ignored\r\n[General]\r\n Key =updated  \r\nQuoted=\" x \"\r\nSingle=' y '\r\nBare\r\n#Hash=hash\r\nAdded=new\r\n;Comment=ignore\r\n[Other]\r\nKeep=untouched\r\n",
+    "hex": "3b2068656164696e670d0a676c6f62616c3d69676e6f7265640d0a5b47656e6572616c5d0d0a204b6579203d7570646174656420200d0a51756f7465643d22207820220d0a53696e676c653d27207920270d0a426172650d0a23486173683d686173680d0a41646465643d6e65770d0a3b436f6d6d656e743d69676e6f72650d0a5b4f746865725d0d0a4b6565703d756e746f75636865640d0a"
+  },
+  "duplicates": {
+    "before": {
+      "General": {
+        "Key": "last",
+        "key": "lower"
+      },
+      "general": {
+        "Key": "last",
+        "key": "lower"
+      }
+    },
+    "after": {
+      "General": {
+        "Key": "last",
+        "key": "lower",
+        "Added": "new"
+      },
+      "general": {
+        "Key": "last",
+        "key": "lower",
+        "Added": "new"
+      }
+    },
+    "text": "[General]\nKey=updated\nKey=last\nkey=lower\nAdded=new\r\n[General]\nLate=ignored?\n[general]\nLower=another\n",
+    "hex": "5b47656e6572616c5d0a4b65793d757064617465640a4b65793d6c6173740a6b65793d6c6f7765720a41646465643d6e65770d0a5b47656e6572616c5d0a4c6174653d69676e6f7265643f0a5b67656e6572616c5d0a4c6f7765723d616e6f746865720a"
+  },
+  "syntax": {
+    "before": {
+      "General": {
+        "spaced key": "value ; inline",
+        "quoted": "\"some=value\""
+      },
+      "Empty": {},
+      "Brackets": {
+        "x": "1"
+      }
+    },
+    "after": {
+      "General": {
+        "spaced key": "value ; inline",
+        "quoted": "\"some=value\"",
+        "Key": "updated",
+        "Added": "new"
+      },
+      "Empty": {},
+      "Brackets": {
+        "x": "1"
+      }
+    },
+    "text": "  [General] trailing\n spaced key  =  value ; inline  \nquoted=\"some=value\"\nKey=updated\r\nAdded=new\r\n;comment\n[Empty]\n[Brackets] ; foo\nx=1\n",
+    "hex": "20205b47656e6572616c5d20747261696c696e670a20737061636564206b657920203d202076616c7565203b20696e6c696e6520200a71756f7465643d22736f6d653d76616c7565220a4b65793d757064617465640d0a41646465643d6e65770d0a3b636f6d6d656e740a5b456d7074795d0a5b427261636b6574735d203b20666f6f0a783d310a"
+  },
+  "utf16le": {
+    "before": {
+      "General": {
+        "Unicode": "café",
+        "Keep": "中文"
+      }
+    },
+    "after": {
+      "General": {
+        "Unicode": "café",
+        "Keep": "中文",
+        "Key": "updated",
+        "Added": "new"
+      }
+    },
+    "text": "﻿; heading\r\n[General]\r\nUnicode=café\r\nKeep=中文\r\nKey=updated\r\nAdded=new\r\n",
+    "hex": "fffe3b002000680065006100640069006e0067000d000a005b00470065006e006500720061006c005d000d000a0055006e00690063006f00640065003d00630061006600e9000d000a004b006500650070003d002d4e87650d000a004b00650079003d0075007000640061007400650064000d000a00410064006400650064003d006e00650077000d000a00"
+  },
+  "utf8bom": {
+    "before": {},
+    "after": {
+      "General": {
+        "Key": "updated",
+        "Added": "new"
+      }
+    },
+    "text": "ï»¿[General]\r\nUnicode=cafÃ©\r\n[General]\r\nKey=updated\r\nAdded=new\r\n",
+    "hex": "efbbbf5b47656e6572616c5d0d0a556e69636f64653d636166c3a90d0a5b47656e6572616c5d0d0a4b65793d757064617465640d0a41646465643d6e65770d0a"
+  },
+  "ansi": {
+    "before": {
+      "General": {
+        "Unicode": "café"
+      }
+    },
+    "after": {
+      "General": {
+        "Unicode": "café",
+        "Key": "updated",
+        "Added": "new"
+      }
+    },
+    "text": "[General]\r\nUnicode=café\r\nKey=updated\r\nAdded=new\r\n",
+    "hex": "5b47656e6572616c5d0d0a556e69636f64653d636166e90d0a4b65793d757064617465640d0a41646465643d6e65770d0a"
+  },
+  "missing": {}
+}

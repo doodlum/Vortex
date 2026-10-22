@@ -1,4 +1,4 @@
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 
 import {
@@ -22,7 +22,9 @@ import {
   EXTERNAL_CHANGES_BINDINGS,
   test,
 } from "../../../test-utils/externalChangesTest";
+import { confirmExternalChanges } from "../actions/session";
 import { MERGED_PATH } from "../modMerging";
+import type { IFileEntry } from "../types/IFileEntry";
 import { deployedFilePath } from "./deployedFilePath";
 import { changesBySource, changeToEntry, dealWithExternalChanges } from "./externalChanges";
 
@@ -107,6 +109,61 @@ describe("changeToEntry", () => {
 });
 
 describe("dealWithExternalChanges", () => {
+  test("imports a changed deployed file using its original staging spelling", async ({
+    makeExternalChanges,
+  }) => {
+    const h = await makeExternalChanges([
+      makeFileChange({
+        changeType: "srcdeleted",
+        source: MOD_A_FOLDER,
+        filePath: "Config/Settings.ini",
+        sourceRelPath: "config/settings.ini",
+      }),
+    ]);
+    await h.stageFile(MOD_A_FOLDER, "other.esp");
+    await h.deployFile("Config/Settings.ini");
+    await h.dealWithExternalChanges(new Set());
+    expect(existsSync(path.join(h.stagingPath, MOD_A_FOLDER, "config", "settings.ini"))).toBe(true);
+    expect(h.dialogs[0][0].sourceRelPath).toBe("config/settings.ini");
+  });
+
+  deploymentTest(
+    "deletes the original staging path when the deployed output is missing",
+    async ({ makeDeployment }) => {
+      const profile = makeProfile();
+      const h = makeDeployment({
+        files: { "config/settings.ini": "mod" },
+        profiles: { [profile.id]: profile },
+        activeProfileId: profile.id,
+        extraReducers: EXTERNAL_CHANGES_BINDINGS,
+      });
+      mkdirSync(path.join(h.gameDir, "Config"));
+      writeFileSync(path.join(h.gameDir, "Config", "Settings.ini"), "base");
+      const manifest = await h.deploy();
+      rmSync(path.join(h.gameDir, "Config", "Settings.ini"));
+      h.api.onStateChange(["session", "mods", "changes"], (_previous, current) => {
+        const entries = current as IFileEntry[];
+        if (entries.length > 0)
+          h.api.store.dispatch(
+            confirmExternalChanges(
+              entries.map((entry) => ({ ...entry, action: "delete" as const })),
+              false,
+            ),
+          );
+      });
+      await dealWithExternalChanges(
+        h.api,
+        h.method,
+        VortexProfileId(profile.id),
+        VortexStagingFolder(h.stagingDir),
+        { "": h.gameDir },
+        { "": manifest },
+        new Set(),
+      );
+      expect(existsSync(path.join(h.modDir("SomeMod"), "config", "settings.ini"))).toBe(false);
+    },
+  );
+
   deploymentTest("re-deploys a file deleted from the game folder", async ({ makeDeployment }) => {
     const profile = makeProfile();
     const h = makeDeployment({

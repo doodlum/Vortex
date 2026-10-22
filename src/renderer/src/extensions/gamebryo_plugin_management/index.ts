@@ -19,6 +19,7 @@ import type {
 } from "../../types/IExtensionContext";
 import type { IState } from "../../types/IState";
 import type { ITestResult, ProblemSeverity } from "../../types/ITestResult";
+import { resolveCasePath } from "../../util/casePath";
 import * as fs from "../../util/fs";
 import getVortexPath from "../../util/getVortexPath";
 import makeReactive from "../../util/makeReactive";
@@ -268,10 +269,10 @@ function register(
 
   for (const gameId of supportedGames()) {
     context.registerProfileFile(gameId, () =>
-      Bluebird.resolve([path.join(pluginPath(gameId), "plugins.txt")]),
+      Bluebird.try(() => [path.join(pluginPath(gameId), "plugins.txt")]),
     );
     context.registerProfileFile(gameId, () =>
-      Bluebird.resolve([path.join(pluginPath(gameId), "loadorder.txt")]),
+      Bluebird.try(() => [path.join(pluginPath(gameId), "loadorder.txt")]),
     );
   }
 
@@ -484,8 +485,8 @@ function testPluginsLocked(gameMode: string): Bluebird<ITestResult> {
     return Bluebird.resolve(undefined);
   }
 
-  const filePath = path.join(pluginPath(gameMode), "plugins.txt");
   return new Bluebird<ITestResult>((resolve, reject) => {
+    const filePath = path.join(pluginPath(gameMode), "plugins.txt");
     access(filePath, constants.W_OK, (err) => {
       if (err && err.code === "EPERM") {
         const res: ITestResult = {
@@ -985,8 +986,8 @@ function testRulesUnfulfilled(api: IExtensionApi): Bluebird<ITestResult> {
   const exists = (id: string): Bluebird<boolean> =>
     [".esp", ".esl", ".esm"].includes(path.extname(id))
       ? Bluebird.resolve(pluginsSet.has(id))
-      : fs
-          .statAsync(path.resolve(dataPath, id))
+      : // LOOT names files the way Windows would: any case, backslash separators
+        Bluebird.try(() => fs.statAsync(resolveCasePath(dataPath, id)))
           .then(() => true)
           .catch((err) => false);
 

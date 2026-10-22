@@ -1,8 +1,8 @@
 import * as path from "path";
 
+import IniParser, { WinapiFormat } from "@nexusmods/ini-parser";
 import { actions, fs, selectors, types, util } from "@nexusmods/vortex-api";
 import Bluebird from "bluebird";
-import IniParser, { WinapiFormat } from "vortex-parse-ini";
 
 import { REDIRECTION_FILE, REDIRECTION_MOD } from "./constants";
 import {

@@ -1,0 +1,450 @@
+{
+  "provenance": "Electron44.2.0 actual cold and second-instance events; paths normalized and inert probe marker removed. No Vortex/download/network execution.",
+  "cases": [
+    {
+      "platform": "linux",
+      "defaultApp": true,
+      "case": "no-uri",
+      "cold": ["/runtime/electron", "/fixture/app"],
+      "warm": [
+        "/runtime/electron",
+        "--allow-file-access-from-files",
+        "--ozone-platform=x11",
+        "--disable-gpu",
+        "/fixture/app"
+      ],
+      "expected": {}
+    },
+    {
+      "platform": "linux",
+      "defaultApp": true,
+      "case": "raw-uri",
+      "cold": ["/runtime/electron", "/fixture/app", "nxm://example/mods/1/files/2"],
+      "warm": [
+        "/runtime/electron",
+        "--allow-file-access-from-files",
+        "--ozone-platform=x11",
+        "--disable-gpu",
+        "/fixture/app",
+        "nxm://example/mods/1/files/2"
+      ],
+      "expected": {
+        "download": "nxm://example/mods/1/files/2"
+      }
+    },
+    {
+      "platform": "linux",
+      "defaultApp": true,
+      "case": "short-download",
+      "cold": ["/runtime/electron", "/fixture/app", "-d", "nxm://example/mods/1/files/2"],
+      "warm": [
+        "/runtime/electron",
+        "-d",
+        "--allow-file-access-from-files",
+        "--ozone-platform=x11",
+        "--disable-gpu",
+        "/fixture/app",
+        "nxm://example/mods/1/files/2"
+      ],
+      "expected": {
+        "download": "nxm://example/mods/1/files/2"
+      }
+    },
+    {
+      "platform": "linux",
+      "defaultApp": true,
+      "case": "long-download",
+      "cold": ["/runtime/electron", "/fixture/app", "--download", "nxm://example/mods/1/files/2"],
+      "warm": [
+        "/runtime/electron",
+        "--download",
+        "--allow-file-access-from-files",
+        "--ozone-platform=x11",
+        "--disable-gpu",
+        "/fixture/app",
+        "nxm://example/mods/1/files/2"
+      ],
+      "expected": {
+        "download": "nxm://example/mods/1/files/2"
+      }
+    },
+    {
+      "platform": "linux",
+      "defaultApp": true,
+      "case": "install",
+      "cold": ["/runtime/electron", "/fixture/app", "--install", "nxm://example/mods/1/files/2"],
+      "warm": [
+        "/runtime/electron",
+        "--install",
+        "--allow-file-access-from-files",
+        "--ozone-platform=x11",
+        "--disable-gpu",
+        "/fixture/app",
+        "nxm://example/mods/1/files/2"
+      ],
+      "expected": {
+        "install": "nxm://example/mods/1/files/2"
+      }
+    },
+    {
+      "platform": "linux",
+      "defaultApp": true,
+      "case": "multiple",
+      "cold": [
+        "/runtime/electron",
+        "/fixture/app",
+        "--user-data",
+        "a space \u00e9",
+        "--start-minimized",
+        "--download",
+        "nxm://example/mods/1/files/2"
+      ],
+      "warm": [
+        "/runtime/electron",
+        "--user-data",
+        "--start-minimized",
+        "--download",
+        "--allow-file-access-from-files",
+        "--ozone-platform=x11",
+        "--disable-gpu",
+        "/fixture/app",
+        "a space \u00e9",
+        "nxm://example/mods/1/files/2"
+      ],
+      "expected": {
+        "download": "nxm://example/mods/1/files/2",
+        "userData": "a space \u00e9",
+        "startMinimized": true
+      }
+    },
+    {
+      "platform": "linux",
+      "defaultApp": false,
+      "case": "no-uri",
+      "cold": ["/opt/Vortex/vortex"],
+      "warm": [
+        "/opt/Vortex/vortex",
+        "--allow-file-access-from-files",
+        "--ozone-platform=x11",
+        "--disable-gpu"
+      ],
+      "expected": {}
+    },
+    {
+      "platform": "linux",
+      "defaultApp": false,
+      "case": "raw-uri",
+      "cold": ["/opt/Vortex/vortex", "nxm://example/mods/1/files/2"],
+      "warm": [
+        "/opt/Vortex/vortex",
+        "--allow-file-access-from-files",
+        "--ozone-platform=x11",
+        "--disable-gpu",
+        "nxm://example/mods/1/files/2"
+      ],
+      "expected": {
+        "download": "nxm://example/mods/1/files/2"
+      }
+    },
+    {
+      "platform": "linux",
+      "defaultApp": false,
+      "case": "short-download",
+      "cold": ["/opt/Vortex/vortex", "-d", "nxm://example/mods/1/files/2"],
+      "warm": [
+        "/opt/Vortex/vortex",
+        "-d",
+        "--allow-file-access-from-files",
+        "--ozone-platform=x11",
+        "--disable-gpu",
+        "nxm://example/mods/1/files/2"
+      ],
+      "expected": {
+        "download": "nxm://example/mods/1/files/2"
+      }
+    },
+    {
+      "platform": "linux",
+      "defaultApp": false,
+      "case": "long-download",
+      "cold": ["/opt/Vortex/vortex", "--download", "nxm://example/mods/1/files/2"],
+      "warm": [
+        "/opt/Vortex/vortex",
+        "--download",
+        "--allow-file-access-from-files",
+        "--ozone-platform=x11",
+        "--disable-gpu",
+        "nxm://example/mods/1/files/2"
+      ],
+      "expected": {
+        "download": "nxm://example/mods/1/files/2"
+      }
+    },
+    {
+      "platform": "linux",
+      "defaultApp": false,
+      "case": "install",
+      "cold": ["/opt/Vortex/vortex", "--install", "nxm://example/mods/1/files/2"],
+      "warm": [
+        "/opt/Vortex/vortex",
+        "--install",
+        "--allow-file-access-from-files",
+        "--ozone-platform=x11",
+        "--disable-gpu",
+        "nxm://example/mods/1/files/2"
+      ],
+      "expected": {
+        "install": "nxm://example/mods/1/files/2"
+      }
+    },
+    {
+      "platform": "linux",
+      "defaultApp": false,
+      "case": "multiple",
+      "cold": [
+        "/opt/Vortex/vortex",
+        "--user-data",
+        "a space \u00e9",
+        "--start-minimized",
+        "--download",
+        "nxm://example/mods/1/files/2"
+      ],
+      "warm": [
+        "/opt/Vortex/vortex",
+        "--user-data",
+        "--start-minimized",
+        "--download",
+        "--allow-file-access-from-files",
+        "--ozone-platform=x11",
+        "--disable-gpu",
+        "a space \u00e9",
+        "nxm://example/mods/1/files/2"
+      ],
+      "expected": {
+        "download": "nxm://example/mods/1/files/2",
+        "userData": "a space \u00e9",
+        "startMinimized": true
+      }
+    },
+    {
+      "platform": "win32",
+      "defaultApp": true,
+      "case": "no-uri",
+      "cold": ["C:\\runtime\\electron.exe", "C:\\fixture\\app"],
+      "warm": [
+        "C:\\runtime\\electron.exe",
+        "--allow-file-access-from-files",
+        "--disable-gpu",
+        "C:\\fixture\\app"
+      ],
+      "expected": {}
+    },
+    {
+      "platform": "win32",
+      "defaultApp": true,
+      "case": "raw-uri",
+      "cold": ["C:\\runtime\\electron.exe", "C:\\fixture\\app", "nxm://example/mods/1/files/2"],
+      "warm": [
+        "C:\\runtime\\electron.exe",
+        "--allow-file-access-from-files",
+        "--disable-gpu",
+        "C:\\fixture\\app",
+        "nxm://example/mods/1/files/2"
+      ],
+      "expected": {}
+    },
+    {
+      "platform": "win32",
+      "defaultApp": true,
+      "case": "short-download",
+      "cold": [
+        "C:\\runtime\\electron.exe",
+        "C:\\fixture\\app",
+        "-d",
+        "nxm://example/mods/1/files/2"
+      ],
+      "warm": [
+        "C:\\runtime\\electron.exe",
+        "-d",
+        "--allow-file-access-from-files",
+        "--disable-gpu",
+        "C:\\fixture\\app",
+        "nxm://example/mods/1/files/2"
+      ],
+      "expected": {
+        "download": "nxm://example/mods/1/files/2"
+      }
+    },
+    {
+      "platform": "win32",
+      "defaultApp": true,
+      "case": "long-download",
+      "cold": [
+        "C:\\runtime\\electron.exe",
+        "C:\\fixture\\app",
+        "--download",
+        "nxm://example/mods/1/files/2"
+      ],
+      "warm": [
+        "C:\\runtime\\electron.exe",
+        "--download",
+        "--allow-file-access-from-files",
+        "--disable-gpu",
+        "C:\\fixture\\app",
+        "nxm://example/mods/1/files/2"
+      ],
+      "expected": {
+        "download": "nxm://example/mods/1/files/2"
+      }
+    },
+    {
+      "platform": "win32",
+      "defaultApp": true,
+      "case": "install",
+      "cold": [
+        "C:\\runtime\\electron.exe",
+        "C:\\fixture\\app",
+        "--install",
+        "nxm://example/mods/1/files/2"
+      ],
+      "warm": [
+        "C:\\runtime\\electron.exe",
+        "--install",
+        "--allow-file-access-from-files",
+        "--disable-gpu",
+        "C:\\fixture\\app",
+        "nxm://example/mods/1/files/2"
+      ],
+      "expected": {
+        "install": "nxm://example/mods/1/files/2"
+      }
+    },
+    {
+      "platform": "win32",
+      "defaultApp": true,
+      "case": "multiple",
+      "cold": [
+        "C:\\runtime\\electron.exe",
+        "C:\\fixture\\app",
+        "--user-data",
+        "a space \u00e9",
+        "--start-minimized",
+        "--download",
+        "nxm://example/mods/1/files/2"
+      ],
+      "warm": [
+        "C:\\runtime\\electron.exe",
+        "--user-data",
+        "--start-minimized",
+        "--download",
+        "--allow-file-access-from-files",
+        "--disable-gpu",
+        "C:\\fixture\\app",
+        "a space \u00e9",
+        "nxm://example/mods/1/files/2"
+      ],
+      "expected": {
+        "download": "nxm://example/mods/1/files/2",
+        "userData": "a space \u00e9",
+        "startMinimized": true
+      }
+    },
+    {
+      "platform": "win32",
+      "defaultApp": false,
+      "case": "no-uri",
+      "cold": ["C:\\Vortex\\Vortex.exe"],
+      "warm": ["C:\\Vortex\\Vortex.exe", "--allow-file-access-from-files", "--disable-gpu"],
+      "expected": {}
+    },
+    {
+      "platform": "win32",
+      "defaultApp": false,
+      "case": "raw-uri",
+      "cold": ["C:\\Vortex\\Vortex.exe", "nxm://example/mods/1/files/2"],
+      "warm": [
+        "C:\\Vortex\\Vortex.exe",
+        "--allow-file-access-from-files",
+        "--disable-gpu",
+        "nxm://example/mods/1/files/2"
+      ],
+      "expected": {}
+    },
+    {
+      "platform": "win32",
+      "defaultApp": false,
+      "case": "short-download",
+      "cold": ["C:\\Vortex\\Vortex.exe", "-d", "nxm://example/mods/1/files/2"],
+      "warm": [
+        "C:\\Vortex\\Vortex.exe",
+        "-d",
+        "--allow-file-access-from-files",
+        "--disable-gpu",
+        "nxm://example/mods/1/files/2"
+      ],
+      "expected": {
+        "download": "nxm://example/mods/1/files/2"
+      }
+    },
+    {
+      "platform": "win32",
+      "defaultApp": false,
+      "case": "long-download",
+      "cold": ["C:\\Vortex\\Vortex.exe", "--download", "nxm://example/mods/1/files/2"],
+      "warm": [
+        "C:\\Vortex\\Vortex.exe",
+        "--download",
+        "--allow-file-access-from-files",
+        "--disable-gpu",
+        "nxm://example/mods/1/files/2"
+      ],
+      "expected": {
+        "download": "nxm://example/mods/1/files/2"
+      }
+    },
+    {
+      "platform": "win32",
+      "defaultApp": false,
+      "case": "install",
+      "cold": ["C:\\Vortex\\Vortex.exe", "--install", "nxm://example/mods/1/files/2"],
+      "warm": [
+        "C:\\Vortex\\Vortex.exe",
+        "--install",
+        "--allow-file-access-from-files",
+        "--disable-gpu",
+        "nxm://example/mods/1/files/2"
+      ],
+      "expected": {
+        "install": "nxm://example/mods/1/files/2"
+      }
+    },
+    {
+      "platform": "win32",
+      "defaultApp": false,
+      "case": "multiple",
+      "cold": [
+        "C:\\Vortex\\Vortex.exe",
+        "--user-data",
+        "a space \u00e9",
+        "--start-minimized",
+        "--download",
+        "nxm://example/mods/1/files/2"
+      ],
+      "warm": [
+        "C:\\Vortex\\Vortex.exe",
+        "--user-data",
+        "--start-minimized",
+        "--download",
+        "--allow-file-access-from-files",
+        "--disable-gpu",
+        "a space \u00e9",
+        "nxm://example/mods/1/files/2"
+      ],
+      "expected": {
+        "download": "nxm://example/mods/1/files/2",
+        "userData": "a space \u00e9",
+        "startMinimized": true
+      }
+    }
+  ]
+}

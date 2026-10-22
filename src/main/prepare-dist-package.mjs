@@ -69,6 +69,19 @@ async function main() {
   const mainPkg = JSON.parse(json);
 
   mainPkg["name"] = "Vortex";
+  // Electron derives the Linux desktop name -- and from it the Wayland app_id and X11 WM_CLASS --
+  // from this field, falling back to a slug of `name`, which yields "vortex". A desktop environment
+  // then looks for a vortex.desktop to take the window icon from, finds none (the installed entry is
+  // com.nexusmods.vortex.desktop) and shows a generic placeholder in the taskbar instead of Vortex's
+  // logo. Setting it explicitly makes the app_id, the installed desktop file and the id used for
+  // nxm:// registration agree. It does NOT affect app.getPath("userData"), which comes from `name`.
+  if (process.platform === "linux") {
+    mainPkg["desktopName"] = "com.nexusmods.vortex.desktop";
+    // Native Linux package formats require these fields after pnpm deploy.
+    mainPkg["homepage"] ??= "https://www.nexusmods.com/about/vortex";
+    mainPkg["description"] ??=
+      "The elegant, powerful, and open-source mod manager from Nexus Mods.";
+  }
   mainPkg["main"] = mainPkg.main.replace(/^build\//, "");
 
   // NOTE(erri120): this is the minimal amount of bullshit required to get the piece of shit software called "electron-builder" to work with PNPM.

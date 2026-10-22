@@ -103,7 +103,10 @@ export async function activateSingleMod(activation: ISingleModActivation): Promi
   const laterSourceNames: ReadonlySet<string> = laterSources;
   // only files in the same output folder can collide with this mod's
   const laterRelPaths = lastActivation
-    .filter((file) => (file.target ?? "") === subDir && laterSourceNames.has(file.source))
+    .filter(
+      (file) =>
+        normalize(file.target ?? "") === normalize(subDir) && laterSourceNames.has(file.source),
+    )
     .map((file) => file.relPath);
   const skip = new BlacklistSet(
     [

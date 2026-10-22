@@ -79,14 +79,22 @@ VS Code debug configurations are defined in `.vscode/launch.json`. The default *
 
 #### System Electron Profiles
 
-If your environment requires the system-provided Electron package (for example NixOS), use these profiles.
+If your environment deliberately supplies an Electron compatible with the workspace native modules, these profiles resolve it from `PATH`.
 
 | Profile                              | Purpose                             | Notes                            |
 | ------------------------------------ | ----------------------------------- | -------------------------------- |
 | Debug Electron (System Electron)     | Launches main + renderer (compound) | Uses system Electron from `PATH` |
 | Debug Main Process (System Electron) | Launches Electron main process only | Uses system Electron from `PATH` |
 
-**NixOS note:** Start VS Code from `nix develop` or use direnv so `electron` is on `PATH`.
+#### Nix FHS Profiles
+
+Use **Debug Electron (Nix FHS)** or **Debug Main Process (Nix FHS)** with the
+repository's [Nix setup](install-instructions/nixos.md). These profiles launch
+`vortex-dev` before the workspace Electron, preserving its native-module ABI.
+The optional direnv setup exposes that launcher; it does not put arbitrary
+editor processes inside FHS or supply a system Electron. Build through
+`vortex-dev pnpm run build` first. The Nix profiles select Chromium's namespace
+sandbox and need a host policy that permits it.
 
 #### Special Modes (Optional)
 

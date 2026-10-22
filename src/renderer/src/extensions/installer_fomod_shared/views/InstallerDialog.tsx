@@ -1,4 +1,3 @@
-import path from "path";
 import { pathToFileURL } from "url";
 
 import type { TFunction } from "i18next";
@@ -22,6 +21,7 @@ import Spinner from "../../../controls/Spinner";
 import { IconButton } from "../../../controls/TooltipControls";
 import ZoomableImage from "../../../controls/ZoomableImage";
 import type { IState } from "../../../types/api";
+import { resolveCasePath } from "../../../util/casePath";
 import { pushSafe, removeValue } from "../../../util/storeHelper";
 import { truthy } from "../../../util/util";
 import type {
@@ -494,7 +494,7 @@ class InstallerDialog extends PureComponentEx<IProps, IDialogState> {
 
     return (
       <ZoomableImage
-        url={pathToFileURL(path.join(installerInfo.dataPath, image)).href}
+        url={pathToFileURL(resolveCasePath(installerInfo.dataPath, image)).href}
         className="installer-image"
         overlayClass="installer-zoom"
         container={undefined}

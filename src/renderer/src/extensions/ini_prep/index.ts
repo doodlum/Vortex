@@ -1,9 +1,9 @@
 import * as path from "path";
 
+import type { IniFile } from "@nexusmods/ini-parser";
+import IniParser, { WinapiFormat } from "@nexusmods/ini-parser";
 import PromiseBB from "bluebird";
 import type { TFunction } from "i18next";
-import type { IniFile } from "vortex-parse-ini";
-import IniParser, { WinapiFormat } from "vortex-parse-ini";
 
 import { log } from "../../logging";
 import type { IExtensionApi, IExtensionContext } from "../../types/IExtensionContext";
@@ -55,9 +55,6 @@ function ensureIniBackups(
 function genIniFormat(format: string) {
   switch (format) {
     case "winapi":
-      if (process.platform !== "win32") {
-        return undefined;
-      }
       return new WinapiFormat();
     default:
       throw new Error("unsupported ini format: " + format);
@@ -97,10 +94,6 @@ function discoverSettingsChanges(
   }
 
   const iniFormatter = genIniFormat(format);
-  if (iniFormatter === undefined) {
-    return PromiseBB.resolve();
-  }
-
   const parser = new IniParser(iniFormatter);
 
   const t: TFunction = api.translate;
@@ -154,7 +147,7 @@ function discoverSettingsChanges(
 
 function getBaseFile(input: string): string {
   const match = input.match(/.*\[([^\]]*)\]\.ini/);
-  if (match !== undefined && match.length >= 2) {
+  if (match !== null && match.length >= 2) {
     return match[1] + ".ini";
   } else {
     return input;
@@ -163,14 +156,14 @@ function getBaseFile(input: string): string {
 
 type ApplySettings = (fileName: string, parser: IniFile<any>) => PromiseBB<void>;
 
-function bakeSettings(
+async function bakeSettings(
   t: TFunction,
   gameMode: string,
   discovery: IDiscoveryResult,
   mods: IMod[],
   state: IState,
   onApplySettings: ApplySettings,
-): PromiseBB<void> {
+): Promise<void> {
   const modsPath = installPathForGame(state, gameMode);
   const format = iniFormat(gameMode);
   if (format === undefined) {
@@ -178,13 +171,9 @@ function bakeSettings(
   }
 
   const iniFormatter = genIniFormat(format);
-  if (iniFormatter === undefined) {
-    return PromiseBB.resolve();
-  }
-
   const enabledTweaks: { [baseFile: string]: string[] } = {};
 
-  const baseFiles = iniFiles(gameMode, discovery)
+  const baseFiles = (await iniFiles(gameMode, discovery))
     // got an error report that I can only explain by baseFiles containing undefined
     // but I don't see how that could happen.
     .filter((name) => name !== undefined);
@@ -202,10 +191,14 @@ function bakeSettings(
       .readdirAsync(tweaksPath)
       .then((files) => {
         files
-          .map((file) => file.toLowerCase())
-          .filter((file) => baseFileNames.indexOf(file) !== -1 || modTweaks.indexOf(file) !== -1)
+          .filter(
+            (file) =>
+              baseFileNames.includes(file.toLowerCase()) || modTweaks.includes(file.toLowerCase()),
+          )
           .forEach((file) => {
-            setdefault(enabledTweaks, getBaseFile(file), []).push(path.join(tweaksPath, file));
+            setdefault(enabledTweaks, getBaseFile(file.toLowerCase()), []).push(
+              path.join(tweaksPath, file),
+            );
           });
         return PromiseBB.resolve();
       })

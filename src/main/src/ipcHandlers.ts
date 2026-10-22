@@ -49,6 +49,10 @@ import { relaunch } from "./cli";
 import { getVortexPath } from "./getVortexPath";
 import { hashFile } from "./hash/host";
 import { betterIpcMain } from "./ipc";
+import { LinuxAutoStart } from "./linuxAutoStart";
+import { requestLinuxBackground } from "./linuxBackgroundPortal";
+import { getLinuxDesktopContext, linuxHostCommand } from "./linuxDesktopContext";
+import { currentLinuxProtocol } from "./linuxProtocol";
 import { openUrl, openFile, showItemInFolder } from "./open";
 import { extraWebViews } from "./webview";
 
@@ -59,6 +63,24 @@ export interface GlobalWithRedux {
 }
 
 export function init(fs: FileSystem) {
+  let linuxLoginItems: LinuxAutoStart | undefined;
+  const loginItems = () => {
+    if (!linuxLoginItems) {
+      const context = getLinuxDesktopContext();
+      linuxLoginItems = new LinuxAutoStart({
+        context,
+        iconFile: path.join(getVortexPath("assets"), "images", "vortex.png"),
+        host: (command, args) => linuxHostCommand(command, args, context),
+        requestBackground: (enabled, args, signal) =>
+          requestLinuxBackground({
+            enabled,
+            args,
+            signal,
+          }),
+      });
+    }
+    return linuxLoginItems;
+  };
   // Build paths lazily so that paths overridden later (e.g. "temp" in
   // Application constructor) are resolved at call time, not at init time.
   function resolveVortexPaths(): VortexPaths {
@@ -174,6 +196,11 @@ export function init(fs: FileSystem) {
     "app:setProtocolClient",
     (_event: IpcMainInvokeEvent, protocol: string, udPath: string | undefined) => {
       const [execPath, args] = selfCL(udPath);
+      if (process.platform === "linux") {
+        if (protocol !== "nxm") throw new Error("Linux protocol registration supports only nxm");
+        currentLinuxProtocol(path.join(getVortexPath("assets"), "images", "vortex.png")).register();
+        return;
+      }
       app.setAsDefaultProtocolClient(protocol, execPath, args);
     },
   );
@@ -182,6 +209,14 @@ export function init(fs: FileSystem) {
     "app:isProtocolClient",
     (_event: IpcMainInvokeEvent, protocol: string, udPath: string | undefined) => {
       const [execPath, args] = selfCL(udPath);
+      if (process.platform === "linux") {
+        return (
+          protocol === "nxm" &&
+          currentLinuxProtocol(
+            path.join(getVortexPath("assets"), "images", "vortex.png"),
+          ).isDefault()
+        );
+      }
       return app.isDefaultProtocolClient(protocol, execPath, args);
     },
   );
@@ -190,6 +225,9 @@ export function init(fs: FileSystem) {
     "app:removeProtocolClient",
     (_event: IpcMainInvokeEvent, protocol: string, udPath: string | undefined) => {
       const [execPath, args] = selfCL(udPath);
+      // Linux defaults are shared with other managers; deregistration leaves them
+      // under desktop/user control, matching the existing Linux contract.
+      if (process.platform === "linux") return;
       app.removeAsDefaultProtocolClient(protocol, execPath, args);
     },
   );
@@ -574,13 +612,25 @@ export function init(fs: FileSystem) {
 
   betterIpcMain.handle(
     "app:setLoginItemSettings",
-    (_event: IpcMainInvokeEvent, settings: Settings) => {
+    async (event: IpcMainInvokeEvent, settings: Settings) => {
+      if (process.platform === "linux") {
+        const abort = new AbortController();
+        const destroyed = () => abort.abort(new Error("The requesting window closed"));
+        event.sender.once("destroyed", destroyed);
+        if (event.sender.isDestroyed()) destroyed();
+        try {
+          await loginItems().set(settings.openAtLogin ?? false, settings.args ?? [], abort.signal);
+        } finally {
+          event.sender.off("destroyed", destroyed);
+        }
+        return;
+      }
       app.setLoginItemSettings(settings);
     },
   );
 
   betterIpcMain.handle("app:getLoginItemSettings", () => {
-    return app.getLoginItemSettings();
+    return process.platform === "linux" ? loginItems().get() : app.getLoginItemSettings();
   });
 
   // ============================================================================

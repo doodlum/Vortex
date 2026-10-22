@@ -10,10 +10,12 @@
       },
       "cache": true,
       "inputs": [
+        "{projectRoot}/build.mjs",
+        "{projectRoot}/build-version.mjs",
         "{projectRoot}/dotnetprobe.csproj",
         "{projectRoot}/Program.cs",
         "{projectRoot}/nuget.config",
-        { "runtime": "dotnet --version" },
+        { "runtime": "node tools/dotnetprobe/build-version.mjs" },
         { "runtime": "node -p process.platform" }
       ],
       "outputs": ["{projectRoot}/dist"]

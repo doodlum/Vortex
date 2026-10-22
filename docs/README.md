@@ -36,8 +36,12 @@ Project and coding documentation. To set up and build Vortex, start with
 
 ## Building and shipping
 
+- [legacy-csharp-runtime.md](legacy-csharp-runtime.md) - Bundled native Linux C# installer runtime, automatic setup and verification limits
 - [packaging/windows.md](packaging/windows.md) - Local unsigned installers, the pipeline, signed CI builds
+- [packaging/linux.md](packaging/linux.md) - Linux package formats, pinned tools and distro validation
 - [packaging/flatpak.md](packaging/flatpak.md) - Building and installing the Flatpak
+- [linux-desktop-integration.md](linux-desktop-integration.md) - Linux link arguments, Electron handoff and desktop validation
+- [linux-filesystem-compatibility.md](linux-filesystem-compatibility.md) - Linux integration draft, Proton controls, upstream sources and verification limits
 - [flatpak/technical.md](flatpak/technical.md) - Flatpak manifest and runtime details
 - [flatpak/maintenance.md](flatpak/maintenance.md) - Updating the Flatpak package
 - [branching-and-release-strategy.md](branching-and-release-strategy.md) - Master, release branches, what lands where

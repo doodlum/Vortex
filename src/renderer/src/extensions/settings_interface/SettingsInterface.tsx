@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useReducer, useRef, useState } from "rea
 import { ControlLabel, FormGroup } from "react-bootstrap";
 import { useTranslation } from "react-i18next";
 import { useDispatch, useSelector } from "react-redux";
+import { batchActions } from "redux-batched-actions";
 
 import { resetSuppression, setCustomTitlebar, setZoomFactor, showDialog } from "@/actions";
 import { useMainContext } from "@/contexts";
@@ -72,6 +73,15 @@ export function SettingsInterfaceForm(props: IFormProps) {
   const { t } = useTranslation(["common"]);
   const dispatch = useDispatch();
   const { api } = useMainContext();
+  const [startupPending, setStartupPending] = useState(false);
+  const startupRequest = useRef(false);
+  const startupMounted = useRef(true);
+  useEffect(() => {
+    startupMounted.current = true;
+    return () => {
+      startupMounted.current = false;
+    };
+  }, []);
 
   const profilesVisible = useSelector((state: IState) => state.settings.interface.profilesVisible);
   const hideTopLevelCategory = useSelector(
@@ -174,33 +184,45 @@ export function SettingsInterfaceForm(props: IFormProps) {
     }
   };
 
-  const toggleAutoStart = () => {
-    const startOnBoot = !autoStart === true;
-    dispatch(setAutoStart(startOnBoot));
-    if (!startOnBoot) {
-      // We only want to allow the user to start Vortex minimized
-      //  if auto start is enabled - easier this way and less chances
-      //  for users to forget about this setting and start sending
-      //  bug reports.
-      dispatch(setStartMinimized(false));
-    }
-    const preloadApi = getPreloadApi();
-    preloadApi.app.setLoginItemSettings({
-      openAtLogin: startOnBoot,
-      path: process.execPath, // Yes this is currently needed - thanks Electron
-      args: startOnBoot ? (startMinimized ? ["--start-minimized"] : []) : [],
-    });
+  const applyStartupState = (enabled: boolean, minimized: boolean) => {
+    dispatch(batchActions([setAutoStart(enabled), setStartMinimized(enabled && minimized)]));
   };
-
-  const toggleMinimized = () => {
-    const isMinimized = !startMinimized === true;
-    dispatch(setStartMinimized(isMinimized));
-    const preloadApi = getPreloadApi();
-    preloadApi.app.setLoginItemSettings({
-      openAtLogin: autoStart,
-      path: process.execPath, // Yes this is currently needed - thanks Electron
-      args: isMinimized ? ["--start-minimized"] : [],
-    });
+  const changeAutoStart = async (enabled: boolean, minimized: boolean) => {
+    if (startupRequest.current) return;
+    startupRequest.current = true;
+    setStartupPending(true);
+    try {
+      await getPreloadApi().app.setLoginItemSettings({
+        openAtLogin: enabled,
+        path: process.execPath,
+        args: enabled && minimized ? ["--start-minimized"] : [],
+      });
+      applyStartupState(enabled, minimized);
+    } catch (error) {
+      // A portal/filesystem failure can occur after part of the operation. Use
+      // Linux's confirmed state when available instead of claiming a rollback.
+      try {
+        const actual = await getPreloadApi().app.getLoginItemSettings();
+        if (typeof actual.startMinimized === "boolean")
+          applyStartupState(actual.openAtLogin, actual.startMinimized);
+      } catch (readError) {
+        log("debug", "Unable to refresh automatic startup state", {
+          error: readError instanceof Error ? readError.message : "Unknown startup state error",
+        });
+      }
+      api.showErrorNotification(t("Failed to change automatic startup"), error, {
+        allowReport: false,
+      });
+    } finally {
+      startupRequest.current = false;
+      if (startupMounted.current) setStartupPending(false);
+    }
+  };
+  const toggleAutoStart = (enabled: boolean) => {
+    void changeAutoStart(enabled, startMinimized);
+  };
+  const toggleMinimized = (minimized: boolean) => {
+    void changeAutoStart(autoStart, minimized);
   };
 
   const needRestartNotification = needRestart ? (
@@ -218,7 +240,12 @@ export function SettingsInterfaceForm(props: IFormProps) {
   const numSuppressed = Object.values(suppressedNotifications).filter((val) => val === true).length;
 
   const startMinimizedToggle = autoStart ? (
-    <Toggle checked={startMinimized} onToggle={toggleMinimized}>
+    <Toggle
+      checked={startMinimized}
+      dataId="start-minimized"
+      disabled={startupPending}
+      onToggle={toggleMinimized}
+    >
       {t("Start Vortex in the background (Minimized)")}
     </Toggle>
   ) : null;
@@ -413,7 +440,12 @@ export function SettingsInterfaceForm(props: IFormProps) {
             {t("Enable Mods when installed (in current profile)")}
           </Toggle>
 
-          <Toggle checked={autoStart} onToggle={toggleAutoStart}>
+          <Toggle
+            checked={autoStart}
+            dataId="auto-start"
+            disabled={startupPending}
+            onToggle={toggleAutoStart}
+          >
             {t("Run Vortex when my computer starts")}
           </Toggle>
 

@@ -4,6 +4,7 @@ import type { IExtensionApi } from "../../../types/IExtensionContext";
 import type { IGame } from "../../../types/IGame";
 import type { IDiscoveryResult, IState } from "../../../types/IState";
 import getVortexPath from "../../../util/getVortexPath";
+import { resolveGameDocumentsPaths } from "../../../util/linux/gameDocuments";
 import { makeOverlayableDictionary } from "../../../util/util";
 
 function bethIni(gamePath: string, iniName: string) {
@@ -494,8 +495,8 @@ const gameSupport = makeOverlayableDictionary<string, IGameSupport>(
       },
     },
   },
-  (gameId: string): string => {
-    const discovery = discoveryForGame(gameId);
+  (gameId: string, discoveryOverride?: IDiscoveryResult): string => {
+    const discovery = discoveryOverride ?? discoveryForGame(gameId);
     if (
       discovery?.path !== undefined &&
       gameId === "enderalspecialedition" &&
@@ -519,8 +520,13 @@ export function initGameSupport(api: IExtensionApi) {
   discoveryForGame = (gameId: string) => discoveryByGame(api.getState(), gameId);
 }
 
-export function getIniFilePath(gameMode: string): string {
-  return gameSupport.get(gameMode, "iniPath")?.() ?? "";
+export async function getIniFilePath(
+  gameMode: string,
+  discovery: IDiscoveryResult | undefined = discoveryForGame(gameMode),
+): Promise<string> {
+  const file = gameSupport.get(gameMode, "iniPath", discovery)?.() ?? "";
+  if (file === "") return file;
+  return (await resolveGameDocumentsPaths(gameMode, discovery, [file]))[0];
 }
 
 export function getStopPatterns(gameMode: string, game: IGame): string[] {

@@ -2,9 +2,12 @@
 
 This page covers distro-specific prerequisites before [Shared Setup].
 
-## .NET 9 SDK
+## Installer runtime
 
-Install [.NET 9 SDK] for building .NET projects.
+Normal Linux builds use the bundled native C# runtime and need no system .NET SDK
+or Mono installation. See [the runtime guide](../legacy-csharp-runtime.md) for its
+x64/glibc requirements. Windows and optional maintainer builds of .NET projects
+still use [.NET 9 SDK].
 
 ## Python And C/C++ Toolchain
 

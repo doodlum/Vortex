@@ -40,9 +40,9 @@
     "redux-act": "catalog:",
     "shortid": "catalog:",
     "turbowalk": "catalog:",
-    "vortex-parse-ini": "catalog:",
     "winapi-bindings": "catalog:",
-    "xml2js": "catalog:"
+    "xml2js": "catalog:",
+    "@nexusmods/ini-parser": "workspace:*"
   },
   "nx": {
     "tags": [

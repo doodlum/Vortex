@@ -79,11 +79,15 @@ pnpm --version
 pnpm exec node --version
 pnpm nx --version
 python3 --version
-dotnet --list-sdks
 ```
 
 `pnpm exec node --version` reports the repository's pinned `node.js` version,
 which is not necessarily the one on your `PATH`.
+
+Windows also requires the .NET SDK listed in its prerequisite guide; verify it
+with `dotnet --list-sdks` there. Ordinary Linux builds use the bundled native
+legacy-installer runtime and do not need a system .NET SDK. On NixOS, run the
+commands on this page through the [Nix FHS launcher](./nixos.md).
 
 ## Notes
 

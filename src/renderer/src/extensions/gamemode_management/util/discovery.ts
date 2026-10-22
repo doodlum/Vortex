@@ -14,6 +14,7 @@ import type { IGame } from "../../../types/IGame";
 import { GameEntryNotFound } from "../../../types/IGameStore";
 import type { IGameStoreEntry } from "../../../types/IGameStoreEntry";
 import type { ITool } from "../../../types/ITool";
+import { resolveCasePath } from "../../../util/casePath";
 import { ProcessCanceled, SetupError } from "../../../util/CustomErrors";
 import extractExeIcon from "../../../util/exeIcon";
 import * as fs from "../../../util/fs";
@@ -21,6 +22,7 @@ import type { Normalize } from "../../../util/getNormalizeFunc";
 import getNormalizeFunc from "../../../util/getNormalizeFunc";
 import { getVolumePath } from "../../../util/getVolumePath";
 import getVortexPath from "../../../util/getVortexPath";
+import { isWindowsExecutable } from "../../../util/linux/proton";
 import StarterInfo from "../../../util/StarterInfo";
 import { getSafe } from "../../../util/storeHelper";
 import * as storeLookup from "../../../util/storeLookup";
@@ -422,9 +424,15 @@ function verifyToolDir(tool: ITool, testPath: string): Bluebird<void> {
     // is not something we want at this point because we don't even know yet if the user
     // wants to manage the game at all.
     (fileName: string) =>
-      fsExtra.stat(path.join(testPath, fileName)).catch((err) => {
-        return Bluebird.reject(err);
-      }),
+      fsExtra
+        .stat(
+          isWindowsExecutable(tool.executable(testPath))
+            ? resolveCasePath(testPath, fileName)
+            : path.join(testPath, fileName),
+        )
+        .catch((err) => {
+          return Bluebird.reject(err);
+        }),
   ).then(() => undefined);
 }
 
@@ -469,6 +477,13 @@ export function discoverRelativeTools(
 ): Bluebird<void> {
   log("info", "discovering relative tools", gamePath);
   const start = Date.now();
+  // Game and tool extensions describe Windows installations. On Linux the game files still come
+  // from those Windows packages, so a declaration such as `modmanager.exe` must find the deployed
+  // `Modmanager.exe` even though the host filesystem is case-sensitive.
+  const normalizeToolPath: Normalize =
+    process.platform !== "linux" || !isWindowsExecutable(game.executable(gamePath))
+      ? normalize
+      : (input: string) => normalize(input).toLowerCase();
   const discoveredTools: { [id: string]: IToolStored } = getSafe(
     discoveredGames[game.id],
     ["tools"],
@@ -488,7 +503,7 @@ export function discoverRelativeTools(
   const files: IFileEntry[] = relativeTools.reduce((prev: IFileEntry[], tool: ITool) => {
     for (const required of tool.requiredFiles) {
       prev.push({
-        fileName: normalize(required),
+        fileName: normalizeToolPath(required),
         gameId: game.id,
         application: tool,
       });
@@ -499,8 +514,8 @@ export function discoverRelativeTools(
   const matchList: Set<string> = new Set(files.map((entry) => path.basename(entry.fileName)));
 
   const onFileCB = (filePath) =>
-    onFile(filePath, files, normalize, discoveredGames, nop, onDiscoveredTool);
-  return walk(gamePath, matchList, onFileCB, undefined, normalize).then(() => {
+    onFile(filePath, files, normalizeToolPath, discoveredGames, nop, onDiscoveredTool);
+  return walk(gamePath, matchList, onFileCB, undefined, normalizeToolPath).then(() => {
     log("debug", "done discovering relative tools", {
       elapsed: Date.now() - start,
     });
@@ -531,7 +546,12 @@ function testApplicationDirValid(
     .then(() => {
       const game = application as IGame;
       if (game.queryModPath !== undefined) {
-        const exe = game.executable(testPath);
+        const declared = game.executable(testPath);
+        // a Windows game on Linux records the executable's on-disk spelling
+        const exe =
+          process.platform === "linux" && isWindowsExecutable(declared)
+            ? path.relative(testPath, resolveCasePath(testPath, declared))
+            : declared;
         const disco: IDiscoveryResult = {
           path: testPath,
           executable: exe !== game.executable() ? exe : undefined,
@@ -540,7 +560,10 @@ function testApplicationDirValid(
 
         return discoverRelativeTools(game, testPath, discoveredGames, onDiscoveredTool, normalize);
       } else {
-        const exePath = path.join(testPath, application.executable(testPath));
+        const declared = application.executable(testPath);
+        const exePath = isWindowsExecutable(declared)
+          ? resolveCasePath(testPath, declared)
+          : path.join(testPath, declared);
         return autoGenIcon(application, exePath, gameId).then(() => {
           onDiscoveredTool(gameId, {
             ...application,

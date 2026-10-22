@@ -1,0 +1,25 @@
+{
+  "$schema": "https://www.schemastore.org/tsconfig.json",
+  "extends": "./tsconfig.json",
+  "include": ["tests/**/*.test.ts", "src/**/*", "../../typings.custom/*.d.ts", "./test-setup.mts"],
+  "exclude": [
+    "src/__mocks__/",
+    "src/__tests__/",
+    "./dist",
+    "./temp",
+    "./lib",
+    "node_modules",
+    "../../typings.custom/web-globals.d.ts"
+  ],
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true,
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "useUnknownInCatchVariables": false
+  }
+}

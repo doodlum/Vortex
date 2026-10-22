@@ -48,7 +48,7 @@ if (process.env.VORTEX_E2E === "1") {
 import { NativePathResolver } from "@vortex/shared/filesystem";
 
 import Application from "./Application";
-import { parseCommandline } from "./cli";
+import { getCommandlinePayload, parseCommandline } from "./cli";
 import { init as initDownloadIpc } from "./downloading/ipc";
 import { DownloadManager } from "./downloading/manager";
 import { terminateAsync } from "./errorHandling";
@@ -65,6 +65,7 @@ import { initFileSystem } from "./filesystem/instance";
 import { PathResolverRegistryImpl } from "./filesystem/path-resolver-registry";
 import { getVortexPath } from "./getVortexPath";
 import { init as initIpcHandlers } from "./ipcHandlers";
+import { initializeLinuxDesktopContext } from "./linuxDesktopContext";
 import { log } from "./logging";
 import StylesheetCompiler from "./stylesheetCompiler";
 import { initTelemetryIpcHandler } from "./telemetry/ipcHandler";
@@ -267,6 +268,19 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Terminal helper/report invocations must run independently of the UI instance.
+  // Ordinary secondary instances still forward their original argv before startup.
+  if (process.env.VORTEX_E2E === "1") {
+    // Skip single-instance lock in e2e tests — each test worker runs its
+    // own Electron instance with an isolated user data directory.
+  } else if (!app.requestSingleInstanceLock(getCommandlinePayload())) {
+    app.disableHardwareAcceleration();
+    app.commandLine.appendSwitch("--in-process-gpu");
+    app.commandLine.appendSwitch("--disable-software-rasterizer");
+    app.quit();
+    return;
+  }
+
   // Start Crashpad as early as possible so even startup crashes produce a
   // dump; sendPendingNativeCrashReport picks it up on the next start. Must
   // run before the sweeps below — they read the crashDumps path.
@@ -318,23 +332,22 @@ async function main(): Promise<void> {
   );
   initFileSystem(fs);
 
+  // Resolve only integration metadata before Electron becomes ready. A broken host
+  // launcher must not prevent Vortex itself from starting. No desktop files are written.
+  try {
+    initializeLinuxDesktopContext();
+  } catch (error) {
+    log("warn", "Linux desktop integration is unavailable", {
+      error: getErrorMessageOrDefault(error),
+    });
+  }
+
   initIpcHandlers(fs);
   initDownloadIpc(downloadManager);
   initUploadIpc(uploadManager);
   initTelemetryIpcHandler();
 
   StylesheetCompiler.init();
-
-  if (process.env.VORTEX_E2E === "1") {
-    // Skip single-instance lock in e2e tests — each test worker runs its
-    // own Electron instance with an isolated user data directory.
-  } else if (!app.requestSingleInstanceLock()) {
-    app.disableHardwareAcceleration();
-    app.commandLine.appendSwitch("--in-process-gpu");
-    app.commandLine.appendSwitch("--disable-software-rasterizer");
-    app.quit();
-    return;
-  }
 
   // async code only allowed from here on out
 

@@ -10,7 +10,10 @@ import {
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { installInMemoryFS } from "../test-utils/fsApi";
+import type { IExtensionApi } from "../types/IExtensionContext";
 import { GameEntryNotFound } from "../types/IGameStore";
+import type * as ProtonModule from "./linux/proton";
+import type { ISteamEntry } from "./Steam";
 import { Steam } from "./Steam";
 
 // Steam.ts builds its singleton at import time, and on Linux that constructor calls
@@ -19,6 +22,8 @@ import { Steam } from "./Steam";
 // (On Windows the equivalent RegGetValue call sits in a try/catch that swallows the
 // ReferenceError, which is why a plain `let` only fails on CI.)
 const steam = vi.hoisted(() => ({ installed: true, baseFolder: "C:\\Steam" }));
+const proton = vi.hoisted(() => ({ info: vi.fn(), installed: vi.fn() }));
+const steamHome = vi.hoisted(() => ({ find: vi.fn().mockResolvedValue("/steam-home") }));
 
 const BASE_FOLDER = steam.baseFolder;
 const ALT_LIBRARY = path.join("D:", "SteamLibrary");
@@ -111,10 +116,12 @@ vi.mock("./linux/steamPaths", () => ({
   findLinuxSteamPath: () => (steam.installed ? steam.baseFolder : undefined),
 }));
 
-vi.mock("./linux/proton", () => ({
-  getProtonInfo: () => Promise.resolve({ usesProton: false }),
-  buildProtonEnvironment: () => ({}),
-  buildProtonCommand: () => ({ executable: "", args: [] }),
+vi.mock("./linux/steamClientHome", () => ({ findSteamClientHome: steamHome.find }));
+
+vi.mock("./linux/proton", async (importOriginal) => ({
+  ...(await importOriginal<typeof ProtonModule>()),
+  getProtonInfo: proton.info,
+  listInstalledProton: proton.installed,
 }));
 
 /**
@@ -161,6 +168,8 @@ const scanAllGames = async (manifest: string = MANIFEST) => {
 
 describe("Steam.allGames", () => {
   beforeEach(() => {
+    proton.info.mockResolvedValue({ usesProton: false });
+    proton.installed.mockResolvedValue([]);
     steam.installed = true;
     chaosRules = [];
     libraryFoldersVdf = libraryFolders([]);
@@ -324,5 +333,124 @@ describe("Steam.allGames", () => {
     const entries = await scanAllGames();
 
     expect(entries[0]?.installData).toBeUndefined();
+  });
+});
+
+describe("Steam Proton launches", () => {
+  beforeEach(() => {
+    steamHome.find.mockReset().mockResolvedValue("/steam-home");
+  });
+
+  const gamePath = path.join(BASE_FOLDER, "steamapps", "common", "TestGame");
+  const entry = { appid: "42", gameStoreId: "steam", name: "Test", gamePath } as ISteamEntry;
+  const makeApi = (discoveryPath: string, override = "") => {
+    const runExecutable = vi.fn().mockResolvedValue(undefined);
+    const state = {
+      settings: {
+        profiles: { activeProfileId: "one" },
+        gameMode: { discovered: { test: { path: discoveryPath } } },
+      },
+      persistent: {
+        profiles: { one: { id: "one", gameId: "test", features: { "proton-version": override } } },
+      },
+    };
+    return {
+      api: { getState: () => state, runExecutable } as unknown as IExtensionApi,
+      runExecutable,
+    };
+  };
+
+  it("resolves fresh Steam settings and preserves literal argv for an external tool", async () => {
+    proton.info.mockResolvedValue({
+      usesProton: true,
+      protonPath: "/new-proton",
+      compatDataPath: "/prefix",
+    });
+    const { api, runExecutable } = makeApi(gamePath);
+    await new Steam().runToolWithProton(
+      api,
+      "/outside/Tool.exe",
+      ["argument with spaces", "$(literal)"],
+      { env: { CUSTOM: "value" } },
+      { ...entry, protonPath: "/stale-proton" },
+    );
+    expect(runExecutable).toHaveBeenCalledWith(
+      path.join("/new-proton", "proton"),
+      ["run", "/outside/Tool.exe", "argument with spaces", "$(literal)"],
+      expect.objectContaining({
+        shell: false,
+        env: expect.objectContaining({
+          CUSTOM: "value",
+          STEAM_COMPAT_DATA_PATH: "/prefix",
+          HOME: "/steam-home",
+          SteamAppId: "42",
+          SteamGameId: "42",
+        }),
+      }),
+    );
+  });
+
+  it("skips SDK discovery when the caller explicitly supplies HOME", async () => {
+    steamHome.find.mockRejectedValue(
+      Object.assign(new Error("unreadable inherited SDK"), { code: "EACCES" }),
+    );
+    proton.info.mockResolvedValue({
+      usesProton: true,
+      protonPath: "/steam-proton",
+      compatDataPath: "/prefix",
+    });
+    const { api, runExecutable } = makeApi(gamePath);
+    await new Steam().runToolWithProton(
+      api,
+      "/outside/Tool.exe",
+      [],
+      { env: { HOME: "/explicit-home" } },
+      entry,
+    );
+    expect(steamHome.find).not.toHaveBeenCalled();
+    expect(runExecutable).toHaveBeenCalledWith(
+      path.join("/steam-proton", "proton"),
+      ["run", "/outside/Tool.exe"],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          HOME: "/explicit-home",
+          SteamAppId: "42",
+          SteamGameId: "42",
+        }),
+      }),
+    );
+  });
+  it("uses only the matching active game's profile override", async () => {
+    proton.info.mockResolvedValue({
+      usesProton: true,
+      protonPath: "/steam-proton",
+      compatDataPath: "/prefix",
+    });
+    proton.installed.mockResolvedValue([{ path: "/override" }]);
+    const own = makeApi(gamePath, "/override");
+    await new Steam().runToolWithProton(own.api, "/outside/Tool.exe", [], {}, entry);
+    expect(own.runExecutable.mock.calls[0][0]).toBe(path.join("/override", "proton"));
+    const other = makeApi(gamePath + "Other", "/override");
+    await new Steam().runToolWithProton(other.api, "/outside/Tool.exe", [], {}, entry);
+    expect(other.runExecutable.mock.calls[0][0]).toBe(path.join("/steam-proton", "proton"));
+  });
+
+  it("refuses a missing profile override and never retries the Windows executable directly", async () => {
+    proton.info.mockResolvedValue({
+      usesProton: true,
+      protonPath: "/steam-proton",
+      compatDataPath: "/prefix",
+    });
+    proton.installed.mockResolvedValue([]);
+    const { api, runExecutable } = makeApi(gamePath, "/missing");
+    await expect(
+      new Steam().runToolWithProton(api, "/outside/Tool.exe", [], {}, entry),
+    ).rejects.toThrow("no longer installed");
+    expect(runExecutable).not.toHaveBeenCalled();
+    proton.info.mockResolvedValue({ usesProton: false });
+    await expect(
+      new Steam().runToolWithProton(api, "/outside/Tool.exe", [], {}, entry),
+    ).rejects.toThrow("No installed Proton");
+    expect(runExecutable).not.toHaveBeenCalled();
   });
 });

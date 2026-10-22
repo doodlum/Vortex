@@ -11,9 +11,9 @@ const describeOnWindows = process.platform === "win32" ? describe : describe.ski
 const TEST_DATA_DIR = path.resolve(import.meta.dirname, "../test-data");
 const REFERENCE_DIR = path.join(TEST_DATA_DIR, "reference");
 
-const DOTNET_PROBE = path.resolve(
+const PE_FIXTURE = path.resolve(
   import.meta.dirname,
-  "../../../tools/dotnetprobe/temp/dotnetprobe.exe",
+  "../../../extensions/games/game-baldursgate3/tools/divine.exe",
 );
 
 // PNG signature bytes
@@ -53,16 +53,10 @@ describe("extractIcon (cross-platform)", () => {
   });
 
   it("handles PE without icons gracefully", async () => {
-    expect(fs.existsSync(DOTNET_PROBE)).toBe(true);
+    expect(fs.existsSync(PE_FIXTURE)).toBe(true);
 
-    // dotnetprobe.exe is a console app — may not have icons
-    const result = await extractIcon(DOTNET_PROBE);
-    // Either returns a valid icon or undefined, but must not throw
-    if (result !== undefined) {
-      expect(isPng(result.png)).toBe(true);
-      expect(result.width).toBeGreaterThan(0);
-      expect(result.height).toBeGreaterThan(0);
-    }
+    // The committed console fixture has version resources and no icon group.
+    expect(await extractIcon(PE_FIXTURE)).toBeUndefined();
   });
 });
 

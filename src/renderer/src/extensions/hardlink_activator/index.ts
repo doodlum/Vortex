@@ -22,6 +22,7 @@ import type {
   IDeploymentMethod,
   IUnavailableReason,
 } from "../mod_management/types/IDeploymentMethod";
+import { purgeNativeHardlinks } from "./nativeHardlinks";
 
 export class FileFound extends Error {
   constructor(name: string) {
@@ -108,42 +109,44 @@ class DeploymentMethod extends LinkingDeployment {
 
     const installationPath = installPathForGame(state, gameId);
 
+    // hard links work only on the same drive
+    const sameDrive = (): IUnavailableReason => ({
+      description: (t) => t("Works only if mods are installed on the same drive as the game."),
+      order: 5,
+      solution: (t) => {
+        let displayPath = modPaths[typeId];
+        try {
+          displayPath = getVolumePath(modPaths[typeId]);
+        } catch {
+          log("warn", "Failed to resolve volume path", {
+            path: modPaths[typeId],
+          });
+        }
+        return t(
+          "Please go to Settings->Mods and set the mod staging folder to be on " +
+            "the same drive as the game ({{gameVolume}}).",
+          {
+            replace: {
+              gameVolume: displayPath,
+            },
+          },
+        );
+      },
+      fixCallback: (api: IExtensionApi) =>
+        new PromiseBB((_resolve, _reject) => {
+          api.events.emit("show-main-page", "application_settings");
+          api.store.dispatch(setSettingsPage("Mods"));
+          api.highlightControl(
+            "#install-path-form",
+            5000,
+            "Change this to be on the same drive as the game.",
+          );
+        }),
+    });
+
     try {
       if (fs.statSync(installationPath).dev !== fs.statSync(modPaths[typeId]).dev) {
-        // hard links work only on the same drive
-        return {
-          description: (t) => t("Works only if mods are installed on the same drive as the game."),
-          order: 5,
-          solution: (t) => {
-            let displayPath = modPaths[typeId];
-            try {
-              displayPath = getVolumePath(modPaths[typeId]);
-            } catch {
-              log("warn", "Failed to resolve volume path", {
-                path: modPaths[typeId],
-              });
-            }
-            return t(
-              "Please go to Settings->Mods and set the mod staging folder to be on " +
-                "the same drive as the game ({{gameVolume}}).",
-              {
-                replace: {
-                  gameVolume: displayPath,
-                },
-              },
-            );
-          },
-          fixCallback: (api: IExtensionApi) =>
-            new PromiseBB((_resolve, _reject) => {
-              api.events.emit("show-main-page", "application_settings");
-              api.store.dispatch(setSettingsPage("Mods"));
-              api.highlightControl(
-                "#install-path-form",
-                5000,
-                "Change this to be on the same drive as the game.",
-              );
-            }),
-        };
+        return sameDrive();
       }
     } catch (err) {
       // this can happen when managing the the game for the first time
@@ -158,21 +161,29 @@ class DeploymentMethod extends LinkingDeployment {
     }
 
     const canary = path.join(installationPath, "__vortex_canary.tmp");
+    // Outside Windows, link into the deployment target itself: bind mounts (such as a Flatpak's
+    // app data folder) share the game's st_dev, yet the kernel refuses links across them (EXDEV).
+    const canaryLink =
+      process.platform === "win32"
+        ? canary + ".link"
+        : path.join(modPaths[typeId], "__vortex_canary.tmp.link");
 
     let res: IUnavailableReason;
 
     try {
       try {
-        fs.removeSync(canary + ".link");
+        fs.removeSync(canaryLink);
       } catch {
         // nop
       }
       fs.writeFileSync(canary, "Should only exist temporarily, feel free to delete");
-      fs.linkSync(canary, canary + ".link");
+      fs.linkSync(canary, canaryLink);
     } catch (err) {
       // EMFILE shouldn't keep us from using hard linking
       const code = getErrorCode(err);
-      if (code !== "EMFILE") {
+      if (code === "EXDEV") {
+        res = sameDrive();
+      } else if (code !== "EMFILE") {
         // the error code we're actually getting is EISDIR, which makes no sense at all
         res = {
           description: (t) => t("Filesystem doesn't support hard links."),
@@ -181,14 +192,14 @@ class DeploymentMethod extends LinkingDeployment {
     }
 
     try {
-      fs.removeSync(canary + ".link");
+      fs.removeSync(canaryLink);
       fs.removeSync(canary);
     } catch {
       // cleanup failed, this is almost certainly due to an AV jumping in to check these new files,
       // I mean, why would I be able to create the files but not delete them?
       // just try again later - can't do that synchronously though
       PromiseBB.delay(100)
-        .then(() => fs.removeAsync(canary + ".link"))
+        .then(() => fs.removeAsync(canaryLink))
         .then(() => fs.removeAsync(canary))
         .catch((err) => {
           log(
@@ -223,6 +234,10 @@ class DeploymentMethod extends LinkingDeployment {
     dataPath: string,
     onProgress?: (num: number, total: number) => void,
   ): PromiseBB<void> {
+    if (process.platform !== "win32") {
+      return PromiseBB.resolve(purgeNativeHardlinks(installationPath, dataPath, onProgress));
+    }
+
     let installEntryProm: PromiseBB<Set<string>>;
 
     // find ids of all files in our mods directory

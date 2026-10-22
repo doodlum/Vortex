@@ -23,7 +23,8 @@
     "react-bootstrap": "catalog:",
     "react-i18next": "catalog:",
     "react-redux": "catalog:",
-    "winapi-bindings": "catalog:"
+    "winapi-bindings": "catalog:",
+    "@nexusmods/ini-parser": "workspace:*"
   },
   "nx": {
     "tags": [

@@ -36,7 +36,7 @@
     "redux": "catalog:",
     "semver": "catalog:",
     "shortid": "catalog:",
-    "vortex-parse-ini": "catalog:"
+    "@nexusmods/ini-parser": "workspace:*"
   },
   "nx": {
     "tags": [

@@ -11,13 +11,19 @@ import typographyWrapsTextRule from "../../eslint-rules/typography-wraps-text.mj
 import { baseConfig } from "../../eslint.config.base.mjs";
 
 export default defineConfig([
-  ...baseConfig(import.meta.dirname),
+  ...baseConfig(import.meta.dirname, ["src/**/*.{ts,tsx}", "tests/**/*.test.ts"]),
+  {
+    files: ["tests/**/*.test.ts"],
+    languageOptions: {
+      parserOptions: { projectService: false, project: "./tsconfig.integration.json" },
+    },
+  },
   {
     ignores: ["temp/**", "lib/**", "dist/**", "node_modules/**"],
   },
 
   {
-    files: ["src/**/*.{ts,tsx}"],
+    files: ["src/**/*.{ts,tsx}", "tests/**/*.test.ts"],
     extends: [
       betterTailwindcss.configs.recommended,
       eslintReact.configs["recommended-type-checked"],

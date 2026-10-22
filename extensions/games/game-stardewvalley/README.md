@@ -41,6 +41,13 @@ then start in [`index.ts`](index.ts).
 
 On Linux and macOS, `StardewValley` is a wrapper script around the `Stardew Valley` binary.
 
+On Linux, the Windows edition installed through Steam Proton uses `Stardew Valley.exe`
+and the Windows SMAPI payload (`StardewModdingAPI.exe`). The extension selects these from
+the installed game files, independently of Vortex's host OS. Rescan the game after changing
+Steam's compatibility setting and download edition. The native Linux edition continues to
+use the Linux SMAPI payload. Proton saves and logs live inside the game's Steam prefix,
+under its Windows user profile.
+
 ### What a Stardew mod usually looks like
 
 Most SMAPI mods include a `manifest.json` file. SMAPI uses it for identification,

@@ -3,6 +3,7 @@ import * as path from "path";
 import format from "string-template";
 
 import getVortexPath from "../../util/getVortexPath";
+import { resolveGameDocumentsPaths } from "../../util/linux/gameDocuments";
 import { makeOverlayableDictionary } from "../../util/util";
 import type { IDiscoveryResult } from "../gamemode_management/types/IDiscoveryResult";
 
@@ -172,7 +173,7 @@ const gameSupport = makeOverlayableDictionary<string, IGameSupport>(
   (gameId: string, store: string) => store,
 );
 
-export function iniFiles(gameMode: string, discovery: IDiscoveryResult) {
+export async function iniFiles(gameMode: string, discovery: IDiscoveryResult) {
   const mygames = path.join(getVortexPath("documents"), "My Games");
 
   let store = discovery?.store;
@@ -187,9 +188,10 @@ export function iniFiles(gameMode: string, discovery: IDiscoveryResult) {
     store = "enderaloverride";
   }
 
-  return (gameSupport.get(gameMode, "iniFiles", store) ?? []).map((filePath) =>
+  const files = (gameSupport.get(gameMode, "iniFiles", store) ?? []).map((filePath) =>
     format(filePath, { mygames, game: discovery.path }),
   );
+  return resolveGameDocumentsPaths(gameMode, discovery, files);
 }
 
 export function iniFormat(gameMode: string) {

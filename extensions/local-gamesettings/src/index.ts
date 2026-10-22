@@ -4,6 +4,7 @@ import { fs, log, selectors, types, util } from "@nexusmods/vortex-api";
 import PromiseBB from "bluebird";
 import * as Redux from "redux";
 
+import { copyGameSettings } from "./util/copyGameSettings";
 import {
   backupPath,
   gameSettingsFiles,
@@ -14,93 +15,42 @@ import {
   profilePath,
 } from "./util/gameSupport";
 
-function copyGameSettings(
-  sourcePath: string,
-  destinationPath: string,
-  files: ISettingsFile[],
-  copyType: string,
-): PromiseBB<void> {
-  return PromiseBB.map(files, (gameSetting) => {
-    let source = path.join(sourcePath, gameSetting.name);
-    let destination = path.join(destinationPath, path.basename(gameSetting.name));
-    const destinationOrig = destination;
-
-    if (copyType.startsWith("Glo")) {
-      source += ".base";
-    } else if (copyType.endsWith("Glo")) {
-      destination += ".base";
-    }
-
-    log("debug", "copying profile inis", { source, destination });
-
-    return fs
-      .copyAsync(source, destination, { noSelfCopy: true })
-      .catch((err) => {
-        if (gameSetting.optional) {
-          return PromiseBB.resolve();
-        }
-        switch (copyType) {
-          // backup missing, create it now from global file
-          case "BacGlo":
-            return fs.copyAsync(destination, source, { noSelfCopy: true });
-          // profile ini missing, create it now from global file
-          case "ProGlo":
-            return fs.copyAsync(destination, source, { noSelfCopy: true });
-          // fatal error
-          default:
-            return PromiseBB.reject(err);
-        }
-      })
-      .then(() =>
-        copyType.endsWith("Glo")
-          ? fs
-              .copyAsync(source, destinationOrig, { noSelfCopy: true })
-              .then(() =>
-                fs.copyAsync(source, destinationOrig + ".baked", {
-                  noSelfCopy: true,
-                }),
-              )
-              .catch({ code: "ENOENT" }, (err) =>
-                gameSetting.optional ? PromiseBB.resolve() : PromiseBB.reject(err),
-              )
-          : PromiseBB.resolve(),
-      );
-  }).then(() => undefined);
-}
-
 function checkGlobalFiles(
   oldProfile: types.IProfile,
   newProfile: types.IProfile,
 ): PromiseBB<ISettingsFile[]> {
-  let fileList: ISettingsFile[] = [];
+  // a Proton game whose prefix is unavailable rejects rather than throwing
+  return PromiseBB.try(() => {
+    let fileList: ISettingsFile[] = [];
 
-  if (oldProfile !== undefined && gameSupported(oldProfile.gameId)) {
-    fileList = fileList.concat(
-      gameSettingsFiles(oldProfile.gameId, mygamesPath(oldProfile.gameId)),
-    );
-  }
-
-  if (newProfile !== undefined && gameSupported(newProfile.gameId)) {
-    fileList = fileList.concat(
-      gameSettingsFiles(newProfile.gameId, mygamesPath(newProfile.gameId)),
-    );
-  }
-
-  fileList = util.unique(fileList, (item) => item.name);
-
-  return PromiseBB.filter(fileList, (file) =>
-    file.optional
-      ? PromiseBB.resolve(false)
-      : fs
-          .statAsync(file.name)
-          .then(() => false)
-          .catch(() => true),
-  ).then((missingFiles: ISettingsFile[]) => {
-    if (missingFiles.length > 0) {
-      return PromiseBB.resolve(missingFiles);
-    } else {
-      return PromiseBB.resolve(null);
+    if (oldProfile !== undefined && gameSupported(oldProfile.gameId)) {
+      fileList = fileList.concat(
+        gameSettingsFiles(oldProfile.gameId, mygamesPath(oldProfile.gameId)),
+      );
     }
+
+    if (newProfile !== undefined && gameSupported(newProfile.gameId)) {
+      fileList = fileList.concat(
+        gameSettingsFiles(newProfile.gameId, mygamesPath(newProfile.gameId)),
+      );
+    }
+
+    fileList = util.unique(fileList, (item) => item.name);
+
+    return PromiseBB.filter(fileList, (file) =>
+      file.optional
+        ? PromiseBB.resolve(false)
+        : fs
+            .statAsync(file.name)
+            .then(() => false)
+            .catch(() => true),
+    ).then((missingFiles: ISettingsFile[]) => {
+      if (missingFiles.length > 0) {
+        return PromiseBB.resolve(missingFiles);
+      } else {
+        return PromiseBB.resolve(null);
+      }
+    });
   });
 }
 

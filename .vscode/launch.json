@@ -30,6 +30,11 @@
         "order": 1
       },
       "stopAll": true
+    },
+    {
+      "name": "Debug Electron (Nix FHS)",
+      "configurations": ["Debug Main Process (Nix FHS)", "Debug Renderer Process"],
+      "stopAll": true
     }
   ],
   "configurations": [
@@ -150,6 +155,30 @@
       "args": ["__tests__/fblo.updateset.test.js", "--runInBand"],
       "console": "integratedTerminal",
       "internalConsoleOptions": "neverOpen"
+    },
+    {
+      "name": "Debug Main Process (Nix FHS)",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "vortex-dev",
+      "runtimeArgs": [
+        "${workspaceRoot}/src/main/node_modules/.bin/electron",
+        "--inspect=9229",
+        "--remote-debugging-port=9222",
+        "--disable-setuid-sandbox"
+      ],
+      "args": ["."],
+      "attachSimplePort": 9229,
+      "cwd": "${workspaceRoot}/src/main",
+      "env": { "NODE_ENV": "development", "START_DEVTOOLS": "true" },
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "sourceMaps": true,
+      "outFiles": ["${workspaceFolder}/src/main/build/**/*.{js,cjs}"],
+      "resolveSourceMapLocations": ["${workspaceFolder}/**", "!**/node_modules/**"],
+      "autoAttachChildProcesses": false,
+      "timeout": 60000,
+      "skipFiles": ["<node_internals>/**", "${workspaceFolder}/node_modules/**"]
     }
   ]
 }

@@ -1,7 +1,7 @@
 import * as path from "node:path";
 
 import type { PluginCleaningData } from "loot";
-import { describe, expect, vi } from "vitest";
+import { describe, expect, onTestFinished, vi } from "vitest";
 
 import { startActivity } from "../../actions/session";
 import {
@@ -87,29 +87,39 @@ describe("LootInterface plugin-details", () => {
     expect(result).toEqual({});
   });
 
-  test("loads only deployed non-invalid plugins and reports the skipped ones once", async ({
-    makeLoot,
-  }) => {
-    const harness = await makeLoot(LootInterface, { invalidPlugins: ["three.esp"] });
-    harness.api.store.dispatch(
-      setPluginList({
-        "one.esp": makePlugin(),
-        "two.esp": makePlugin({ deployed: false }),
-        "three.esp": makePlugin(),
-      }),
-    );
+  test.for(["win32", "linux"] as const)(
+    "%s: loads only deployed non-invalid plugins and reports the skipped ones once",
+    async (platform, { makeLoot }) => {
+      vi.stubGlobal("process", { ...process, platform });
+      onTestFinished(() => {
+        vi.unstubAllGlobals();
+      });
+      const harness = await makeLoot(LootInterface, { invalidPlugins: ["three.esp"] });
+      const onDisk = path.join("data", "One.esp");
+      harness.api.store.dispatch(
+        setPluginList({
+          "one.esp": makePlugin({ filePath: onDisk }),
+          "two.esp": makePlugin({ deployed: false }),
+          "three.esp": makePlugin(),
+        }),
+      );
 
-    const result = await harness.requestDetails(["one.esp", "two.esp", "three.esp"]);
+      const result = await harness.requestDetails(["one.esp", "two.esp", "three.esp"]);
 
-    expect(harness.loot.loadPlugins).toHaveBeenCalledWith(["one.esp"], false);
-    expect(
-      harness.notifications.filter(
-        (notification) => notification.id === "loot-skipped-invalid-plugins",
-      ),
-    ).toHaveLength(1);
-    // every requested plugin still gets a details entry
-    expect(Object.keys(result).sort()).toEqual(["one.esp", "three.esp", "two.esp"]);
-  });
+      // a case-sensitive filesystem has the plugin only under its on-disk name
+      expect(harness.loot.loadPlugins).toHaveBeenCalledWith(
+        [platform === "win32" ? "one.esp" : onDisk],
+        false,
+      );
+      expect(
+        harness.notifications.filter(
+          (notification) => notification.id === "loot-skipped-invalid-plugins",
+        ),
+      ).toHaveLength(1);
+      // every requested plugin still gets a details entry
+      expect(Object.keys(result).sort()).toEqual(["one.esp", "three.esp", "two.esp"]);
+    },
+  );
 
   test("maps loot metadata and plugin info into the plugin details", async ({ makeLoot }) => {
     const harness = await makeLoot(LootInterface);

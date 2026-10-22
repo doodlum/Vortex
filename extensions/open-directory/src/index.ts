@@ -76,16 +76,24 @@ function init(context: types.IExtensionContext) {
       const state = context.api.getState();
       const gameId = selectors.activeGameId(state);
       const game = util.getGame(gameId);
-      const target = settingsPath(game);
-      if (target !== undefined) {
-        openPath(target);
+      try {
+        const target = settingsPath(game);
+        if (target !== undefined) openPath(target);
+      } catch (error) {
+        context.api.showErrorNotification("Failed to open game settings folder", error, {
+          allowReport: false,
+        });
       }
     },
     () => {
       const state = context.api.getState();
       const gameId = selectors.activeGameId(state);
       const game = util.getGame(gameId);
-      return settingsPath(game) !== undefined;
+      try {
+        return settingsPath(game) !== undefined;
+      } catch {
+        return false;
+      }
     },
   );
 
@@ -99,16 +107,24 @@ function init(context: types.IExtensionContext) {
       const state = context.api.getState();
       const gameId = selectors.activeGameId(state);
       const game = util.getGame(gameId);
-      const target = appDataPath(game);
-      if (target !== undefined) {
-        openPath(target);
+      try {
+        const target = appDataPath(game);
+        if (target !== undefined) openPath(target);
+      } catch (error) {
+        context.api.showErrorNotification("Failed to open game application data folder", error, {
+          allowReport: false,
+        });
       }
     },
     () => {
       const state = context.api.getState();
       const gameId = selectors.activeGameId(state);
       const game = util.getGame(gameId);
-      return appDataPath(game) !== undefined;
+      try {
+        return appDataPath(game) !== undefined;
+      } catch {
+        return false;
+      }
     },
   );
 

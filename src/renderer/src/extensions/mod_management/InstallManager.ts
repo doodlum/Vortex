@@ -80,6 +80,7 @@ import type { IExtensionApi, ThunkStore } from "../../types/IExtensionContext";
 import type { IProfile, IState } from "../../types/IState";
 import { withActivityTracking } from "../../util/activity";
 import { getBatchContext, type IBatchContext } from "../../util/BatchContext";
+import { resolveNativePath } from "../../util/casePath";
 import {
   generateCollectionSessionId,
   isOutstandingOptionalMember,
@@ -188,7 +189,6 @@ import type { IInstallationDetails, InstallFunc } from "./types/InstallFunc";
 import type { IReplaceChoice, ReplaceChoice } from "./types/IReplaceChoice";
 import type { ISupportedResult, ITestSupportedDetails, TestSupported } from "./types/TestSupported";
 import { calculateModSize } from "./util/calculate_mod_size/calculateModSize.util";
-import { getCSharpScriptAllowListForGame } from "./util/cSharpScriptAllowList";
 import gatherDependencies, {
   findDownloadByRef,
   lookupFromDownload,
@@ -4028,37 +4028,6 @@ class InstallManager {
           hasXmlConfigXML,
         };
 
-        const allowList = getCSharpScriptAllowListForGame(gameId);
-        if (hasCSScripts && !allowList.has(details?.modReference?.repo?.modId || "")) {
-          const modName =
-            details?.modReference?.id || path.basename(archivePath, path.extname(archivePath));
-          const t = api.translate;
-
-          const no = t("Cancel installation");
-          const yes = t("Install anyway (unsafe)");
-          //const yesForAll = t(`Install anyway (unsafe). Don't ask again for the current session`);
-          const dialogResult = await api.showDialog?.(
-            "question",
-            t(`Unsafe Mod Detected`),
-            {
-              bbcode: t(
-                `"{{modName}}" contains C# scripts that can run code on your computer.[br][/br][br][/br]` +
-                  `These scripts give the mod full access to your system and can cause serious harm, including data loss or security breaches.[br][/br]` +
-                  `Unless you personally reviewed and trust the source, we strongly recommend you do not install this mod.[br][/br][br][/br]` +
-                  `Are you sure you want to continue?`,
-                { replace: { modName: modName } },
-              ),
-            },
-            [{ label: no }, { label: yes } /*{ label: yesForAll }*/],
-          );
-          switch (dialogResult?.action) {
-            case no:
-              throw new UserCanceled();
-            //case yesForAll:
-            //  break;
-          }
-        }
-
         if (truthy(extractList) && extractList.length > 0) {
           const supportedInstaller = await makeListInstaller(extractList, tempPath);
           return { ...supportedInstaller, ...testDetails };
@@ -4292,10 +4261,35 @@ class InstallManager {
     return [].concat(invalidDestinationErrors);
   }
 
+  /**
+   * Installer instructions arrive with Windows path separators: the FOMOD installer emits them, and
+   * plenty of mods' own fomod scripts are written with them. On Windows `path.join` normalises a
+   * backslash away; on Linux it is a legal filename character, so `Data\skse\plugins\Foo.dll` is
+   * looked up literally, the hard link fails with ENOENT, and the install is reported as
+   *
+   *   The installer in "..." tried to install files that were not part of the archive.
+   *
+   * naming files that are plainly in the archive. Normalising once here covers every consumer of the
+   * instructions rather than each path join separately.
+   */
+  private nativeSeparators(instruction: IInstruction): IInstruction {
+    if (process.platform === "win32") {
+      return instruction;
+    }
+    const convert = (value: string | undefined) =>
+      typeof value === "string" ? value.replace(/\\/g, "/") : value;
+    const source = convert(instruction.source);
+    const destination = convert(instruction.destination);
+    if (source === instruction.source && destination === instruction.destination) {
+      return instruction;
+    }
+    return { ...instruction, source, destination };
+  }
+
   private transformInstructions(input: IInstruction[]): InstructionGroups {
     return input.reduce((prev, value) => {
       if (truthy(value) && prev[value.type] !== undefined) {
-        prev[value.type].push(value);
+        prev[value.type].push(this.nativeSeparators(value));
       }
       return prev;
     }, new InstructionGroups());
@@ -7504,6 +7498,7 @@ class InstallManager {
           // File is already there - don't care
           return;
         }
+        throw err;
       }
     };
 
@@ -7533,32 +7528,63 @@ class InstallManager {
       await mapWithConcurrency(Array.from(dirs), (d) => fs.ensureDirAsync(d), dirConcurrency);
 
       // perform hard links in parallel; fallback to copy on failure
+      let transferFailure: { error: unknown } | undefined;
       await mapWithConcurrency(
         jobs,
         async (job) => {
+          if (transferFailure !== undefined) return;
           try {
-            await fs.linkAsync(job.src, job.dst);
-          } catch (err) {
-            const code = getErrorCode(err);
-            if (code === "ENOENT") {
-              // source file does not exist; skip
-              missingFiles.add(job.src);
-              return;
+            try {
+              await fs.linkAsync(job.src, job.dst);
+            } catch (err) {
+              const code = getErrorCode(err);
+              if (code === "ENOENT") {
+                // The installer named a file the archive spells differently. Mods are authored on
+                // Windows, so an instruction can read `Data\skse\plugins\Foo.dll` for an archive that
+                // holds `data/skse/plugins/Foo.dll` -- one path there, two here.
+                // Resolve the actual archive spelling before treating the source as missing.
+                const resolved = resolveNativePath(job.src);
+                if (resolved !== job.src) {
+                  try {
+                    await fs.linkAsync(resolved, job.dst);
+                    log("debug", "installer source resolved to the archive's own spelling", {
+                      requested: job.src,
+                      resolved,
+                    });
+                    return;
+                  } catch (retryErr) {
+                    const retryCode = getErrorCode(retryErr);
+                    if (retryCode && ["EXDEV", "EPERM", "EACCES", "ENOTSUP"].includes(retryCode)) {
+                      await copyAsyncWrap(resolved, job.dst);
+                      return;
+                    }
+                    if (retryCode !== "ENOENT") throw retryErr;
+                  }
+                }
+                missingFiles.add(job.src);
+                return;
+              }
+              if (["EISDIR", "EEXIST"].includes(code)) {
+                // destination exists (stale from a previous
+                // failed install?) - remove it and fall back to copy
+                await fs.removeAsync(job.dst);
+                await copyAsyncWrap(job.src, job.dst);
+              } else if (code && ["EXDEV", "EPERM", "EACCES", "ENOTSUP"].includes(code)) {
+                await copyAsyncWrap(job.src, job.dst);
+              } else {
+                throw err;
+              }
             }
-            if (["EISDIR", "EEXIST"].includes(code)) {
-              // destination exists (stale from a previous
-              // failed install?) - remove it and fall back to copy
-              await fs.removeAsync(job.dst);
-              await copyAsyncWrap(job.src, job.dst);
-            } else if (code && ["EXDEV", "EPERM", "EACCES", "ENOTSUP"].includes(code)) {
-              await copyAsyncWrap(job.src, job.dst);
-            } else {
-              throw err;
-            }
+          } catch (error) {
+            transferFailure ??= { error };
           }
         },
         ioConcurrency,
       );
+
+      // Cleanup may remove both trees immediately after rejection. Retain
+      // ownership until every accepted transfer has finished its filesystem I/O.
+      if (transferFailure !== undefined) throw transferFailure.error;
 
       if (missingFiles.size > 0) {
         api.showErrorNotification(

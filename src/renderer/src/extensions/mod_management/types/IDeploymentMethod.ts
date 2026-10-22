@@ -10,6 +10,8 @@ export interface IFileChange {
    * relative path to the changed file
    */
   filePath: string;
+  /** Actual relative path within the source mod when destination casing differs. */
+  sourceRelPath?: string;
   /**
    * the source mod
    */
@@ -46,6 +48,8 @@ export interface IDeployedFile {
    * the relative path to the file
    */
   relPath: string;
+  /** Actual relative path within the source mod; older manifests use relPath for both. */
+  sourceRelPath?: string;
   /**
    * the source of the file, which should be the name of the mod
    */

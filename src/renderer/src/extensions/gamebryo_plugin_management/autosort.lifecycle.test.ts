@@ -18,7 +18,7 @@ import { test } from "../../test-utils/gamebryoTest";
 import type { IFakeLoot, ILootHarness } from "../../test-utils/harnessTypes";
 import { setPluginList } from "./actions/plugins";
 import LootInterface from "./autosort";
-import { createLootMock, downloadMasterlistMock } from "./lootMocks";
+import { createLootMock, downloadMasterlistMock, gameSupportModule } from "./lootMocks";
 import type { IPluginsLoot } from "./types/IPlugins";
 import { lootErrorReporter, LootPhase } from "./util/LootErrorReporter";
 import { SpanAttribute } from "./util/spanAttributes";
@@ -96,6 +96,27 @@ describe("LootInterface libloot lifecycle", () => {
 
     expect(createLootMock).not.toHaveBeenCalled();
     expect(harness.errorNotifications).toEqual([]);
+  });
+
+  // on Linux a Windows game's plugin folder is in its Proton prefix, which can be unavailable
+  test("reports a plugin folder it cannot resolve and leaves LOOT unstarted", async ({
+    makeLoot,
+  }) => {
+    const harness = await makeLoot(LootInterface);
+    vi.spyOn(gameSupportModule, "pluginPath").mockImplementation(() => {
+      throw new Error("The Windows game's Proton prefix is unavailable.");
+    });
+    onTestFinished(() => {
+      vi.mocked(gameSupportModule.pluginPath).mockRestore();
+    });
+
+    harness.restartHelpers();
+    await harness.lootInterface.wait();
+
+    expect(createLootMock).not.toHaveBeenCalled();
+    expect(harness.errorNotifications).toEqual([
+      expect.objectContaining({ title: "Failed to initialize LOOT", allowReport: false }),
+    ]);
   });
 
   // a details request carries the game that was active when it was made

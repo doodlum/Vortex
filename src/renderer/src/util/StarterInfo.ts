@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 
 import { getErrorCode, unknownToError } from "@vortex/shared";
+import PromiseBB from "bluebird";
 
 import { setToolRunning, setToolStopped } from "../actions";
 import { ApplicationData } from "../applicationData";
@@ -12,7 +13,7 @@ import type { IToolStored } from "../extensions/gamemode_management/types/IToolS
 import { getGame, getGameStoresSafe } from "../extensions/gamemode_management/util/getGame";
 import { log } from "../logging";
 import type { IDiscoveredTool } from "../types/IDiscoveredTool";
-import type { IExtensionApi } from "../types/IExtensionContext";
+import type { IExtensionApi, IRunOptions } from "../types/IExtensionContext";
 import type { IGame } from "../types/IGame";
 import { GameEntryNotFound, GameStoreNotFound } from "../types/IGameStore";
 import { getApplication } from "./application";
@@ -24,8 +25,6 @@ import {
 } from "./CustomErrors";
 import { emitGameLaunched, recordLaunchExit } from "./gameLaunchAnalytics";
 import getVortexPath from "./getVortexPath";
-import { isWindowsExecutable } from "./linux/proton";
-import type { Steam, ISteamEntry } from "./Steam";
 import { getSafe } from "./storeHelper";
 import * as storeLookup from "./storeLookup";
 
@@ -67,46 +66,6 @@ type OnShowErrorFunc = (
   details?: string | Error | any,
   allowReport?: boolean,
 ) => void;
-
-/**
- * Check if a game or tool should run through Proton on Linux.
- * Returns the matching Steam game entry if Proton should be used, undefined otherwise.
- *
- * This enables running Windows executables directly through Proton rather than
- * via `steam -applaunch`, allowing custom command-line arguments and running
- * different executables (like mod tools) with the game's Proton prefix.
- */
-async function shouldRunWithProton(
-  info: IStarterInfo,
-  api: IExtensionApi,
-): Promise<ISteamEntry | undefined> {
-  if (process.platform === "win32") {
-    return undefined;
-  }
-  if (!isWindowsExecutable(info.exePath)) {
-    return undefined;
-  }
-  if (info.store !== "steam") {
-    return undefined;
-  }
-
-  try {
-    const steamStore = storeLookup.getGameStore(getGameStoresSafe(), "steam") as Steam;
-    const games = await steamStore.allGames();
-
-    // Find the game entry that matches this executable's location
-    return games.find(
-      (g) =>
-        info.workingDirectory?.toLowerCase().startsWith(g.gamePath.toLowerCase()) ||
-        info.exePath.toLowerCase().startsWith(g.gamePath.toLowerCase()),
-    );
-  } catch (err: any) {
-    log("debug", "Could not check for Proton execution", {
-      error: err?.message,
-    });
-    return undefined;
-  }
-}
 
 /**
  * wrapper for information about a game or tool, combining static and runtime/discovery information
@@ -289,46 +248,18 @@ class StarterInfo implements IStarterInfo {
       }
     };
 
-    // Check if game/tool should run through Proton on Linux
-    const protonGameEntry = await shouldRunWithProton(info, api);
-    if (protonGameEntry?.usesProton) {
-      // On Linux with Proton, we can't track when the process exits (ProcessMonitor
-      // only works on Windows), so don't set tool as running to avoid stuck spinner
-      const protonSpawned = () => {
-        if (["hide", "hide_recover"].includes(info.onStart)) {
-          hideWindow();
-        } else if (info.onStart === "close") {
-          getApplication().quit();
-        }
-      };
+    const options: IRunOptions = {
+      gameId: info.gameId,
+      cwd: info.workingDirectory || path.dirname(info.exePath),
+      env: info.environment,
+      suggestDeploy: true,
+      shell: info.shell,
+      detach: info.detach || info.onStart === "close",
+      onSpawned: spawned,
+      onExit: (code) => recordLaunchExit(info.exePath, code),
+    };
 
-      const steamStore = storeLookup.getGameStore(getGameStoresSafe(), "steam") as Steam;
-      return steamStore.runToolWithProton(
-        api,
-        info.exePath,
-        info.commandLine,
-        {
-          cwd: info.workingDirectory || path.dirname(info.exePath),
-          env: info.environment,
-          suggestDeploy: true,
-          shell: info.shell,
-          detach: info.detach || info.onStart === "close",
-          onSpawned: protonSpawned,
-        },
-        protonGameEntry,
-      );
-    }
-
-    return api
-      .runExecutable(info.exePath, info.commandLine, {
-        cwd: info.workingDirectory || path.dirname(info.exePath),
-        env: info.environment,
-        suggestDeploy: true,
-        shell: info.shell,
-        detach: info.detach || info.onStart === "close",
-        onSpawned: spawned,
-        onExit: (code) => recordLaunchExit(info.exePath, code),
-      })
+    return PromiseBB.try(() => api.runExecutable(info.exePath, info.commandLine, options))
       .catch(ProcessCanceled, () => undefined)
       .catch(UserCanceled, () => undefined)
       .catch(MissingDependency, () => {

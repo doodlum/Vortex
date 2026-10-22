@@ -4,6 +4,7 @@ import * as path from "path";
 import { fs, log, util } from "@nexusmods/vortex-api";
 import Promise from "bluebird";
 
+import { commandArguments, executableName } from "./commandLine";
 import { IListEntry, IQBMSOpProps, IQBMSOptions, QuickBMSError } from "./types";
 
 const FILTER_FILE_PATH = path.join(util.getVortexPath("userData"), "temp", "qbms", "filters.txt");
@@ -29,11 +30,7 @@ const QUICK_BMS_ERRORMSG = [
   "QBMS has timed out", // 14 - this is reported by the timeout functionality.
 ];
 
-function quote(input: string): string {
-  return '"' + input + '"';
-}
-
-function parseList(input: string, wildCards: string[]): IListEntry[] {
+function parseList(input: string, wildCards: string[] = ["{}"]): IListEntry[] {
   const lines = input.split("\n");
   const wildCardRgx = /{}|\*/g;
   const regexps: RegExp[] = wildCards.reduce((accum, wildCard) => {
@@ -60,12 +57,9 @@ function parseList(input: string, wildCards: string[]): IListEntry[] {
   };
   const filtered: string[] = lines.filter((line) => !!line && !line.includes("- filter"));
   const res: IListEntry[] = filtered.reduce((accum, line) => {
-    const arr = line
-      .trim()
-      .split(" ")
-      .filter((entry) => !!entry);
-    if (arr.length === 3) {
-      const [offset, size, filePath] = arr;
+    const match = /^\s*([0-9a-f]+)\s+(\d+)\s+(.+?)\s*$/i.exec(line);
+    if (match !== null) {
+      const [, offset, size, filePath] = match;
       if (findMatch(filePath)) {
         accum.push({ offset, size, filePath });
       }
@@ -109,24 +103,15 @@ function run(command: string, parameters: string[], options: IQBMSOptions): Prom
   }
 
   return new Promise<void>((resolve, reject) => {
-    let args = [
-      !!command ? " -" + command : undefined,
-      options.allowResize !== undefined ? (!options.allowResize ? "-r" : "-r -r") : undefined,
-      !!options.quiet ? "-q" : undefined,
-      !!options.overwrite ? "-o" : undefined,
-      !!options.caseSensitive ? "-I" : undefined,
-      !!options.keepTemporaryFiles ? "-T" : undefined,
-      !!options.wildCards ? "-f " + quote(FILTER_FILE_PATH) : undefined,
-    ];
-
-    args = args.filter((arg) => arg !== undefined).concat(parameters);
+    const args = commandArguments(command, parameters, options, FILTER_FILE_PATH);
     let process;
-    // const theCommand = path.join(__dirname, 'quickbms_4gb_files.exe') + args.join(' ');
     try {
-      process = spawn(quote(path.join(__dirname, "quickbms_4gb_files.exe")), args, {
-        shell: true,
+      process = spawn(path.join(__dirname, executableName()), args, {
+        shell: false,
+        windowsHide: true,
       });
     } catch (err) {
+      if (wstream) wstream.close();
       return reject(err);
     }
 
@@ -175,8 +160,12 @@ function run(command: string, parameters: string[], options: IQBMSOptions): Prom
     const stdErrLines: string[] = [];
 
     process.on("error", (err) => {
-      if (createLog) {
+      isClosed = true;
+      clearTimeout(timer);
+      timer = undefined;
+      if (wstream) {
         wstream.close();
+        wstream = undefined;
       }
       return reject(err);
     });
@@ -184,6 +173,8 @@ function run(command: string, parameters: string[], options: IQBMSOptions): Prom
     process.on("close", (code, signal) => {
       // stdio streams are now closed.
       isClosed = true;
+      clearTimeout(timer);
+      timer = undefined;
       if (signal === "SIGTERM") {
         if (!createLog) {
           // We timed out - We want this logged regardless of whether
@@ -225,7 +216,7 @@ function run(command: string, parameters: string[], options: IQBMSOptions): Prom
       formatted.forEach((line) => {
         const formattedLine = line.replace(/\\/g, "/");
         stdOutLines.push(formattedLine);
-        if (createLog) {
+        if (wstream) {
           wstream.write(formattedLine + "\n");
         }
       });
@@ -268,9 +259,7 @@ function reImport(props: IQBMSOpProps): Promise<void> {
         ? Promise.resolve()
         : Promise.reject(new util.ArgumentInvalid("Re-import version was not specified")),
     )
-    .then(() =>
-      run("w", [quote(bmsScriptPath), quote(archivePath), quote(operationPath)], qbmsOptions),
-    )
+    .then(() => run("w", [bmsScriptPath, archivePath, operationPath], qbmsOptions))
     .then(() => removeFiltersFile());
 }
 
@@ -278,9 +267,7 @@ function extract(props: IQBMSOpProps): Promise<void> {
   const { archivePath, bmsScriptPath, qbmsOptions, operationPath } = props;
   return validateArguments(archivePath, bmsScriptPath, operationPath, qbmsOptions)
     .then(() => (!!qbmsOptions.wildCards ? createFiltersFile(qbmsOptions.wildCards) : undefined))
-    .then(() =>
-      run(undefined, [quote(bmsScriptPath), quote(archivePath), quote(operationPath)], qbmsOptions),
-    )
+    .then(() => run(undefined, [bmsScriptPath, archivePath, operationPath], qbmsOptions))
     .then(() => removeFiltersFile());
 }
 
@@ -290,9 +277,7 @@ function list(props: IQBMSOpProps): Promise<IListEntry[]> {
     .then(() =>
       !!qbmsOptions.wildCards ? createFiltersFile(qbmsOptions.wildCards) : Promise.resolve(),
     )
-    .then(() =>
-      run("l", [quote(bmsScriptPath), quote(archivePath), quote(operationPath)], qbmsOptions),
-    )
+    .then(() => run("l", [bmsScriptPath, archivePath, operationPath], qbmsOptions))
     .then(() => removeFiltersFile())
     .then(() => fs.readFileAsync(LOG_FILE_PATH, { encoding: "utf-8" }))
     .then((data) => {
@@ -304,13 +289,8 @@ function list(props: IQBMSOpProps): Promise<IListEntry[]> {
 function write(props: IQBMSOpProps): Promise<void> {
   const { archivePath, bmsScriptPath, qbmsOptions, operationPath } = props;
   return validateArguments(archivePath, bmsScriptPath, operationPath, qbmsOptions).then(() =>
-    run("w", [quote(bmsScriptPath), quote(archivePath), quote(operationPath)], qbmsOptions),
+    run("w", [bmsScriptPath, archivePath, operationPath], qbmsOptions),
   );
 }
 
-module.exports = {
-  reImport,
-  list,
-  write,
-  extract,
-};
+export { reImport, list, write, extract };

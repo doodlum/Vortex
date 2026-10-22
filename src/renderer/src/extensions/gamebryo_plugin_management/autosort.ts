@@ -681,7 +681,14 @@ class LootInterface {
     }
     try {
       await loot.loadPlugins(
-        deployed.filter((id) => !invalid.has(id)).map((name) => toPluginId(name)),
+        deployed
+          .filter((id) => !invalid.has(id))
+          // a case-sensitive filesystem finds a plugin only by its on-disk name, as sorting loads it
+          .map((name) =>
+            process.platform === "win32"
+              ? toPluginId(name)
+              : (pluginList[name].filePath ?? toPluginId(name)),
+          ),
         false,
       );
       pluginsLoaded = true;
@@ -838,7 +845,15 @@ class LootInterface {
       log("info", "not starting LOOT for a game that is not discovered", { gameMode });
       return { game: gameMode, loot: undefined };
     }
-    const localPath = pluginPath(gameMode);
+    let localPath: string;
+    try {
+      localPath = pluginPath(gameMode);
+    } catch (err) {
+      this.mExtensionApi.showErrorNotification("Failed to initialize LOOT", err, {
+        allowReport: false,
+      });
+      return { game: gameMode, loot: undefined };
+    }
     try {
       await fs.ensureDirAsync(localPath);
     } catch (err) {

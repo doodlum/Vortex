@@ -1,4 +1,5 @@
 import * as nodeFs from "node:fs";
+import * as path from "node:path";
 
 import { VortexModStagingFolder } from "@vortex/shared";
 import { expect } from "vitest";
@@ -6,6 +7,7 @@ import { expect } from "vitest";
 import { makeMod } from "../../../test-utils/builders";
 import { test, type IDeploymentHarness } from "../../../test-utils/deploymentTest";
 import type { IDeployedFile } from "../types/IDeploymentMethod";
+import BlacklistSet from "./BlacklistSet";
 import { activateSingleMod, laterStagingFolders } from "./deploy";
 
 const PLUGIN = "NVSE/Plugins/VATSLagFix.dll";
@@ -87,4 +89,37 @@ test("a mod sorted before the redeployed mod loses the file to it", async ({ mak
   await redeploy(h, lastActivation);
 
   expect(deployedContent(h)).toBe("redeployed");
+});
+
+test("a later-source winner is protected when its canonical target case differs from the configured subfolder", async ({
+  makeDeployment,
+}) => {
+  const h = makeDeployment({
+    modName: REDEPLOYED,
+    files: { "plugin.dll": "earlier" },
+    otherMods: { Later: { "plugin.dll": "later" } },
+  });
+  nodeFs.mkdirSync(path.join(h.gameDir, "shared"));
+  await h.method.prepare(h.gameDir, true, [], h.normalize);
+  await h.method.activate(
+    h.modDir("Later"),
+    "Later",
+    "Shared",
+    new BlacklistSet([], h.game, h.normalize),
+  );
+  const lastActivation = await h.method.finalize("skyrimse", h.gameDir, h.stagingDir);
+  expect(lastActivation[0].target).toBe("shared");
+  await activateSingleMod({
+    method: h.method,
+    game: h.game,
+    dataPath: h.gameDir,
+    normalize: h.normalize,
+    lastActivation,
+    mod: makeMod({ id: REDEPLOYED, installationPath: REDEPLOYED }),
+    modPath: h.modDir(REDEPLOYED),
+    subDir: "Shared",
+    laterSources: new Set([VortexModStagingFolder("Later")]),
+  });
+  await h.method.finalize("skyrimse", h.gameDir, h.stagingDir);
+  expect(nodeFs.readFileSync(path.join(h.gameDir, "shared", "plugin.dll"), "utf8")).toBe("later");
 });

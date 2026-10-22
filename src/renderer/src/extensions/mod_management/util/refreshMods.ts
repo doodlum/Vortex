@@ -11,6 +11,7 @@ import * as fs from "../../../util/fs";
 import { IGNORABLE_PREFIXES } from "../../../util/getFileList";
 import { setModArchiveId } from "../actions/mods";
 import type { IMod } from "../types/IMod";
+import { canDropMissingMod } from "./dropMissingMods";
 
 /**
  * reads the installation dir and adds mods missing in our database
@@ -59,8 +60,22 @@ function refreshMods(
           (name) => !IGNORABLE_PREFIXES.some((prefix) => name.toLowerCase().startsWith(prefix)),
         )
         .map((name) => name.replace(/.installing$/, ""));
-      const addedMods = filtered.filter((name: string) => knownModNames.indexOf(name) === -1);
-      const removedMods = knownModNames.filter((name: string) => filtered.indexOf(name) === -1);
+      // Redux and the directory listing can both change while filesystem I/O is pending.
+      // Only reconcile differences that are external to either installation snapshot.
+      const currentMods = api.store.getState().persistent.mods[gameId] ?? {};
+      const capturedNames = new Set(knownModNames);
+      const currentNames = new Set(Object.keys(currentMods));
+      const observedNames = new Set(filtered);
+      const addedMods = filtered.filter(
+        (name) => !capturedNames.has(name) && !currentNames.has(name),
+      );
+      const removedMods = knownModNames.filter(
+        (name) =>
+          !observedNames.has(name) &&
+          knownMods[name] === currentMods[name] &&
+          canDropMissingMod(knownMods[name]) &&
+          canDropMissingMod(currentMods[name]),
+      );
 
       if (addedMods.length === 0 && removedMods.length === 0) {
         return Promise.resolve();
@@ -124,11 +139,17 @@ function refreshMods(
           if (res.action === "Apply Changes") {
             return Promise.all(
               addedMods.map((modName: string) => {
+                if (api.store.getState().persistent.mods[gameId]?.[modName] !== undefined) {
+                  return Promise.resolve();
+                }
                 const fullPath: string = path.join(installPath, modName);
                 return fs
                   .statAsync(fullPath)
                   .then((stat: fs.Stats) => {
-                    if (stat.isDirectory()) {
+                    if (
+                      stat.isDirectory() &&
+                      api.store.getState().persistent.mods[gameId]?.[modName] === undefined
+                    ) {
                       onAddMod({
                         id: modName,
                         type: "",
@@ -145,11 +166,12 @@ function refreshMods(
                     if (getErrorCode(err) !== "ENOENT") {
                       throw err;
                     }
-                    return fs.statAsync(fullPath + ".installing").then(() =>
-                      // since we're removing the '.installing' extension above we might be discovering
-                      // a mod here that was not installed successfully but doesn't have an entry in the
-                      // mods database so it wouldn't get cleaned up eiather
-                      api
+                    return fs.statAsync(fullPath + ".installing").then(() => {
+                      // A new installation can claim this directory while either await is pending.
+                      if (api.store.getState().persistent.mods[gameId]?.[modName] !== undefined) {
+                        return;
+                      }
+                      return api
                         .showDialog(
                           "error",
                           modName,
@@ -162,14 +184,26 @@ function refreshMods(
                           [{ label: "Ignore" }, { label: "Delete" }],
                         )
                         .then((deleteRes) => {
-                          if (deleteRes.action === "Delete") {
+                          if (
+                            deleteRes.action === "Delete" &&
+                            api.store.getState().persistent.mods[gameId]?.[modName] === undefined
+                          ) {
                             return fs.removeAsync(fullPath + ".installing");
                           }
-                        }),
-                    );
+                        });
+                    });
                   });
               }),
-            ).then(() => onRemoveMods(removedMods));
+            ).then(() => {
+              const latestMods = api.store.getState().persistent.mods[gameId] ?? {};
+              onRemoveMods(
+                removedMods.filter(
+                  (modId) =>
+                    latestMods[modId] === currentMods[modId] &&
+                    canDropMissingMod(latestMods[modId]),
+                ),
+              );
+            });
           } else {
             getApplication().quit();
           }

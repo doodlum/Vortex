@@ -258,9 +258,11 @@ const gameSupport = util.makeOverlayableDictionary<string, IGameSupport>(
   (gameId: string) => gameStoreForGame(gameId),
 );
 
+let discoveryForGame: (gameId: string) => types.IDiscoveryResult = () => undefined;
 let gameStoreForGame: (gameId: string) => string = () => undefined;
 
 export function initGameSupport(api: types.IExtensionApi) {
+  discoveryForGame = (gameId: string) => selectors.discoveryByGame(api.store.getState(), gameId);
   gameStoreForGame = (gameId: string) =>
     selectors.discoveryByGame(api.store.getState(), gameId)?.store;
 }
@@ -286,8 +288,10 @@ export function bsaVersion(gameId: string): number {
 }
 
 export function mygamesPath(gameMode: string): string {
-  return path.join(
-    util.getVortexPath("documents"),
+  return util.getGameUserPath(
+    gameMode,
+    discoveryForGame(gameMode),
+    "documents",
     "My Games",
     gameSupport.get(gameMode, "mygamesPath"),
   );
@@ -298,7 +302,14 @@ export function iniName(gameMode: string): string {
 }
 
 export function iniPath(gameMode: string): string {
-  return path.join(mygamesPath(gameMode), gameSupport.get(gameMode, "iniName"));
+  return util.getGameUserPath(
+    gameMode,
+    discoveryForGame(gameMode),
+    "documents",
+    "My Games",
+    gameSupport.get(gameMode, "mygamesPath"),
+    gameSupport.get(gameMode, "iniName"),
+  );
 }
 
 export function archiveListKey(gameMode: string): string {

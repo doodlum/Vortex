@@ -444,6 +444,8 @@ export type MergeFunc = (filePath: string, mergePath: string) => PromiseLike<voi
  * options used when starting an external application through runExecutable
  */
 export interface IRunOptions {
+  /** Associated Vortex game id for Linux Windows-tool launches; does not change the active profile. */
+  gameId?: string;
   cwd?: string;
   env?: { [key: string]: string };
   suggestDeploy?: boolean;

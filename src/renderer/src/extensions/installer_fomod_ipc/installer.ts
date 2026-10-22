@@ -4,6 +4,7 @@ import { SecurityLevel } from "@nexusmods/fomod-installer-ipc";
 
 import type { IExtensionApi, IInstallResult } from "../../types/api";
 import { UserCanceled } from "../../util/CustomErrors";
+import getVortexPath from "../../util/getVortexPath";
 import { log } from "../../util/log";
 import { getGame } from "../gamemode_management/util/getGame";
 import { SharedDelegates } from "../installer_fomod_shared/delegates/SharedDelegates";
@@ -15,7 +16,10 @@ import {
 } from "../installer_fomod_shared/utils/gameSupport";
 import type { IInstallationDetails } from "../mod_management/types/InstallFunc";
 import { CSharpDelegates } from "./delegates/CSharpDelegates";
+import { prepareNativeRuntime } from "./utils/BundledRuntime";
+import { confirmScriptTrust } from "./utils/confirmScriptTrust";
 import { createConnectionStrategies } from "./utils/connectionStrategy";
+import { nativeRuntimeBundle } from "./utils/nativeRuntimeBundle";
 import { VortexIPCConnection } from "./utils/VortexIPCConnection";
 
 /**
@@ -34,18 +38,32 @@ export const install = async (
   let connection: VortexIPCConnection | null = null;
 
   try {
+    await confirmScriptTrust(api, gameId, archivePath, details);
     const canBeUnattended = choices !== undefined && choices.type === "fomod";
     // If we have fomod choices, automatically bypass the dialog regardless of unattended flag
     const shouldBypassDialog = canBeUnattended && unattended === true;
 
-    const hasScript = files.some((file) => path.basename(file).toLowerCase() === "script.cs");
+    const hasScript = files.some(
+      (file) => path.posix.basename(file.replace(/\\/g, "/")).toLowerCase() === "script.cs",
+    );
     if (hasScript && !shouldBypassDialog) {
       // This mod will require user interaction, we need to make sure
       // the the previous phase is deployed.
       await api.ext.awaitNextPhaseDeployment?.();
     }
 
-    await api.ext?.awaitDotnetAssert?.();
+    if (process.platform === "linux" && process.arch !== "x64") {
+      throw new Error("Legacy C# installers currently require the bundled Linux x64 runtime");
+    }
+    const nativeRuntime =
+      process.platform === "linux"
+        ? await prepareNativeRuntime(
+            path.join(getVortexPath("assets_unpacked"), "fomod-csharp"),
+            path.join(getVortexPath("userData"), "fomod-csharp"),
+            nativeRuntimeBundle,
+          )
+        : undefined;
+    if (nativeRuntime === undefined) await api.ext?.awaitDotnetAssert?.();
 
     const state = api.getState();
     const isSandboxDisabled = !state.settings.mods.installerSandbox;
@@ -56,10 +74,11 @@ export const install = async (
     const strategies = createConnectionStrategies({
       securityLevel: securityLevel,
       allowFallback: true,
+      nativeRuntime,
     });
     const modName =
       details?.modReference?.id || path.basename(archivePath, path.extname(archivePath));
-    connection = new VortexIPCConnection(api, strategies, 30000, modName);
+    connection = new VortexIPCConnection(api, strategies, 30000, modName, nativeRuntime?.helper);
     await connection.initialize();
 
     // Register core delegates

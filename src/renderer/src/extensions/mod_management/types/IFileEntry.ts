@@ -7,6 +7,7 @@ export type FileAction = FileActionRef | FileActionVal | FileActionDel | FileAct
 
 export interface IFileEntry {
   filePath: string;
+  sourceRelPath?: string;
   source: string;
   // the mod's subfolder, for games that don't merge mods (mergeMods off)
   target?: string;

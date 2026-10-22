@@ -3,7 +3,7 @@ const path = require("path");
 const winapi = require("winapi-bindings");
 const { fs, util } = require("@nexusmods/vortex-api");
 
-const { default: IniParser, WinapiFormat } = require("vortex-parse-ini");
+const { default: IniParser, WinapiFormat } = require("@nexusmods/ini-parser");
 
 const GAME_ID = "vampirebloodlines";
 const STEAM_ID = "2600";

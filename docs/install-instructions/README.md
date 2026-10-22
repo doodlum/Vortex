@@ -21,8 +21,9 @@ have a working toolchain.
 
 - [shared.md](shared.md) - Cloning, `pnpm install`, building and running
 
-NixOS is the exception to the two-step flow: the flake supplies `pnpm` and node
-directly, so [nixos.md](nixos.md) says which shared steps to skip.
+NixOS uses the [FHS launcher procedure](nixos.md) for install, build, tests and
+startup. Its Nix tools bootstrap the repository-pinned pnpm and Node inside
+that environment; optional direnv exposes the launcher.
 
 Each platform page records the date and version it was last validated against.
 If a step has gone stale, updating that line is part of fixing it.

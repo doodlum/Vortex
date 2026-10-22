@@ -1,12 +1,16 @@
 import * as nodeFs from "node:fs";
+import * as path from "node:path";
 
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 
 import { makeDeployedFile } from "../../test-utils/builders";
 import { test } from "../../test-utils/deploymentTest";
 import { writeInto } from "../../test-utils/tempDir";
+import type { IGame } from "../../types/IGame";
+import * as fs from "../../util/fs";
 import { BACKUP_TAG, type IDeployment } from "./LinkingDeployment";
 import type { IDeployedFile, IDeploymentMethod } from "./types/IDeploymentMethod";
+import BlacklistSet from "./util/BlacklistSet";
 import { deployedFilePath } from "./util/deployedFilePath";
 
 /** The private members of LinkingActivator this exercises directly. */
@@ -30,6 +34,27 @@ const FILES = {
   "ActorLimitFix.log": "log line",
   "SkyUI_SE.esp": "esp data",
 };
+
+test("links to a normalized staged path when the staging directory ends in a separator", async ({
+  makeDeployment,
+}) => {
+  const h = makeDeployment({ files: { "mod.ini": "[General]" }, method: "symlink" });
+  const symlink = vi.spyOn(fs, "symlinkAsync").mockResolvedValue(undefined);
+  try {
+    await h.method.prepare(h.gameDir, false, [], h.normalize);
+    await h.method.activate(
+      h.modDir("SomeMod"),
+      "SomeMod",
+      "",
+      new BlacklistSet([], { details: {} } as IGame, h.normalize),
+    );
+    await h.method.finalize("skyrimse", h.gameDir, h.stagingDir + path.sep);
+    expect(symlink).toHaveBeenCalledTimes(1);
+    expect(symlink.mock.calls[0][0]).toBe(path.join(h.stagingDir, "SomeMod", "mod.ini"));
+  } finally {
+    symlink.mockRestore();
+  }
+});
 
 test("reports a file deleted from staging for each mod that deploys it into its subfolder", async ({
   makeDeployment,

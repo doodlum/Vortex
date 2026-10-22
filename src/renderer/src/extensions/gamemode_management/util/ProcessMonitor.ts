@@ -14,6 +14,8 @@ import { setdefault } from "../../../util/util";
 import type { IProcessInfo, IProcessProvider } from "./processProvider";
 import { defaultProcessProvider } from "./processProvider";
 
+const STARTUP_GRACE_MS = 30000;
+
 /**
  * Monitors running processes to track game and tool execution state.
  *
@@ -191,6 +193,22 @@ class ProcessMonitor {
       return;
     }
 
+    // Wine/Proton processes have a name truncated to 15 characters and a Windows
+    // command line where Z: is the filesystem root, and they aren't children of
+    // the process that started them
+    const winePids = new Set<number>();
+    if (process.platform !== "win32") {
+      processes = processes.map((proc) => {
+        const match = proc.cmd?.match(/^"?[zZ]:(\\[^"]*?\.exe)/i);
+        if (!match) {
+          return proc;
+        }
+        winePids.add(proc.pid);
+        const exePath = match[1].replace(/\\/g, "/");
+        return { ...proc, name: path.basename(exePath), path: exePath };
+      });
+    }
+
     // ─── Step 2: Define path-extraction helpers ───────────────────────────────
     const hasPathSeparator = (value: string): boolean =>
       value.includes("/") || value.includes("\\");
@@ -299,6 +317,7 @@ class ProcessMonitor {
     // Recursively walks the parent chain to determine if a process descends from Vortex.
     // Used to distinguish tools we launched vs. unrelated processes with the same name.
     const isChildProcessOfVortex = (proc: IProcessInfo, visited: Set<number>): boolean => {
+      if (this.mProcessProvider.foreignNamespace) return false;
       // Base case: no process or reached init (PID 0)
       if (proc === undefined || proc.ppid === 0) {
         return false;
@@ -328,23 +347,32 @@ class ProcessMonitor {
       const exeId = makeExeId(exePath);
       const knownRunning = state.session.base.toolsRunning[exeId];
       const exeRunning = byName[exeId];
+      // Proton takes a few seconds before the exe shows up
+      const stillStarting =
+        process.platform !== "win32" &&
+        knownRunning?.pid === undefined &&
+        Date.now() - (knownRunning?.started ?? 0) < STARTUP_GRACE_MS;
 
       // Step 6b: Early exit - no process with this name is running
       if (exeRunning === undefined) {
-        if (knownRunning !== undefined) {
+        if (knownRunning !== undefined && !stillStarting) {
           this.mStore.dispatch(setToolStopped(exePath));
         }
         return;
       }
 
       // Step 6c: Validate cached PID - if we already track this tool, verify it's still valid
-      if (knownRunning !== undefined) {
+      if (knownRunning !== undefined && !this.mProcessProvider.foreignNamespace) {
         const knownProc = byPid[knownRunning.pid];
         if (knownProc !== undefined) {
           // Step 6c-i: Process with cached PID still exists - but is it still "ours"?
           // For games (considerDetached=true): any process is valid, we're done
           // For tools (considerDetached=false): must still be a Vortex child process
-          if (considerDetached || isChildProcessOfVortex(knownProc, new Set())) {
+          if (
+            considerDetached ||
+            winePids.has(knownProc.pid) ||
+            isChildProcessOfVortex(knownProc, new Set())
+          ) {
             return; // Still valid, no state change needed
           }
           // Step 6c-ii: Process exists but is no longer a child - fall through to re-match
@@ -354,9 +382,15 @@ class ProcessMonitor {
       }
 
       // Step 6d: Build candidate list - filter by child status if required
-      const candidates = considerDetached
-        ? exeRunning
-        : exeRunning.filter((proc) => isChildProcessOfVortex(proc, new Set()));
+      // Host PIDs cannot be compared to the Flatpak PID. For a tool Vortex has
+      // recorded as launched, require an exact executable path in the host list.
+      const foreignTool = this.mProcessProvider.foreignNamespace && knownRunning !== undefined;
+      const candidates =
+        considerDetached || foreignTool
+          ? exeRunning
+          : exeRunning.filter(
+              (proc) => winePids.has(proc.pid) || isChildProcessOfVortex(proc, new Set()),
+            );
 
       // Step 6e: Enrich candidates with resolved paths (from proc.path or parsed from proc.cmd)
       const exePathLower = exePath.toLowerCase();
@@ -380,6 +414,7 @@ class ProcessMonitor {
       // Warning: basename collisions (e.g., multiple "launcher.exe") cause false positives.
       if (
         candidatesWithPath.length > 0 &&
+        !this.mProcessProvider.foreignNamespace &&
         candidatesWithPath.every((entry) => entry.path === undefined)
       ) {
         this.mStore.dispatch(setToolPid(exePath, candidatesWithPath[0].proc.pid, exclusive));
@@ -390,7 +425,7 @@ class ProcessMonitor {
       // This happens when:
       // - All candidates had paths, but none matched our target path (different exe with same name)
       // - Candidates existed but weren't child processes (and considerDetached=false)
-      if (knownRunning !== undefined) {
+      if (knownRunning !== undefined && !stillStarting) {
         this.mStore.dispatch(setToolStopped(exePath));
       }
     };

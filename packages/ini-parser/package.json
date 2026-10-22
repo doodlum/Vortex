@@ -1,0 +1,42 @@
+{
+  "$schema": "https://www.schemastore.org/package.json",
+  "name": "@nexusmods/ini-parser",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "pnpm tsdown",
+    "typecheck": "pnpm tsc",
+    "lint": "pnpm exec oxlint --quiet",
+    "lint:verbose": "pnpm exec oxlint",
+    "test": "pnpm exec vitest run",
+    "test:integration": "pnpm run build && node ./test-built.mjs"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.cts",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "import": "./dist/index.mjs",
+        "require": "./dist/index.cjs"
+      },
+      "./package.json": "./package.json"
+    }
+  },
+  "devDependencies": {
+    "@types/node": "catalog:"
+  },
+  "dependencies": {
+    "iconv-lite": "catalog:",
+    "winapi-bindings": "catalog:"
+  }
+}

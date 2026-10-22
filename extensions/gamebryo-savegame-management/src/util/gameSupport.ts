@@ -163,15 +163,24 @@ export function gameSupported(gameMode: string): boolean {
 }
 
 export function mygamesPath(gameMode: string): string {
-  return path.join(
-    util.getVortexPath("documents"),
+  return util.getGameUserPath(
+    gameMode,
+    discoveryForGame(gameMode),
+    "documents",
     "My Games",
     gameSupport.get(gameMode, "mygamesPath"),
   );
 }
 
 export function iniPath(gameMode: string): string {
-  return path.join(mygamesPath(gameMode), gameSupport.get(gameMode, "iniName"));
+  return util.getGameUserPath(
+    gameMode,
+    discoveryForGame(gameMode),
+    "documents",
+    "My Games",
+    gameSupport.get(gameMode, "mygamesPath"),
+    gameSupport.get(gameMode, "iniName"),
+  );
 }
 
 export function prefIniPath(gameMode: string): string {
@@ -179,7 +188,14 @@ export function prefIniPath(gameMode: string): string {
   if (prefIniName === undefined) {
     return undefined;
   }
-  return path.join(mygamesPath(gameMode), prefIniName);
+  return util.getGameUserPath(
+    gameMode,
+    discoveryForGame(gameMode),
+    "documents",
+    "My Games",
+    gameSupport.get(gameMode, "mygamesPath"),
+    prefIniName,
+  );
 }
 
 export function saveFiles(gameMode: string, savePath: string): string[] {

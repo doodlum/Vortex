@@ -19,24 +19,28 @@ const RT_ICON = 3;
 const RT_GROUP_ICON = 14;
 const RT_VERSION = 16;
 
-const DOTNET_PROBE = path.resolve(
+const PE_FIXTURE = path.resolve(
   import.meta.dirname,
-  "../../../tools/dotnetprobe/temp/dotnetprobe.exe",
+  "../../../extensions/games/game-baldursgate3/tools/divine.exe",
 );
 
 // --- Cross-platform tests (use committed PE fixture) ---
 
 describe("findResourceSection (cross-platform)", () => {
-  it("parses PE headers from dotnetprobe.exe", async () => {
-    const fh = await fsp.open(DOTNET_PROBE, "r");
+  it("parses PE headers from the committed divine.exe fixture", async () => {
+    const fh = await fsp.open(PE_FIXTURE, "r");
     try {
       const section = await findResourceSection(fh);
-      // dotnetprobe.exe is a real PE — it may or may not have resources,
-      // but the parser must not crash
-      if (section !== undefined) {
-        expect(section.buf.length).toBeGreaterThan(0);
-        expect(section.sectionVA).toBeGreaterThan(0);
-      }
+      expect(section).toBeDefined();
+      expect(section!.buf.length).toBeGreaterThan(0);
+      expect(section!.sectionVA).toBeGreaterThan(0);
+      const offset = section!.resourceRVA - section!.sectionVA;
+      const version = findResourceType(section!.buf, offset, RT_VERSION);
+      expect(version).toBeDefined();
+      const entry = findFirstDataEntry(section!.buf, version!);
+      expect(entry).toBeDefined();
+      expect(entry!.dataRVA).toBeGreaterThan(0);
+      expect(entry!.dataSize).toBeGreaterThan(0);
     } finally {
       await fh.close();
     }
@@ -81,14 +85,13 @@ describe("findResourceSection (cross-platform)", () => {
 });
 
 describe("findResourceSectionSync (cross-platform)", () => {
-  it("parses PE headers from dotnetprobe.exe", () => {
-    const fd = fs.openSync(DOTNET_PROBE, "r");
+  it("parses PE headers from the committed divine.exe fixture", () => {
+    const fd = fs.openSync(PE_FIXTURE, "r");
     try {
       const section = findResourceSectionSync(fd);
-      if (section !== undefined) {
-        expect(section.buf.length).toBeGreaterThan(0);
-        expect(section.sectionVA).toBeGreaterThan(0);
-      }
+      expect(section).toBeDefined();
+      expect(section!.buf.length).toBeGreaterThan(0);
+      expect(section!.sectionVA).toBeGreaterThan(0);
     } finally {
       fs.closeSync(fd);
     }
@@ -97,15 +100,13 @@ describe("findResourceSectionSync (cross-platform)", () => {
 
 describe("findResourceType (cross-platform)", () => {
   it("returns undefined when resource type is not present", async () => {
-    const fh = await fsp.open(DOTNET_PROBE, "r");
+    const fh = await fsp.open(PE_FIXTURE, "r");
     try {
       const section = await findResourceSection(fh);
-      if (section !== undefined) {
-        const resourceOffset = section.resourceRVA - section.sectionVA;
-        // RT_CURSOR = 1 — extremely unlikely in a .NET probe tool
-        const result = findResourceType(section.buf, resourceOffset, 1);
-        expect(result === undefined || typeof result === "number").toBe(true);
-      }
+      expect(section).toBeDefined();
+      const resourceOffset = section!.resourceRVA - section!.sectionVA;
+      // This committed console fixture has a version resource and no cursor resource.
+      expect(findResourceType(section!.buf, resourceOffset, 1)).toBeUndefined();
     } finally {
       await fh.close();
     }

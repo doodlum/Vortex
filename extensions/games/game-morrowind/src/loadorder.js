@@ -1,6 +1,6 @@
 const path = require("path");
 const { fs, selectors, util } = require("@nexusmods/vortex-api");
-const { default: IniParser, WinapiFormat } = require("vortex-parse-ini");
+const { default: IniParser, WinapiFormat } = require("@nexusmods/ini-parser");
 
 const { MORROWIND_ID } = require("./constants");
 

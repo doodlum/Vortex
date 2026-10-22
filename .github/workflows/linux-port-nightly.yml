@@ -1,0 +1,170 @@
+name: Linux Port Nightly
+
+# Fork-only: keeps the `linux` branch merged with upstream master and publishes unsigned
+# Windows and Linux builds as a GitHub pre-release.
+
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: linux-port-nightly
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository != 'Nexus-Mods/Vortex'
+    runs-on: ubuntu-22.04
+    outputs:
+      sha: ${{ steps.merge.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: linux
+          fetch-depth: 0
+
+      - name: Merge upstream master
+        id: merge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/Nexus-Mods/Vortex.git
+          git fetch upstream master
+          git merge --no-edit upstream/master
+          git push origin HEAD:linux
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  windows:
+    needs: sync
+    runs-on: windows-latest
+    env:
+      NO_PARALLEL: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.sync.outputs.sha }}
+          submodules: "recursive"
+
+      - name: Package Vortex (unsigned)
+        id: package
+        uses: ./.github/actions/package
+        with:
+          use-codesigning: "false"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: ./dist/vortex-setup-*.*.*.exe
+          if-no-files-found: error
+          retention-days: 2
+
+  linux:
+    needs: sync
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.sync.outputs.sha }}
+          submodules: "recursive"
+
+      - name: Install packaging prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev ruby rpm libarchive-tools xz-utils fakeroot
+
+      - uses: ./.github/actions/setup-pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Package Vortex (unsigned)
+        run: |
+          pnpm package:nosign
+          node scripts/verify-packaged-asar.mjs --asar dist/linux-unpacked/resources/app.asar
+          pnpm package:linux --formats deb,rpm,pacman,AppImage,tar.gz
+
+      - name: Collect packages
+        run: |
+          mkdir -p out
+          find dist/linux-packages -mindepth 3 -maxdepth 3 -type f \
+            \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.xz' -o -name '*.AppImage' -o -name '*.tar.gz' \) \
+            -exec cp {} out/ \;
+          ls -la out
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux
+          path: out/*
+          if-no-files-found: error
+          retention-days: 2
+
+  linux-sandboxed:
+    needs: sync
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.sync.outputs.sha }}
+          submodules: "recursive"
+
+      - name: Install packaging prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev flatpak flatpak-builder appstream
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y --noninteractive flathub org.freedesktop.Sdk//25.08 org.electronjs.Electron2.BaseApp//25.08
+
+      - uses: ./.github/actions/setup-pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Package Snap and Flatpak (unsigned)
+        run: |
+          pnpm package:nosign
+          pnpm package:linux --formats snap,flatpak
+
+      - name: Collect packages
+        run: |
+          mkdir -p out
+          find dist/linux-packages -mindepth 3 -maxdepth 3 -type f \( -name '*.snap' -o -name '*.flatpak' \) -exec cp {} out/ \;
+          ls -la out
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-sandboxed
+          path: out/*
+          if-no-files-found: error
+          retention-days: 2
+
+  release:
+    needs: [sync, windows, linux, linux-sandboxed]
+    if: ${{ !cancelled() && needs.windows.result == 'success' && needs.linux.result == 'success' }}
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Publish nightly pre-release
+        run: |
+          sha=${{ needs.sync.outputs.sha }}
+          tag="nightly-$(date -u +%Y%m%d)-${sha::8}"
+          cd assets && sha256sum * | tee SHA256SUMS && cd ..
+          gh release create "$tag" assets/* --repo "$GITHUB_REPOSITORY" --target "$sha" \
+            --prerelease --title "Linux port nightly $(date -u +%Y-%m-%d)" \
+            --notes "Unsigned development build of the linux branch at $sha, merged with upstream master. Not an official Nexus Mods release."
+
+      - name: Keep the newest seven nightlies
+        run: |
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | startswith("nightly-"))] | sort_by(.createdAt) | reverse | .[7:] | .[].tagName' |
+          while read -r tag; do gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag; done

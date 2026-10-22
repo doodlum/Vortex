@@ -1,0 +1,18 @@
+{
+  "version": "0.12.0",
+  "license": "GPL-2.0-or-later",
+  "homepage": "https://aluigi.altervista.org/quickbms.htm",
+  "source": "https://mirror.aluigi.org/papers/quickbms-src-0.12.0.zip",
+  "win32": {
+    "url": "https://mirror.aluigi.org/papers/quickbms.zip",
+    "archiveSha256": "b9d4f9efb55692994cd42a491cfea11f86e3375a618b9bd771583ce40ddb3828",
+    "executable": "quickbms_4gb_files.exe",
+    "executableSha256": "3a248ab5f9f1dae7b999b4098cb623372ae29ebaefbb72f8c359cf3b72d2b5a7"
+  },
+  "linux": {
+    "url": "https://mirror.aluigi.org/papers/quickbms_linux.zip",
+    "archiveSha256": "b702019930ba44e2a0e124338ec737ceaf9b83a1ab747affd3fb19ef3b6aea88",
+    "executable": "quickbms_4gb_files",
+    "executableSha256": "daad81a969fe28d072fa0aa8130ff5b0b1f307780bcc5ad555baadc4859bf651"
+  }
+}

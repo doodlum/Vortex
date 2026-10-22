@@ -7,7 +7,7 @@ import { log } from "../../../logging";
 import type { IExtensionApi } from "../../../types/IExtensionContext";
 import type { IState } from "../../../types/IState";
 import * as fs from "../../../util/fs";
-import getVortexPath from "../../../util/getVortexPath";
+import { getGameUserPath } from "../../../util/getGameUserPath";
 import { makeOverlayableDictionary } from "../../../util/util";
 import { discoveryByGame, gameById } from "../../gamemode_management/selectors";
 import type { IDiscoveryResult } from "../../gamemode_management/types/IDiscoveryResult";
@@ -374,11 +374,13 @@ export function initGameSupport(api: IExtensionApi): Bluebird<void> {
 }
 
 export function appDataPath(gameMode: string): string {
-  const dataPath = gameSupport.get(gameMode, "appDataPath");
-
-  return process.env.LOCALAPPDATA !== undefined
-    ? path.join(process.env.LOCALAPPDATA, dataPath)
-    : path.resolve(getVortexPath("appData"), "..", "Local", dataPath);
+  // plugins.txt/loadorder.txt and LOOT's local data live in the game's own Proton prefix on Linux
+  return getGameUserPath(
+    gameMode,
+    discoveryForGame(gameMode),
+    "localAppData",
+    gameSupport.get(gameMode, "appDataPath"),
+  );
 }
 
 export function gameDataPath(gameMode: string): string {

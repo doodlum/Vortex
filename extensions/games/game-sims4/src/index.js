@@ -3,8 +3,8 @@ const winapi = require("winapi-bindings");
 
 const path = require("path");
 const semver = require("semver");
-const { actions, fs, log, util } = require("@nexusmods/vortex-api");
-const IniParser = require("vortex-parse-ini");
+const { actions, fs, log, selectors, util } = require("@nexusmods/vortex-api");
+const IniParser = require("@nexusmods/ini-parser");
 
 // The Sims 4 mods folder may be affected by localization.
 const LOCALE_MODS_FOLDER = {
@@ -41,9 +41,13 @@ function findGame() {
   }
 }
 
+let extensionApi;
 let cachedModPath;
+const currentDiscovery = () => selectors.discoveryByGame(extensionApi.getState(), "thesims4");
+const gameDocumentsFor = (discovery, ...subpaths) =>
+  util.getGameUserPath("thesims4", discovery, "documents", ...subpaths);
 
-function getLocale(eaPath) {
+function getLocale(discovery) {
   let locale;
   // check registry for the locale
   try {
@@ -66,7 +70,11 @@ function getLocale(eaPath) {
   if (locale === undefined) {
     locale = Object.keys(LOCALE_MODS_FOLDER).find((candidate) => {
       try {
-        const modsFolder = path.join(eaPath, LOCALE_MODS_FOLDER[candidate]);
+        const modsFolder = gameDocumentsFor(
+          discovery,
+          "Electronic Arts",
+          LOCALE_MODS_FOLDER[candidate],
+        );
         fs.statSync(modsFolder);
         return true;
       } catch (err) {
@@ -85,23 +93,31 @@ function getLocale(eaPath) {
   return locale;
 }
 
-function findModPath() {
-  const eaPath = path.join(util.getVortexPath("documents"), "Electronic Arts");
-
-  const locale = getLocale(eaPath);
-  return path.join(eaPath, LOCALE_MODS_FOLDER[locale], "Mods");
+function findModPath(discovery = currentDiscovery(), ...subpaths) {
+  const locale = getLocale(discovery);
+  return gameDocumentsFor(
+    discovery,
+    "Electronic Arts",
+    LOCALE_MODS_FOLDER[locale],
+    "Mods",
+    ...subpaths,
+  );
 }
 
 function baseModPath() {
+  if (process.platform === "linux") {
+    return findModPath();
+  }
   if (cachedModPath === undefined) {
     cachedModPath = findModPath();
   }
-
   return cachedModPath;
 }
 
 function modPath() {
-  return path.join(baseModPath(), MODS_SUB_PATH);
+  return process.platform === "linux"
+    ? findModPath(currentDiscovery(), MODS_SUB_PATH)
+    : path.join(baseModPath(), MODS_SUB_PATH);
 }
 
 // a bit more generous than the default
@@ -165,18 +181,14 @@ function filterResourceCfg(filePath) {
  * This should keep everything else intact unless the user really went out of their
  * way to make this difficult
  */
-function writeResourceCfg(resourceBasePath) {
-  const resourcePath = path.join(resourceBasePath, "Resource.cfg");
+function writeResourceCfg(resourcePath) {
   return filterResourceCfg(resourcePath).then((filtered) => {
     return fs.writeFileAsync(resourcePath, filtered + "\n\n" + resourceCfg);
   });
 }
 
-function enableModding() {
+function enableModding(filePath) {
   const parser = new IniParser.default(new IniParser.WinapiFormat());
-  const eaPath = path.join(util.getVortexPath("documents"), "Electronic Arts");
-  const locale = getLocale(eaPath);
-  const filePath = path.join(eaPath, LOCALE_MODS_FOLDER[locale], "Options.ini");
 
   return parser.read(filePath).then((ini) => {
     // we could create the section but I don't know how the game would react
@@ -189,16 +201,23 @@ function enableModding() {
   });
 }
 
-function prepareForModding() {
+function prepareForModding(discovery) {
+  const locale = getLocale(discovery);
+  const gamePath = (...subpaths) =>
+    gameDocumentsFor(discovery, "Electronic Arts", LOCALE_MODS_FOLDER[locale], ...subpaths);
+  const base = gamePath("Mods");
+  const target = gamePath("Mods", MODS_SUB_PATH);
+  const resource = gamePath("Mods", "Resource.cfg");
+  const options = gamePath("Options.ini");
   return (
     fs
-      .ensureDirAsync(modPath())
+      .ensureDirAsync(target)
       // The baseModPath _should_ be created by the game, but
       //  it appears that at least under certain scenarios it might be missing
       //  https://github.com/Nexus-Mods/Vortex/issues/6835
-      .then(() => fs.ensureDirAsync(baseModPath()))
-      .then(() => writeResourceCfg(baseModPath()))
-      .then(() => enableModding())
+      .then(() => fs.ensureDirAsync(base))
+      .then(() => writeResourceCfg(resource))
+      .then(() => enableModding(options))
   );
 }
 
@@ -348,11 +367,13 @@ function migrate200(api, oldVersion) {
 }
 
 function main(context) {
+  extensionApi = context.api;
   context.registerGame({
     id: "thesims4",
     name: "The Sims 4",
     mergeMods: true,
     queryPath: findGame,
+    ...(process.platform === "linux" ? { queryArgs: { steam: "1222670" } } : {}),
     queryModPath: modPath,
     logo: "gameart.jpg",
     executable: () => "game/bin/TS4_x64.exe",

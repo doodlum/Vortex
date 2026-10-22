@@ -45,7 +45,7 @@ function makeTestMerge(api) {
         deployedFiles
           .filter((file) => isXML(file.relPath))
           .map((file) => ({
-            in: path.join(installPath, file.source, file.relPath),
+            in: path.join(installPath, file.source, file.sourceRelPath ?? file.relPath),
             out: file.relPath,
           })),
       filter: (filePath) => isXML(filePath),

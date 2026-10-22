@@ -2,76 +2,74 @@ import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import type { IParameters, ISetItem } from "@vortex/shared/cli";
-import program from "commander";
+import { Command, type Option } from "commander";
 import { app, BrowserWindow } from "electron";
 
 import { getVortexPath } from "./getVortexPath";
 import { log } from "./logging";
 
-const ARG_COUNTS: Record<string, number> = {
-  "-d": 1,
-  "-i": 1,
-  "-g": 1,
-  "-s": 1,
-  "--download": 1,
-  "--install": 1,
-  "--install-archive": 1,
-  "--start-minimized": 1,
-  "--game": 1,
-  "--profile": 1,
-  "--get": 1,
-  "--set": 1,
-  "--del": 1,
-  "--run": 1,
-  "--report": 1,
-  "--restore": 1,
-  "--merge": 1,
-  "--max-memory": 1,
-  "--user-data": 1,
-};
+function findOption(command: Command, argument: string): Option | undefined {
+  const flag = argument.split("=", 1)[0];
+  // Commander4 exposes this metadata through an untyped index signature.
+  const options = command.options as readonly Option[];
+  return (
+    options.find((option) => option.short === flag || option.long === flag) ??
+    options.find(
+      (option) =>
+        (option.required || option.optional) &&
+        option.short !== undefined &&
+        argument.startsWith(option.short),
+    )
+  );
+}
 
-const electronExecutable = process.platform === "win32" ? "electron.exe" : "electron";
+function takesFollowingValue(option: Option | undefined, argument: string): boolean {
+  return (
+    option !== undefined &&
+    (option.required || option.optional) &&
+    (argument === option.short || argument === option.long)
+  );
+}
 
-// Chrome rearranges the command line parameters it passes to processes it spawns internally
-// by putting switches (--foo) first, arguments (bar) after.
-// Which is fine in chrome because it's internal processes.
-// The <insert insult here>s developing electron make this internal chrome behaviour part of
-// their api, basically breaking all sensible user-facing clis:
-// https://github.com/electron/electron/issues/20322
-//
-// Fortunately, looking at the code, at least chrome seems to keep the order of switches and
-// arguments so since we don't have positional arguments and as long as we know which
-// switches expect an argument and as long as the
-// command line passed in is valid, we should be able to reconstruct it.
-function electronIsShitArgumentSort(argv: string[]): string[] {
-  const firstArgumentIdx = argv.findIndex((arg, idx) => idx > 1 && !arg.startsWith("-"));
-  const switches = argv.slice(1, firstArgumentIdx - 1);
-  const args = argv.slice(firstArgumentIdx);
-  let nextArg = 0;
-
-  const executable = argv[0];
-  if (!executable) return [];
-
-  const res = [executable];
-  if (executable.includes(electronExecutable)) {
-    // did I say we have no positional arguments? Well, electron does...
-    const next = args[nextArg];
-    if (next) res.push(next);
-    nextArg++;
+/** Electron groups switches before values in second-instance events. */
+function restoreElectronArguments(argv: string[], command: Command, defaultApp: boolean): string[] {
+  const firstValue = argv.findIndex((argument, index) => index > 0 && !argument.startsWith("-"));
+  if (firstValue === -1) return [...argv];
+  const values = argv.slice(firstValue);
+  const restored = argv.slice(0, 1);
+  if (defaultApp) {
+    const application = values.shift();
+    if (application !== undefined) restored.push(application);
   }
+  for (const argument of argv.slice(1, firstValue)) {
+    restored.push(argument);
+    const option = findOption(command, argument);
+    if (takesFollowingValue(option, argument)) {
+      const value = values.shift();
+      if (value !== undefined) restored.push(value);
+    }
+  }
+  return [...restored, ...values];
+}
 
-  switches.forEach((sw) => {
-    res.push(sw);
-    const argCount = ARG_COUNTS[sw] || 0;
-    res.push(...args.slice(nextArg, nextArg + argCount));
-    nextArg += argCount;
-  });
-
-  // append all remaining arguments. This way if we do have positional arguments
-  // after all, as long as they're at the end they will still work
-  res.push(...args.slice(nextArg));
-
-  return res;
+/** Linux desktop entries can pass a raw URI; values of explicit options stay values. */
+function normalizeLinuxProtocolArguments(
+  argv: string[],
+  command: Command,
+  defaultApp: boolean,
+): string[] {
+  const normalized = [...argv];
+  let rawUriIndex = -1;
+  for (let index = defaultApp ? 2 : 1; index < normalized.length; index++) {
+    const argument = normalized[index];
+    if (argument === "--") break;
+    const option = findOption(command, argument ?? "");
+    if (option && ["--download", "--install"].includes(option.long ?? "")) return argv;
+    if (rawUriIndex === -1 && argument?.startsWith("nxm://")) rawUriIndex = index;
+    if (takesFollowingValue(option, argument ?? "")) index++;
+  }
+  if (rawUriIndex !== -1) normalized.splice(rawUriIndex, 0, "-d");
+  return normalized;
 }
 
 /**
@@ -178,19 +176,51 @@ export function updateStartupSettings(updater: (current: IParameters) => IParame
   writeFileSync(filePath, json);
 }
 
-export function parseCommandline(argv: string[], electronIsShitHack: boolean): IParameters {
-  // lets look and replace epic stuff?!
-  argv = transformEpicArguments(argv);
+interface ICommandlinePayload {
+  vortexCommandline: { version: 1; argv: string[]; defaultApp: boolean };
+}
 
-  const executable = argv[0];
-  if (executable && !executable.includes(electronExecutable)) {
-    argv = ["dummy"].concat(argv);
+/** Preserve the original order before Chromium reconstructs a second-instance argv. */
+export function getCommandlinePayload(): ICommandlinePayload {
+  return {
+    vortexCommandline: {
+      version: 1,
+      argv: [...process.argv],
+      defaultApp: process.defaultApp === true,
+    },
+  };
+}
+
+function isCommandlinePayload(data: unknown): data is ICommandlinePayload {
+  if (typeof data !== "object" || data === null || !("vortexCommandline" in data)) return false;
+  const payload = data.vortexCommandline;
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    "version" in payload &&
+    payload.version === 1 &&
+    "defaultApp" in payload &&
+    typeof payload.defaultApp === "boolean" &&
+    "argv" in payload &&
+    Array.isArray(payload.argv) &&
+    payload.argv.length >= (payload.defaultApp ? 2 : 1) &&
+    payload.argv.every((argument: unknown) => typeof argument === "string")
+  );
+}
+
+export function parseSecondaryCommandline(argv: string[], additionalData: unknown): IParameters {
+  if (isCommandlinePayload(additionalData)) {
+    const payload = additionalData.vortexCommandline;
+    return parseCommandline(payload.argv, false, payload.defaultApp);
   }
+  return parseCommandline(argv, true);
+}
 
-  if (electronIsShitHack) {
-    argv = electronIsShitArgumentSort(argv);
-  }
-
+export function parseCommandline(
+  argv: string[],
+  electronReordered: boolean,
+  defaultApp = process.defaultApp === true,
+): IParameters {
   let version: string = "1.0.0";
   try {
     // won't happen in regular operation but lets us test this function outside vortex
@@ -199,8 +229,7 @@ export function parseCommandline(argv: string[], electronIsShitHack: boolean): I
     // nop
   }
 
-  const commandLine = program
-    .command("Vortex")
+  const command = new Command("Vortex")
     .version(version)
     .option(
       "-d, --download <url>",
@@ -266,8 +295,15 @@ export function parseCommandline(argv: string[], electronIsShitHack: boolean): I
     .option("--epic-locale <locale>")
     .option("--epic-sandboxid <sandboxid>")
     // allow unknown options since they may be interpreted by electron/node
-    .allowUnknownOption(true)
-    .parse(argv || [])
+    .allowUnknownOption(true);
+
+  let normalized = transformEpicArguments(argv ?? []);
+  if (electronReordered) normalized = restoreElectronArguments(normalized, command, defaultApp);
+  if (process.platform === "linux")
+    normalized = normalizeLinuxProtocolArguments(normalized, command, defaultApp);
+  // Commander expects a node executable and script prefix; packaged Electron has only its executable.
+  const commandLine = command
+    .parse(defaultApp ? normalized : ["Vortex", ...normalized])
     .opts() as IParameters;
 
   return {

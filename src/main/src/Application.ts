@@ -24,7 +24,7 @@ const { v4: uuidv4 } = uuidpkg;
 import winapi from "winapi-bindings";
 
 import { shutdownBsdiffWorker } from "./bsdiff/host";
-import { parseCommandline, updateStartupSettings } from "./cli";
+import { parseSecondaryCommandline, updateStartupSettings } from "./cli";
 import { installDevelExtensions } from "./devel";
 import { isQuitting, markQuitting, terminate, terminateAsync } from "./errorHandling";
 import { disableErrorReporting, reportCrash } from "./errorReporting";
@@ -240,10 +240,10 @@ class Application {
       }
     });
 
-    app.on("second-instance", (_event, secondaryArgv) => {
+    app.on("second-instance", (_event, secondaryArgv, _workingDirectory, additionalData) => {
       log("debug", "getting arguments from second instance", secondaryArgv);
-      this.applyArguments(parseCommandline(secondaryArgv, true)).catch((err: unknown) =>
-        log("error", "error applying arguments", unknownToError(err)),
+      this.applyArguments(parseSecondaryCommandline(secondaryArgv, additionalData)).catch(
+        (err: unknown) => log("error", "error applying arguments", unknownToError(err)),
       );
     });
 

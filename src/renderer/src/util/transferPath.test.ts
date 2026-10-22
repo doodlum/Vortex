@@ -39,7 +39,8 @@ const diskCheckResults: Record<string, { free: number }> = {
   "": { free: 42 },
 };
 
-vi.mock("fs", () => ({
+vi.mock("fs", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   statfsSync: (checkPath: string) => {
     const result = diskCheckResults[checkPath] ?? diskCheckResults[""];
     return { bavail: result.free, bsize: 1 };

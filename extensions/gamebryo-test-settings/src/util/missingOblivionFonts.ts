@@ -1,9 +1,7 @@
-import * as path from "path";
-
-import { fs, selectors, types } from "@nexusmods/vortex-api";
+import { IniFile } from "@nexusmods/ini-parser";
+import { fs, selectors, types, util } from "@nexusmods/vortex-api";
 import Promise from "bluebird";
 import * as Redux from "redux";
-import { IniFile } from "vortex-parse-ini";
 
 export const oblivionDefaultFonts = {
   sfontfile_1: "Data\\Fonts\\Kingthings_Regular.fnt",
@@ -38,7 +36,7 @@ function missingOblivionFont(
   });
 
   return Promise.each(fonts, (font: string) =>
-    fs.statAsync(path.join(discovery.path, font)).catch(() => {
+    fs.statAsync(util.resolveCasePath(discovery.path, font)).catch(() => {
       missingFonts.push(font);
     }),
   ).then(() => Promise.resolve(missingFonts));

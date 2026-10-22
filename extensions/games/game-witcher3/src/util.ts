@@ -7,6 +7,7 @@ import turbowalk, { IEntry, IWalkOptions } from "turbowalk";
 
 import {
   GAME_ID,
+  getGameDocumentsPath,
   LOCKED_PREFIX,
   I18N_NAMESPACE,
   ACTIVITY_ID_IMPORTING_LOADORDER,
@@ -60,9 +61,7 @@ export async function getDeployment(
   return deployment;
 }
 
-export const getDocumentsPath = (game: types.IGame) => {
-  return path.join(util.getVortexPath("documents"), "The Witcher 3");
-};
+export const getDocumentsPath = (api: types.IExtensionApi) => getGameDocumentsPath(api);
 
 export const getDLCPath = (api: types.IExtensionApi) => {
   return (game: types.IGame) => {

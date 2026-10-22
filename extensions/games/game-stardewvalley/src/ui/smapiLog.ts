@@ -1,19 +1,33 @@
 /**
  * Displays and shares SMAPI logs through the Stardew Valley UI action.
  */
-import path from "path";
-
-import { fs, util } from "@nexusmods/vortex-api";
+import { fs, selectors, util } from "@nexusmods/vortex-api";
 import type { types } from "@nexusmods/vortex-api";
+
+import { GAME_ID } from "../common";
 
 /** Opens the latest available SMAPI log dialog or shows a missing-log notice. */
 export async function onShowSMAPILog(api: types.IExtensionApi) {
-  const basePath = path.join(util.getVortexPath("appData"), "StardewValley", "ErrorLogs");
+  let logPaths: [string, string];
   try {
-    await showSMAPILog(api, basePath, "SMAPI-crash.txt");
+    const discovery = selectors.discoveryByGame(api.getState(), GAME_ID);
+    if (!discovery?.path) {
+      throw new util.SetupError(
+        "Discover the selected Stardew Valley installation on the Games page before opening its SMAPI logs.",
+      );
+    }
+    const logPath = (filename: string) =>
+      util.getGameUserPath(GAME_ID, discovery, "appData", "StardewValley", "ErrorLogs", filename);
+    logPaths = [logPath("SMAPI-crash.txt"), logPath("SMAPI-latest.txt")];
+  } catch (error) {
+    api.showErrorNotification?.("Failed to locate SMAPI logs", error, { allowReport: false });
+    return;
+  }
+  try {
+    await showSMAPILog(api, logPaths[0]);
   } catch (err) {
     try {
-      await showSMAPILog(api, basePath, "SMAPI-latest.txt");
+      await showSMAPILog(api, logPaths[1]);
     } catch (innerErr) {
       api.sendNotification?.({
         type: "info",
@@ -27,8 +41,8 @@ export async function onShowSMAPILog(api: types.IExtensionApi) {
 
 const { clipboard } = require("electron");
 
-async function showSMAPILog(api: types.IExtensionApi, basePath: string, logFile: string) {
-  const logData = await fs.readFileAsync(path.join(basePath, logFile), {
+async function showSMAPILog(api: types.IExtensionApi, logPath: string) {
+  const logData = await fs.readFileAsync(logPath, {
     encoding: "utf-8",
   });
   if (api.showDialog === undefined) {

@@ -193,19 +193,13 @@ function execFileWrapper(
 }
 
 async function checkNetInstall(api: IExtensionApi, dotnetVersion: number): Promise<ITestResult> {
-  let probeExecutable: string;
-
-  if (process.platform === "win32") {
-    probeExecutable = path.join(getVortexPath("assets_unpacked"), "dotnetprobe.exe");
-  } else if (process.platform === "linux") {
-    probeExecutable = path.join(getVortexPath("assets_unpacked"), "dotnetprobe");
-  } else {
-    const error = new Error(
-      `.NET installation check is not supported on this platform ${process.platform}`,
+  if (process.platform !== "win32") {
+    onDotNetFailure(
+      new Error(`.NET installation check is not supported on this platform ${process.platform}`),
     );
-    onDotNetFailure(error);
     return undefined!;
   }
+  const probeExecutable = path.join(getVortexPath("assets_unpacked"), "dotnetprobe.exe");
 
   let stderr: string;
   let exitCode: number;
@@ -223,22 +217,6 @@ async function checkNetInstall(api: IExtensionApi, dotnetVersion: number): Promi
     // .NET is already installed
     onDotNetSuccess();
     return undefined!;
-  }
-
-  if (process.platform === "linux") {
-    return {
-      description: {
-        short: `Microsoft .NET Desktop Runtime ${dotnetVersion} required`,
-        long:
-          `Vortex requires .NET Desktop Runtime ${dotnetVersion} to be installed to run FOMOD mod installers.` +
-          "[br][/br][br][/br]" +
-          `If you already have .NET Desktop Runtime ${dotnetVersion} installed then there may be a problem with your installation and a reinstall might be needed.` +
-          "[br][/br][br][/br]" +
-          '[spoiler label="Show detailed error"]{{stderr}}[/spoiler]',
-        replace: { stderr: stderr.replace(/\n/g, "[br][/br]") },
-      },
-      severity: "fatal",
-    };
   }
 
   const result: ITestResult = {
@@ -267,10 +245,14 @@ async function checkNetInstall(api: IExtensionApi, dotnetVersion: number): Promi
 const main = (context: IExtensionContext): boolean => {
   const dotnetVersion = 9;
 
-  // Register .NET Desktop Runtime check
-  context.registerTest("dotnet-installed", "startup", () =>
-    Bluebird.resolve(checkNetInstall(context.api, dotnetVersion)),
-  );
+  // Linux uses the bundled native Mono helper; Windows retains Desktop Runtime 9.
+  if (process.platform === "linux") {
+    onDotNetSuccess();
+  } else {
+    context.registerTest("dotnet-installed", "startup", () =>
+      Bluebird.resolve(checkNetInstall(context.api, dotnetVersion)),
+    );
+  }
 
   // Set up API extension once initialization is complete
   context.once(() => {

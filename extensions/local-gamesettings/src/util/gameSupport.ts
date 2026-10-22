@@ -141,8 +141,10 @@ export function gameSupported(gameMode: string): boolean {
 }
 
 export function mygamesPath(gameMode: string): string {
-  return path.join(
-    util.getVortexPath("documents"),
+  return util.getGameUserPath(
+    gameMode,
+    discoveryForGame(gameMode),
+    "documents",
     "My Games",
     gameSupport.get(gameMode, "mygamesPath"),
   );

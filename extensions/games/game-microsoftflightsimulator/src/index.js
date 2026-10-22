@@ -4,7 +4,7 @@ const path = require("path");
 const shortid = require("shortid");
 const walk = require("turbowalk").default;
 const { actions, fs, log, selectors, util } = require("@nexusmods/vortex-api");
-const { default: IniParser, WinapiFormat } = require("vortex-parse-ini");
+const { default: IniParser, WinapiFormat } = require("@nexusmods/ini-parser");
 
 const GAME_ID = "microsoftflightsimulator";
 const MS_APPID = "Microsoft.FlightSimulator";
@@ -13,6 +13,10 @@ const STEAM_APPID = "1250410";
 const EXE_NAME = "FlightSimulator.exe";
 
 const STOP_PATTERNS = ["manifest.json"];
+let extensionApi;
+const gameDiscovery = () => selectors.discoveryByGame(extensionApi.getState(), GAME_ID);
+const userPath = (name, ...subpaths) =>
+  util.getGameUserPath(GAME_ID, gameDiscovery(), name, ...subpaths);
 
 function toWordExp(input) {
   return "(^|/)" + input + "(/|$)";
@@ -46,7 +50,7 @@ function officialDataMissingTest(...candidates) {
 
 function findLocalCache() {
   const makeCachePath = (appName) =>
-    path.join(process.env.LOCALAPPDATA, "packages", `${appName}_${PACKAGE_ID}`, "LocalCache");
+    userPath("localAppData", "packages", `${appName}_${PACKAGE_ID}`, "LocalCache");
 
   const opt1 = makeCachePath(MS_APPID);
   // according to various pages this should exist when installed through Steam
@@ -55,7 +59,7 @@ function findLocalCache() {
   //  FlightSimulator.CFG and UserCfg.opt files are both inside
   //  his roaming folder. Going to keep opt2 just in case that
   //  option is valid for other users.
-  const opt3 = path.join(util.getVortexPath("appData"), "Microsoft Flight Simulator");
+  const opt3 = userPath("appData", "Microsoft Flight Simulator");
 
   try {
     fs.statSync(opt1);
@@ -125,8 +129,14 @@ const getPackagesPath = (() => {
   // this involves several disk ops and parsing a config file and it has to be
   // synchronous because of the api so cache the result
   let cachedPath;
+  let cachedIdentity;
 
   return () => {
+    const identity = userPath("appData");
+    if (identity !== cachedIdentity) {
+      cachedPath = undefined;
+      cachedIdentity = identity;
+    }
     if (cachedPath === undefined) {
       const basePath = findLocalCache();
 
@@ -135,14 +145,14 @@ const getPackagesPath = (() => {
 
       let usercfg;
       try {
-        usercfg = parseOPT(path.join(basePath, "UserCfg.opt"));
+        usercfg = parseOPT(util.resolveCasePath(basePath, "UserCfg.opt"));
       } catch (err) {
         if (err.code === "ENOENT") {
-          const roamPath = path.join(util.getVortexPath("appData"), "Microsoft Flight Simulator");
+          const roamPath = userPath("appData", "Microsoft Flight Simulator");
           // if the .opt file doesn't exist in that location, this may be steam
           // and it may be in a separate location from the LocalCache dir
           try {
-            usercfg = parseOPT(path.join(roamPath, "UserCfg.opt"));
+            usercfg = parseOPT(util.resolveCasePath(roamPath, "UserCfg.opt"));
           } catch (innerErr) {
             if (innerErr.code === "ENOENT") {
               throw new util.SetupError(localCacheMissingTest(basePath, roamPath));
@@ -156,10 +166,14 @@ const getPackagesPath = (() => {
       }
       if (usercfg["InstalledPackagesPath"] !== undefined) {
         // configured
-        cachedPath = path.join(usercfg["InstalledPackagesPath"]);
+        cachedPath = util.resolveGameWindowsPath(
+          GAME_ID,
+          gameDiscovery(),
+          usercfg["InstalledPackagesPath"],
+        );
       } else {
         // default
-        cachedPath = path.join(basePath, "Packages");
+        cachedPath = util.resolveCasePath(basePath, "Packages");
       }
     }
 
@@ -168,7 +182,7 @@ const getPackagesPath = (() => {
 })();
 
 function findModPath() {
-  return path.join(getPackagesPath(), "Community");
+  return util.resolveCasePath(getPackagesPath(), "Community");
 }
 
 async function requiresLauncher(gamePath) {
@@ -721,14 +735,15 @@ let tools = [];
 let prevLoadOrder;
 
 function main(context) {
-  if (process.platform === "win32") {
-    // only supported on windows I guess
+  extensionApi = context.api;
+  if (process.platform === "win32" || process.platform === "linux") {
     context.registerGame({
       id: GAME_ID,
       name: "Microsoft Flight Simulator",
       mergeMods: makeModDeployedName(context.api),
 
       queryPath: findGame,
+      ...(process.platform === "linux" ? { queryArgs: { steam: STEAM_APPID } } : {}),
       supportedTools: tools,
       queryModPath: findModPath,
       requiresLauncher,

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 /**
  * Implements Vortex game integration for Stardew Valley.
  */
@@ -7,10 +8,12 @@ import { fs, util } from "@nexusmods/vortex-api";
 import type { types } from "@nexusmods/vortex-api";
 
 import { GAME_ID, MODS_REL_PATH } from "../common";
-import { SMAPI_EXE } from "../installers/smapi";
+import { resolveSMAPIPlatform } from "../installers/smapi";
 import { deploySMAPI } from "../smapi/lifecycle";
 import { findSMAPIMod } from "../smapi/selectors";
 import { downloadAndInstallSMAPI } from "../smapi/workflow";
+import { selectSdvDiscoveryPath } from "../state/selectors";
+import { installedGamePlatform } from "./platform";
 
 type QueryPath = NonNullable<types.IGame["queryPath"]>;
 type Setup = NonNullable<types.IGame["setup"]>;
@@ -44,8 +47,11 @@ export default class StardewValleyGame implements types.IGame {
       id: "smapi",
       name: "SMAPI",
       logo: "assets/smapi.png",
-      executable: () => SMAPI_EXE,
-      requiredFiles: [SMAPI_EXE],
+      executable: (gamePath?: string) =>
+        resolveSMAPIPlatform(
+          installedGamePlatform(gamePath ?? selectSdvDiscoveryPath(this.context.api.getState())),
+        ).executableName,
+      requiredFiles: [],
       shell: true,
       exclusive: true,
       relative: true,
@@ -66,7 +72,15 @@ export default class StardewValleyGame implements types.IGame {
    */
   constructor(context: types.IExtensionContext) {
     this.context = context;
-    this.requiredFiles = process.platform == "win32" ? ["Stardew Valley.exe"] : ["StardewValley"];
+    this.requiredFiles =
+      process.platform === "linux"
+        ? ["Content"]
+        : process.platform === "win32"
+          ? ["Stardew Valley.exe"]
+          : ["StardewValley"];
+    Object.defineProperty(this.supportedTools[0], "requiredFiles", {
+      get: () => [this.supportedTools[0].executable()],
+    });
 
     this.defaultPaths = [
       // Linux
@@ -112,8 +126,17 @@ export default class StardewValleyGame implements types.IGame {
     throw new Error("Stardew Valley install path not found");
   }) as unknown as QueryPath;
 
-  public executable() {
-    return process.platform == "win32" ? "Stardew Valley.exe" : "StardewValley";
+  public executable(gamePath?: string) {
+    const executable =
+      installedGamePlatform(gamePath) === "win32" ? "Stardew Valley.exe" : "StardewValley";
+    if (
+      process.platform === "linux" &&
+      gamePath !== undefined &&
+      !existsSync(path.join(gamePath, executable))
+    ) {
+      throw new Error("The selected directory does not contain a Stardew Valley game executable.");
+    }
+    return executable;
   }
 
   public queryModPath() {
@@ -132,7 +155,10 @@ export default class StardewValleyGame implements types.IGame {
 
     await fs.ensureDirWritableAsync(path.join(discovery.path, MODS_REL_PATH));
 
-    const smapiPath = path.join(discovery.path, SMAPI_EXE);
+    const smapiPath = path.join(
+      discovery.path,
+      resolveSMAPIPlatform(installedGamePlatform(discovery.path)).executableName,
+    );
     const smapiFound = await this.getPathExistsAsync(smapiPath);
     if (!smapiFound) {
       this.recommendSmapi();
