@@ -1,6 +1,5 @@
 import * as path from "path";
 
-import { mdiGamepadSquareOutline } from "@mdi/js";
 import {
   getErrorCode,
   getErrorMessageOrDefault,
@@ -752,7 +751,7 @@ function init(context: IExtensionContext): boolean {
         nexusGames: nexusGames(),
       }),
       activity,
-      mdi: mdiGamepadSquareOutline,
+      menuIcon: "stadia_controller",
     },
   );
   context.registerFooter("discovery-progress", ProgressFooter);

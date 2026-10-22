@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { afterAll, expect } from "vitest";
@@ -64,69 +65,86 @@ afterAll(() => {
   );
 });
 
+// Unelevated Windows without Developer Mode cannot create file symlinks (EPERM).
+function canCreateFileSymlinks(): boolean {
+  const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "vortex-symlink-probe-"));
+  try {
+    fs.writeFileSync(path.join(dir, "target"), "");
+    fs.symlinkSync(path.join(dir, "target"), path.join(dir, "link"), "file");
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const symlinksUnavailable = !canCreateFileSymlinks();
+
 for (const method of ["hardlink", "symlink", "move"] as DeploymentMethodName[]) {
-  test(`${method}: case conflicts preserve base backups and staged sources through disable, re-enable and purge`, async ({
-    makeDeployment,
-  }) => {
-    const gameId = `parity-${method}`;
-    const h = makeDeployment({
-      gameId,
-      method,
-      files: { "Config/Settings.ini": "A" },
-      otherMods: { Other: { "config/settings.ini": "B" } },
-    });
-    fs.mkdirSync(path.join(h.gameDir, "Config"));
-    fs.writeFileSync(path.join(h.gameDir, "Config", "Settings.ini"), "base");
-    fs.writeFileSync(path.join(h.gameDir, "untouched.txt"), "unowned");
-    const normalize = await getDeploymentNormalizeFunc(h.api.getState(), gameId, h.gameDir);
-    const blacklist = new BlacklistSet([], h.game, normalize);
-    const deploy = async (mods: string[], previous: IDeployedFile[] = [], clean = true) => {
-      await h.method.prepare(h.gameDir, clean, previous, normalize);
-      for (const mod of mods) await h.method.activate(h.modDir(mod), mod, "", blacklist);
-      return h.method.finalize(gameId, h.gameDir, h.stagingDir);
-    };
-    const phases: unknown[] = [];
-    const assertWinner = (value: string) => {
-      const outputs = filesUnder(h.gameDir).filter(
+  test.skipIf(method === "symlink" && symlinksUnavailable)(
+    `${method}: case conflicts preserve base backups and staged sources through disable, re-enable and purge`,
+    async ({ makeDeployment }) => {
+      const gameId = `parity-${method}`;
+      const h = makeDeployment({
+        gameId,
+        method,
+        files: { "Config/Settings.ini": "A" },
+        otherMods: { Other: { "config/settings.ini": "B" } },
+      });
+      fs.mkdirSync(path.join(h.gameDir, "Config"));
+      fs.writeFileSync(path.join(h.gameDir, "Config", "Settings.ini"), "base");
+      fs.writeFileSync(path.join(h.gameDir, "untouched.txt"), "unowned");
+      const normalize = await getDeploymentNormalizeFunc(h.api.getState(), gameId, h.gameDir);
+      const blacklist = new BlacklistSet([], h.game, normalize);
+      const deploy = async (mods: string[], previous: IDeployedFile[] = [], clean = true) => {
+        await h.method.prepare(h.gameDir, clean, previous, normalize);
+        for (const mod of mods) await h.method.activate(h.modDir(mod), mod, "", blacklist);
+        return h.method.finalize(gameId, h.gameDir, h.stagingDir);
+      };
+      const phases: unknown[] = [];
+      const assertWinner = (value: string) => {
+        const outputs = filesUnder(h.gameDir).filter(
+          (relative) => slash(relative).toLowerCase() === "config/settings.ini",
+        );
+        expect(outputs.map(slash)).toEqual(["Config/Settings.ini"]);
+        expect(fs.readFileSync(path.join(h.gameDir, outputs[0]), "utf8")).toBe(value);
+        const backups = filesUnder(h.gameDir).filter(
+          (relative) => slash(relative).toLowerCase() === "config/settings.ini.vortex_backup",
+        );
+        expect(backups.map(slash)).toEqual(["Config/Settings.ini.vortex_backup"]);
+        expect(fs.readFileSync(path.join(h.gameDir, backups[0]), "utf8")).toBe("base");
+      };
+      let manifest = await deploy(["SomeMod"]);
+      assertWinner("A");
+      phases.push(snapshot(h, manifest));
+      manifest = await deploy(["Other"], manifest, false);
+      assertWinner("B");
+      phases.push(snapshot(h, manifest));
+      expect(await h.method.externalChanges(gameId, h.stagingDir, h.gameDir, manifest)).toEqual([]);
+      manifest = await deploy(["SomeMod"], manifest);
+      assertWinner("A");
+      phases.push(snapshot(h, manifest));
+      manifest = await deploy(["SomeMod", "Other"], manifest);
+      assertWinner("B");
+      phases.push(snapshot(h, manifest));
+      await h.method.purge(h.stagingDir, h.gameDir, gameId);
+      const restored = filesUnder(h.gameDir).filter(
         (relative) => slash(relative).toLowerCase() === "config/settings.ini",
       );
-      expect(outputs.map(slash)).toEqual(["Config/Settings.ini"]);
-      expect(fs.readFileSync(path.join(h.gameDir, outputs[0]), "utf8")).toBe(value);
-      const backups = filesUnder(h.gameDir).filter(
-        (relative) => slash(relative).toLowerCase() === "config/settings.ini.vortex_backup",
+      expect(restored.map(slash)).toEqual(["Config/Settings.ini"]);
+      expect(fs.readFileSync(path.join(h.gameDir, restored[0]), "utf8")).toBe("base");
+      expect(fs.readFileSync(path.join(h.gameDir, "untouched.txt"), "utf8")).toBe("unowned");
+      expect(
+        fs.readFileSync(path.join(h.modDir("SomeMod"), "Config", "Settings.ini"), "utf8"),
+      ).toBe("A");
+      expect(fs.readFileSync(path.join(h.modDir("Other"), "config", "settings.ini"), "utf8")).toBe(
+        "B",
       );
-      expect(backups.map(slash)).toEqual(["Config/Settings.ini.vortex_backup"]);
-      expect(fs.readFileSync(path.join(h.gameDir, backups[0]), "utf8")).toBe("base");
-    };
-    let manifest = await deploy(["SomeMod"]);
-    assertWinner("A");
-    phases.push(snapshot(h, manifest));
-    manifest = await deploy(["Other"], manifest, false);
-    assertWinner("B");
-    phases.push(snapshot(h, manifest));
-    expect(await h.method.externalChanges(gameId, h.stagingDir, h.gameDir, manifest)).toEqual([]);
-    manifest = await deploy(["SomeMod"], manifest);
-    assertWinner("A");
-    phases.push(snapshot(h, manifest));
-    manifest = await deploy(["SomeMod", "Other"], manifest);
-    assertWinner("B");
-    phases.push(snapshot(h, manifest));
-    await h.method.purge(h.stagingDir, h.gameDir, gameId);
-    const restored = filesUnder(h.gameDir).filter(
-      (relative) => slash(relative).toLowerCase() === "config/settings.ini",
-    );
-    expect(restored.map(slash)).toEqual(["Config/Settings.ini"]);
-    expect(fs.readFileSync(path.join(h.gameDir, restored[0]), "utf8")).toBe("base");
-    expect(fs.readFileSync(path.join(h.gameDir, "untouched.txt"), "utf8")).toBe("unowned");
-    expect(fs.readFileSync(path.join(h.modDir("SomeMod"), "Config", "Settings.ini"), "utf8")).toBe(
-      "A",
-    );
-    expect(fs.readFileSync(path.join(h.modDir("Other"), "config", "settings.ini"), "utf8")).toBe(
-      "B",
-    );
-    phases.push(snapshot(h, []));
-    reports[method] = phases;
-  });
+      phases.push(snapshot(h, []));
+      reports[method] = phases;
+    },
+  );
 }
 
 test.skipIf(process.platform !== "linux")(

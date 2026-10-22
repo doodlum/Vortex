@@ -1,4 +1,3 @@
-import { mdiRefresh } from "@mdi/js";
 import { unknownToError } from "@vortex/shared";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -103,7 +102,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
   return (
     <Page active={active} pageId="proton-page" scrollable={false}>
       <PageHeader title={t("Proton")}>
-        <Button disabled={loading} leftIconPath={mdiRefresh} onClick={() => void refreshSteam()}>
+        <Button disabled={loading} leftIcon="refresh" onClick={() => void refreshSteam()}>
           {t("Refresh")}
         </Button>
       </PageHeader>

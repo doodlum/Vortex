@@ -14,7 +14,6 @@ This is a list of all modules leaked by Vortex to extensions. Any module listed 
 | @headlessui/react | 2.2.10 |
 | @homebridge/dbus-native | 0.7.9 |
 | @hot-updater/bsdiff | 0.30.6 |
-| @mdi/js | 7.4.47 |
 | @msgpack/msgpack | 2.8.0 |
 | @nexusmods/file-dependency-resolver | link:../../packages/file-dependency-resolver |
 | @nexusmods/fomod-installer-ipc | 0.13.4-linux.3 |

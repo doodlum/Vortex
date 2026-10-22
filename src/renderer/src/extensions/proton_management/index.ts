@@ -9,6 +9,7 @@ function init(context: IExtensionContext): boolean {
     priority: 55,
     group: "per-game",
     newLayout: true,
+    menuIcon: "science",
     visible: () => activeProtonGame(context.api.getState()) !== undefined,
     props: () => ({ api: context.api }),
   });

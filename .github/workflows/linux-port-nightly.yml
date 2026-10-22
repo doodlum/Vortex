@@ -1,7 +1,12 @@
 name: Linux Port Nightly
 
 # Fork-only: keeps the `linux` branch merged with upstream master and publishes unsigned
-# Windows and Linux builds as a GitHub pre-release.
+# Windows and Linux builds as a GitHub pre-release. Scheduled and manual runs use the copy of
+# this file on the fork's default branch; every job builds the `linux` branch.
+#
+# GITHUB_TOKEN cannot push merges that change workflow files. Set a LINUX_SYNC_TOKEN secret
+# (contents and workflows write) to push those too; without it each build job re-applies the
+# same upstream merge, so the nightly still builds current upstream.
 
 on:
   schedule:
@@ -21,22 +26,29 @@ jobs:
     runs-on: ubuntu-22.04
     outputs:
       sha: ${{ steps.merge.outputs.sha }}
+      upstream: ${{ steps.merge.outputs.upstream }}
     steps:
       - uses: actions/checkout@v7
         with:
           ref: linux
           fetch-depth: 0
+          token: ${{ secrets.LINUX_SYNC_TOKEN || github.token }}
 
       - name: Merge upstream master
         id: merge
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote add upstream https://github.com/Nexus-Mods/Vortex.git
-          git fetch upstream master
-          git merge --no-edit upstream/master
-          git push origin HEAD:linux
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          git fetch https://github.com/Nexus-Mods/Vortex.git master
+          echo "upstream=$(git rev-parse FETCH_HEAD)" >> "$GITHUB_OUTPUT"
+          base=$(git rev-parse HEAD)
+          git merge --no-edit FETCH_HEAD
+          if git push origin HEAD:linux; then
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Could not push the upstream merge to linux; building it unpushed."
+            echo "sha=$base" >> "$GITHUB_OUTPUT"
+          fi
 
   windows:
     needs: sync
@@ -47,7 +59,16 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.sync.outputs.sha }}
-          submodules: "recursive"
+          fetch-depth: 0
+
+      - name: Apply upstream merge
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch https://github.com/Nexus-Mods/Vortex.git ${{ needs.sync.outputs.upstream }}
+          git merge --no-edit FETCH_HEAD
+          git submodule update --init --recursive
 
       - name: Package Vortex (unsigned)
         id: package
@@ -69,7 +90,15 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.sync.outputs.sha }}
-          submodules: "recursive"
+          fetch-depth: 0
+
+      - name: Apply upstream merge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch https://github.com/Nexus-Mods/Vortex.git ${{ needs.sync.outputs.upstream }}
+          git merge --no-edit FETCH_HEAD
+          git submodule update --init --recursive
 
       - name: Install packaging prerequisites
         run: |
@@ -110,7 +139,15 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.sync.outputs.sha }}
-          submodules: "recursive"
+          fetch-depth: 0
+
+      - name: Apply upstream merge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch https://github.com/Nexus-Mods/Vortex.git ${{ needs.sync.outputs.upstream }}
+          git merge --no-edit FETCH_HEAD
+          git submodule update --init --recursive
 
       - name: Install packaging prerequisites
         run: |
@@ -149,7 +186,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: assets
           merge-multiple: true
@@ -157,11 +194,12 @@ jobs:
       - name: Publish nightly pre-release
         run: |
           sha=${{ needs.sync.outputs.sha }}
-          tag="nightly-$(date -u +%Y%m%d)-${sha::8}"
+          upstream=${{ needs.sync.outputs.upstream }}
+          tag="nightly-$(date -u +%Y%m%d)-${sha::8}-${upstream::8}"
           cd assets && sha256sum * | tee SHA256SUMS && cd ..
           gh release create "$tag" assets/* --repo "$GITHUB_REPOSITORY" --target "$sha" \
             --prerelease --title "Linux port nightly $(date -u +%Y-%m-%d)" \
-            --notes "Unsigned development build of the linux branch at $sha, merged with upstream master. Not an official Nexus Mods release."
+            --notes "Unsigned development build of the linux branch at $sha merged with upstream master at $upstream. Not an official Nexus Mods release."
 
       - name: Keep the newest seven nightlies
         run: |

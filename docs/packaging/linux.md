@@ -172,3 +172,16 @@ All formats currently target x64; musl and other architectures are unverified.
 An extracted RPM/Arch comparison on Ubuntu does not establish runtime support on
 their native distributions. The full submission gate is `pnpm run verify`; it
 excludes E2E and cannot replace the per-format checks above.
+
+## Fork nightlies
+
+`.github/workflows/linux-port-nightly.yml` runs only outside `Nexus-Mods/Vortex`.
+Schedules and manual dispatch use the copy on the fork's default branch, so keep
+that copy identical to the one on `linux`. Each run merges upstream `master` into
+`linux`, builds the unsigned Windows installer, the DEB, RPM, Arch, AppImage and
+tar.gz packages, and (allowed to fail) Snap and Flatpak, then publishes them as a
+`nightly-*` pre-release and keeps the newest seven. A merge conflict stops the run;
+resolve it on `linux` by hand. `GITHUB_TOKEN` cannot push merges that change
+workflow files: add a `LINUX_SYNC_TOKEN` secret with contents and workflows write
+access to push those, otherwise each build job re-applies the merge unpushed.
+These builds are unsigned and are not official Nexus Mods releases.
