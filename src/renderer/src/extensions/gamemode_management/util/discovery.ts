@@ -1,4 +1,5 @@
-import { stat } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { access, stat } from "node:fs/promises";
 import * as path from "node:path";
 
 import { getErrorCode, getErrorMessageOrDefault, unknownToError } from "@vortex/shared";
@@ -756,9 +757,59 @@ export async function suggestStagingPath(api: IExtensionApi, gameId: string): Pr
     suggestion = path.join("{USERDATA}", "{game}", "mods");
   } else {
     // different drives, suggest path on same drive
-    const volume = getVolumePath(modPaths[""]);
+    const volume = await stagingVolume(
+      modPaths[""],
+      state.settings.gameMode.discovered[gameId]?.path,
+    );
     suggestion = path.join(volume, state.settings.mods.suggestInstallPathDirectory, "{game}");
   }
 
   return suggestion;
+}
+
+/**
+ * The folder on the game's filesystem to suggest staging below. Windows drive roots are writable,
+ * but a Linux mount point (`/`, `/mnt/games`) is usually root-owned, so there it is the highest
+ * folder on that filesystem the user can write to, outside the game folder.
+ */
+export async function stagingVolume(
+  modPath: string,
+  gamePath: string | undefined,
+): Promise<string> {
+  const volume = getVolumePath(modPath);
+  if (process.platform === "win32") return volume;
+  const insideGame = (candidate: string) => {
+    if (gamePath === undefined) return false;
+    const relative = path.relative(gamePath, candidate);
+    return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  };
+  let current = path.resolve(modPath);
+  while (!(await pathExists(current)) && path.dirname(current) !== current)
+    current = path.dirname(current);
+  let best: string | undefined;
+  for (;;) {
+    if (!insideGame(current) && (await isWritable(current))) best = current;
+    const parent = path.dirname(current);
+    if (current === volume || parent === current) break;
+    current = parent;
+  }
+  return best ?? volume;
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await stat(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function isWritable(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath, fsConstants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }

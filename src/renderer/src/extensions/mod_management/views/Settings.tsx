@@ -59,6 +59,7 @@ import { ciEqual, isChildPath, isPathValid, isReservedDirectory } from "../../..
 import { currentGame, currentGameDiscovery } from "../../gamemode_management/selectors";
 import type { IDiscoveryResult } from "../../gamemode_management/types/IDiscoveryResult";
 import type { IGameStored } from "../../gamemode_management/types/IGameStored";
+import { stagingVolume } from "../../gamemode_management/util/discovery";
 import { setDeploymentNecessary } from "../actions/deployment";
 import { setActivator, setInstallPath, setInstallPathMode } from "../actions/settings";
 import { setTransferMods } from "../actions/transactions";
@@ -1050,7 +1051,7 @@ class Settings extends ComponentEx<IProps, IComponentState> {
   };
 
   private suggestPath = async () => {
-    const { modPaths, onShowError, suggestInstallPathDirectory } = this.props;
+    const { discovery, modPaths, onShowError, suggestInstallPathDirectory } = this.props;
     try {
       // stat the volume root rather than the full mod path — the mod directory
       // may not exist yet (e.g. first-time setup), but we only need the device id
@@ -1064,7 +1065,11 @@ class Settings extends ComponentEx<IProps, IComponentState> {
       if (modPathStats.dev === userDataStats.dev) {
         suggestion = path.join("{USERDATA}", "{game}", "mods");
       } else {
-        suggestion = path.join(volume, suggestInstallPathDirectory, "{game}");
+        suggestion = path.join(
+          await stagingVolume(modPaths[""], discovery?.path),
+          suggestInstallPathDirectory,
+          "{game}",
+        );
       }
       this.changePath(suggestion);
     } catch (err) {

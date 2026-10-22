@@ -1,4 +1,4 @@
-import { AsyncLocalStorage } from "node:async_hooks";
+import { AsyncResource, createHook, executionAsyncResource } from "node:async_hooks";
 import * as path from "node:path";
 import { URL as NodeURL, fileURLToPath, pathToFileURL } from "node:url";
 
@@ -27,7 +27,41 @@ export interface GameUserContext {
   discovery: IDiscoveryResult | undefined;
 }
 
-const context = new AsyncLocalStorage<GameUserContext>();
+/**
+ * AsyncLocalStorage's async_hooks implementation. Node 24's default AsyncLocalStorage reads V8's
+ * continuation-preserved embedder data, which Blink also sets while an Electron renderer handles
+ * user input; a synchronous getStore() from a click handler then aborts V8 ("null prototype chain
+ * root"). Execution resources are Node's own, so they stay valid in Blink tasks.
+ */
+class ResourceContext<T> {
+  private readonly key = Symbol("vortex.gameUserContext");
+  private readonly hook = createHook({
+    init: (_asyncId, _type, _triggerAsyncId, resource) => {
+      const current = executionAsyncResource() as Record<symbol, unknown> | undefined;
+      if (current !== undefined && current !== null && this.key in current)
+        (resource as Record<symbol, unknown>)[this.key] = current[this.key];
+    },
+  });
+  private enabled = false;
+
+  public run<R>(store: T, callback: () => R): R {
+    if (!this.enabled) {
+      this.hook.enable();
+      this.enabled = true;
+    }
+    return new AsyncResource("VortexGameUserContext").runInAsyncScope(() => {
+      (executionAsyncResource() as Record<symbol, unknown>)[this.key] = store;
+      return callback();
+    });
+  }
+
+  public getStore(): T | undefined {
+    const current = executionAsyncResource() as Record<symbol, unknown> | undefined;
+    return (current?.[this.key] as T | undefined) ?? undefined;
+  }
+}
+
+const context = new ResourceContext<GameUserContext>();
 let bluebirdContextEnabled = false;
 const windowsIdentities = new WeakMap<GameUserContext, boolean>();
 const classifyingGames = new Set<VortexGameId>();
