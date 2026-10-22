@@ -61,6 +61,14 @@ are checked before reuse. An inconsistent cache fails with its path for inspecti
 The pinned electron-builder's older bundled FPM fails with modern RPM build roots,
 so the driver uses this private tool for DEB, RPM and Arch.
 
+Their runtime dependencies are declared in `src/main/electron-builder.config.json`,
+replacing electron-builder's defaults: the DEB adds ALSA, the RPM names library
+capabilities such as `libasound.so.2()(64bit)` so Fedora and openSUSE package names
+both satisfy it, and the Arch package drops the removed `http-parser`. Their removal
+hook is `scripts/linux-after-remove.sh`; electron-builder's default removed the
+command alternative by its link path, which failed RPM uninstallation, and also
+ran during upgrades.
+
 Allow disk space for a common snapshot and temporary package copies. The driver
 places TMPDIR below its unique output run, avoiding per-user tmpfs quotas on /tmp.
 The input and output/tool-cache trees must be separate. A first run may download

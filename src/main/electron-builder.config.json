@@ -87,12 +87,48 @@
     "synopsis": null,
     "artifactName": "vortex-${version}-${arch}.pkg.tar.xz",
     "packageName": "vortex",
-    "fpm": ["--description", "Mod manager for PC games from Nexus Mods."]
+    "fpm": ["--description", "Mod manager for PC games from Nexus Mods."],
+    "depends": [
+      "alsa-lib",
+      "at-spi2-core",
+      "gtk3",
+      "libnotify",
+      "libsecret",
+      "libxss",
+      "libxtst",
+      "nss",
+      "util-linux-libs",
+      "xdg-utils"
+    ]
   },
   "deb": {
-    "packageName": "vortex"
+    "packageName": "vortex",
+    "depends": [
+      "libasound2t64 | libasound2",
+      "libatspi2.0-0",
+      "libgtk-3-0",
+      "libnotify4",
+      "libnss3",
+      "libsecret-1-0",
+      "libuuid1",
+      "libxss1",
+      "libxtst6",
+      "xdg-utils"
+    ]
   },
   "rpm": {
-    "packageName": "vortex"
+    "packageName": "vortex",
+    "depends": [
+      "libasound.so.2()(64bit)",
+      "libatspi.so.0()(64bit)",
+      "libgtk-3.so.0()(64bit)",
+      "libnotify.so.4()(64bit)",
+      "libnss3.so()(64bit)",
+      "libsecret-1.so.0()(64bit)",
+      "libuuid.so.1()(64bit)",
+      "libXss.so.1()(64bit)",
+      "libXtst.so.6()(64bit)",
+      "xdg-utils"
+    ]
   }
 }

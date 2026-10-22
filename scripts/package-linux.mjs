@@ -408,6 +408,7 @@ export async function packageLinux(
       "linux-package-command.mjs",
       "linux-fpm.mjs",
       "linux-fpm-lock.json",
+      "linux-after-remove.sh",
     ])
       state.tools.pipeline[file] = await hashFile(new URL(file, import.meta.url));
     await writeJson(path.join(output, "payload-manifest.json"), snapshots.snapshot);
@@ -484,6 +485,11 @@ export async function packageLinux(
             "--publish",
             "never",
             `--config.directories.output=${directory}`,
+            ...(["deb", "rpm", "pacman"].includes(format)
+              ? [
+                  `--config.${format}.afterRemove=${fileURLToPath(new URL("linux-after-remove.sh", import.meta.url))}`,
+                ]
+              : []),
           ],
           { cwd: options.deploy, env: nativeEnv, log: path.join(directory, "build.log") },
         );
