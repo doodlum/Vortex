@@ -144,6 +144,17 @@ by default, so this driver supplies the launcher directly. Both AppImage and Sna
 forward arguments unchanged, including raw nxm URLs, without disabling Chromium
 sandboxing. Actual sandbox availability remains a target-system prerequisite.
 
+DEB, RPM and Arch packages install `chrome-sandbox` root-owned with mode 4755.
+An AppImage cannot (its FUSE mount is nosuid), and an extracted tar.gz or
+`dist/linux-unpacked` keeps a user-owned helper, so these rely on Chromium's
+user-namespace sandbox. Hosts that restrict unprivileged user namespaces, such as
+Ubuntu 24.04 and later (`kernel.apparmor_restrict_unprivileged_userns = 1`), abort
+these launches with a "SUID sandbox helper binary was found, but is not configured
+correctly" FATAL (SIGTRAP) until an AppArmor profile grants `userns` to that
+executable or the helper is made root-owned 4755 where it can be. Recommend the
+native package, Snap or Flatpak there. The nightly AppImage was observed to abort
+this way on an Ubuntu 26.04 VM.
+
 ## Verify the artifacts
 
 Run the isolated packager regression suites from `src/main` on Windows and Linux:
