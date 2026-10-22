@@ -77,7 +77,8 @@ async function fixture(change?: (manifest: any) => void) {
   };
 }
 
-describe("bundled native C# runtime preparation", () => {
+// Real directory trees are created, hashed and renamed; on a loaded Windows host the default 5s is too tight.
+describe("bundled native C# runtime preparation", { timeout: 30_000 }, () => {
   it("materializes verified objects, preserves modes and reuses a verified cache", async () => {
     const f = await fixture();
     const runtime = await f.run();
