@@ -103,6 +103,8 @@ export function withGameUserPaths<T>(
 }
 
 export function currentGameUserContext(): GameUserContext | undefined {
+  // Contexts only exist on Linux; elsewhere filesystem calls keep upstream's cost and behaviour.
+  if (process.platform !== "linux") return undefined;
   return context.getStore();
 }
 
