@@ -13,7 +13,7 @@ import {
 } from "../extensions/gamemode_management/util/gameRegistry";
 import { nativeRelPath, resolveCasePath } from "./casePath";
 import {
-  getGameProtonPrefix,
+  getGameWinePrefix,
   getHostGameUserPath,
   resolveProtonUserPath,
   resolveProtonWindowsPath,
@@ -118,7 +118,7 @@ export function resolveLegacyGamePath(filePath: string, owner = currentGameUserC
   )
     return filePath;
   if (!path.isAbsolute(filePath) && /^[a-z]:[\\/]/i.test(filePath))
-    return resolveProtonWindowsPath(getGameProtonPrefix(owner.discovery), filePath);
+    return resolveProtonWindowsPath(getGameWinePrefix(owner.discovery), filePath);
   const normalized = path.normalize(nativeRelPath(filePath));
   if (!path.isAbsolute(normalized)) return filePath;
   const gameRelative = relativeInside(owner.discovery?.path, normalized);
@@ -133,7 +133,7 @@ export function resolveLegacyGamePath(filePath: string, owner = currentGameUserC
   for (const { name, root } of roots) {
     const relative = relativeInside(root, normalized);
     if (relative !== undefined) {
-      const prefix = getGameProtonPrefix(owner.discovery);
+      const prefix = getGameWinePrefix(owner.discovery);
       // A Steam library (and its prefix) can itself live below host Documents.
       const existing = relativeInside(prefix, normalized);
       return existing === undefined

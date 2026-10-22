@@ -208,7 +208,12 @@ Flight Simulator resolves its AppData and configured Windows packages path throu
 prefix; existing physical spelling is retained. Native Linux games, Windows, and files inside the game
 directory keep their existing locations. Missing Steam identity or prefix is reported
 before writing host Documents. Initialize the Windows game in Steam and refresh
-discovery; automatic Windows-game Documents mapping currently requires Steam.
+discovery. A Windows game from another store (Heroic, Lutris, Bottles or plain Wine)
+uses the Wine prefix whose `drive_c` contains its installation: the nearest such
+ancestor with a `system.reg`, and that prefix's `steamuser` account or, failing that,
+the account named after the current Linux user. A Steam game never falls back to a
+containing Wine prefix, and a game outside any prefix still fails with setup guidance.
+Launching such a game still requires Steam; Vortex does not run a raw Windows executable.
 The package documents encodings, native comparison fixtures, consumer run commands
 and runtime limits. From `src/renderer`, `pnpm run test:integration` checks real bundled
 settings writers against disposable prefixes and host sentinels, using a supplied

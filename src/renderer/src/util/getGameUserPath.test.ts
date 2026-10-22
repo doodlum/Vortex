@@ -89,6 +89,38 @@ test("a known Windows game in another store does not edit host Documents", () =>
   ).toThrow(MissingInterpreter);
 });
 
+async function winePrefix(user: string | undefined): Promise<{ prefix: string; game: string }> {
+  const prefix = path.join(directory, "Heroic", "Prefixes", "New Vegas");
+  const game = path.join(prefix, "drive_c", "GOG Games", "Fallout New Vegas");
+  await fs.mkdir(game, { recursive: true });
+  if (user !== undefined)
+    await fs.mkdir(path.join(prefix, "drive_c", "users", user), { recursive: true });
+  await fs.writeFile(path.join(prefix, "system.reg"), "WINE REGISTRY Version 2\n");
+  return { prefix, game };
+}
+
+test("a game installed inside a Wine prefix uses that prefix's account for this user", async () => {
+  const { prefix, game } = await winePrefix(os.userInfo().username);
+  expect(getGameUserPath("selected", { path: game, store: "gog" }, "documents", "My Games")).toBe(
+    path.join(prefix, "drive_c", "users", os.userInfo().username, "Documents", "My Games"),
+  );
+});
+
+test("a Wine prefix without this user's account fails closed", async () => {
+  const { game } = await winePrefix(undefined);
+  expect(() => getGameUserPath("selected", { path: game, store: "gog" }, "documents")).toThrow(
+    MissingInterpreter,
+  );
+});
+
+test("a Steam game never falls back to a containing Wine prefix", async () => {
+  const { game } = await winePrefix(os.userInfo().username);
+  expect(() => getGameUserPath("selected", { path: game, store: "steam" }, "documents")).toThrow(
+    MissingInterpreter,
+  );
+  expect(fixture.scans).not.toHaveBeenCalled();
+});
+
 test("a native Linux executable retains its host Documents directory", () => {
   expect(
     getGameUserPath(

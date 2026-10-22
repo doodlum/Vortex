@@ -432,7 +432,7 @@ test("folder actions follow the current prefix, retaining Windows and native roo
     ),
   );
   discovery.store = "gog";
-  expect(() => folders.settingsPath(game)).toThrow("Proton prefix is unavailable");
+  expect(() => folders.settingsPath(game)).toThrow("Wine prefix is unavailable");
   Object.assign(discovery, { executable: "game.sh", store: "steam" });
   expect(folders.settingsPath(game)).toBe(
     path.join(fixture.documents, "My Games", "Skyrim Special Edition"),
@@ -448,11 +448,25 @@ test("plugins.txt and LOOT's local data follow the game's Proton prefix", async 
   await fs.mkdir(prefixLocal, { recursive: true });
   expect(plugins.pluginPath("skyrimse")).toBe(prefixLocal);
   discovery.store = "gog";
-  expect(() => plugins.pluginPath("skyrimse")).toThrow("Proton prefix is unavailable");
+  expect(() => plugins.pluginPath("skyrimse")).toThrow("Wine prefix is unavailable");
   vi.stubGlobal("process", { ...originalProcess, platform: "win32" });
   expect(plugins.pluginPath("skyrimse")).toBe(
     path.join(fixture.localAppData, "Skyrim Special Edition GOG"),
   );
+});
+
+test("plugins.txt follows the Wine prefix a non-Steam game is installed in", async () => {
+  api.getState().session = { gameMode: { known: [] } };
+  await plugins.initGameSupport(api);
+  const prefix = path.join(directory, "Heroic", "Prefixes", "Skyrim");
+  const user = path.join(prefix, "drive_c", "users", os.userInfo().username);
+  discovery.path = path.join(prefix, "drive_c", "GOG Games", "Skyrim Special Edition");
+  discovery.store = "gog";
+  await fs.mkdir(discovery.path, { recursive: true });
+  await fs.writeFile(path.join(prefix, "system.reg"), "WINE REGISTRY Version 2\n");
+  const local = path.join(user, "AppData", "Local", "Skyrim Special Edition GOG");
+  await fs.mkdir(local, { recursive: true });
+  expect(plugins.pluginPath("skyrimse")).toBe(local);
 });
 
 test.each([
@@ -618,7 +632,7 @@ test("public mod-path and folder-detail callbacks translate cached legacy roots"
 test("unavailable Proton ownership fails before unchanged setup creates host folders", async () => {
   const game = getGame(loadGame("game-sims3").id);
   const selected = { ...discovery, store: "gog" };
-  expect(() => game.setup(selected)).toThrow("Proton prefix is unavailable");
+  expect(() => game.setup(selected)).toThrow("Wine prefix is unavailable");
   await expect(fs.stat(fixture.documents)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
