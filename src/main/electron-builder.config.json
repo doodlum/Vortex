@@ -106,6 +106,7 @@
     "depends": [
       "libasound2t64 | libasound2",
       "libatspi2.0-0",
+      "libgbm1",
       "libgtk-3-0",
       "libnotify4",
       "libnss3",
@@ -121,6 +122,7 @@
     "depends": [
       "libasound.so.2()(64bit)",
       "libatspi.so.0()(64bit)",
+      "libgbm.so.1()(64bit)",
       "libgtk-3.so.0()(64bit)",
       "libnotify.so.4()(64bit)",
       "libnss3.so()(64bit)",

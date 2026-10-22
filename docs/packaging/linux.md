@@ -62,7 +62,7 @@ The pinned electron-builder's older bundled FPM fails with modern RPM build root
 so the driver uses this private tool for DEB, RPM and Arch.
 
 Their runtime dependencies are declared in `src/main/electron-builder.config.json`,
-replacing electron-builder's defaults: the DEB adds ALSA, the RPM names library
+replacing electron-builder's defaults: the DEB adds ALSA and Mesa GBM, the RPM names library
 capabilities such as `libasound.so.2()(64bit)` so Fedora and openSUSE package names
 both satisfy it, and the Arch package drops the removed `http-parser`. Their removal
 hook is `scripts/linux-after-remove.sh`; electron-builder's default removed the
