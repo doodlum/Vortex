@@ -179,7 +179,8 @@ excludes E2E and cannot replace the per-format checks above.
 Schedules and manual dispatch use the copy on the fork's default branch, so keep
 that copy identical to the one on `linux`. Each run merges upstream `master` into
 `linux`, builds the unsigned Windows installer, the DEB, RPM, Arch, AppImage and
-tar.gz packages, and (allowed to fail) Snap and Flatpak, then publishes them as a
+tar.gz packages, and Snap and Flatpak in separate jobs that are allowed to fail and
+upload their retained packaging logs when they do, then publishes the packages as a
 `nightly-*` pre-release and keeps the newest seven. A merge conflict stops the run;
 resolve it on `linux` by hand. `GITHUB_TOKEN` cannot push merges that change
 workflow files: add a `LINUX_SYNC_TOKEN` secret with contents and workflows write

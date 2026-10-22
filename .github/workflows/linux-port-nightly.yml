@@ -133,7 +133,15 @@ jobs:
 
   linux-sandboxed:
     needs: sync
-    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - format: snap
+            os: ubuntu-22.04
+          - format: flatpak
+            os: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
     continue-on-error: true
     steps:
       - uses: actions/checkout@v7
@@ -152,19 +160,33 @@ jobs:
       - name: Install packaging prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y libfontconfig1-dev flatpak flatpak-builder appstream
-          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-          flatpak install --user -y --noninteractive flathub org.freedesktop.Sdk//25.08 org.electronjs.Electron2.BaseApp//25.08
+          sudo apt-get install -y libfontconfig1-dev
+          if [ "${{ matrix.format }}" = flatpak ]; then
+            sudo apt-get install -y flatpak flatpak-builder appstream
+            flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+            flatpak install --user -y --noninteractive flathub org.freedesktop.Sdk//25.08 org.electronjs.Electron2.BaseApp//25.08
+          fi
 
       - uses: ./.github/actions/setup-pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Package Snap and Flatpak (unsigned)
+      - name: Package ${{ matrix.format }} (unsigned)
         run: |
           pnpm package:nosign
-          pnpm package:linux --formats snap,flatpak
+          pnpm package:linux --formats ${{ matrix.format }}
+
+      - name: Upload packaging logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-${{ matrix.format }}-logs
+          path: |
+            dist/linux-packages/*/result.json
+            dist/linux-packages/**/*.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Collect packages
         run: |
@@ -174,7 +196,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: linux-sandboxed
+          name: linux-${{ matrix.format }}
           path: out/*
           if-no-files-found: error
           retention-days: 2
@@ -196,8 +218,11 @@ jobs:
           sha=${{ needs.sync.outputs.sha }}
           upstream=${{ needs.sync.outputs.upstream }}
           tag="nightly-$(date -u +%Y%m%d)-${sha::8}-${upstream::8}"
-          cd assets && sha256sum * | tee SHA256SUMS && cd ..
-          gh release create "$tag" assets/* --repo "$GITHUB_REPOSITORY" --target "$sha" \
+          mkdir release
+          find assets -type f \( -name '*.exe' -o -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.xz' \
+            -o -name '*.AppImage' -o -name '*.tar.gz' -o -name '*.snap' -o -name '*.flatpak' \) -exec cp {} release/ \;
+          cd release && sha256sum * | tee SHA256SUMS && cd ..
+          gh release create "$tag" release/* --repo "$GITHUB_REPOSITORY" --target "$sha" \
             --prerelease --title "Linux port nightly $(date -u +%Y-%m-%d)" \
             --notes "Unsigned development build of the linux branch at $sha merged with upstream master at $upstream. Not an official Nexus Mods release."
 
