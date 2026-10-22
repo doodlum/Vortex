@@ -7,6 +7,9 @@ name: Linux Port Nightly
 # GITHUB_TOKEN cannot push merges that change workflow files. Set a LINUX_SYNC_TOKEN secret
 # (contents and workflows write) to push those too; without it each build job re-applies the
 # same upstream merge, so the nightly still builds current upstream.
+#
+# Every build carries one nightly version, <package.json version>-nightly.<date>.<run>, as
+# its app version, release tag (with a leading v) and published file names.
 
 on:
   schedule:
@@ -27,6 +30,7 @@ jobs:
     outputs:
       sha: ${{ steps.merge.outputs.sha }}
       upstream: ${{ steps.merge.outputs.upstream }}
+      version: ${{ steps.merge.outputs.version }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -40,15 +44,20 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch https://github.com/Nexus-Mods/Vortex.git master
-          echo "upstream=$(git rev-parse FETCH_HEAD)" >> "$GITHUB_OUTPUT"
+          upstream=$(git rev-parse FETCH_HEAD)
           base=$(git rev-parse HEAD)
           git merge --no-edit FETCH_HEAD
           if git push origin HEAD:linux; then
-            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            sha=$(git rev-parse HEAD)
           else
             echo "::warning::Could not push the upstream merge to linux; building it unpushed."
-            echo "sha=$base" >> "$GITHUB_OUTPUT"
+            sha=$base
           fi
+          version="$(node -p 'require("./package.json").version')-nightly.$(date -u +%Y%m%d).${{ github.run_number }}"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "upstream=$upstream" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Nightly version: $version"
 
   windows:
     needs: sync
@@ -74,12 +83,13 @@ jobs:
         id: package
         uses: ./.github/actions/package
         with:
+          version: ${{ needs.sync.outputs.version }}
           use-codesigning: "false"
 
       - uses: actions/upload-artifact@v7
         with:
           name: windows
-          path: ./dist/vortex-setup-*.*.*.exe
+          path: ./dist/vortex-setup-*.exe
           if-no-files-found: error
           retention-days: 2
 
@@ -107,6 +117,9 @@ jobs:
 
       - uses: ./.github/actions/setup-pnpm
 
+      - name: Set the nightly version
+        run: pnpm -F "@vortex/main" -F "@nexusmods/vortex-api" version ${{ needs.sync.outputs.version }} --no-git-tag-version --no-git-checks --allow-same-version
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -115,6 +128,17 @@ jobs:
           pnpm package:nosign
           node scripts/verify-packaged-asar.mjs --asar dist/linux-unpacked/resources/app.asar
           pnpm package:linux --formats deb,rpm,pacman,AppImage,tar.gz
+
+      - name: Upload packaging logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-logs
+          path: |
+            dist/linux-packages/*/result.json
+            dist/linux-packages/**/*.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Collect packages
         run: |
@@ -169,6 +193,9 @@ jobs:
 
       - uses: ./.github/actions/setup-pnpm
 
+      - name: Set the nightly version
+        run: pnpm -F "@vortex/main" -F "@nexusmods/vortex-api" version ${{ needs.sync.outputs.version }} --no-git-tag-version --no-git-checks --allow-same-version
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -201,8 +228,76 @@ jobs:
           if-no-files-found: error
           retention-days: 2
 
+  # Installs each native package on current distributions: dependency resolution, the
+  # root-owned 4755 sandbox helper, shared-library resolution, the desktop entry and removal.
+  # It does not launch the GUI.
+  distro-install:
+    needs: [sync, linux]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ubuntu:24.04
+            kind: deb
+          - image: ubuntu:26.04
+            kind: deb
+          - image: debian:13
+            kind: deb
+          - image: fedora:latest
+            kind: rpm
+          - image: opensuse/tumbleweed
+            kind: zypper
+          - image: archlinux:latest
+            kind: pacman
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.image }}
+    continue-on-error: true
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: linux
+          path: packages
+
+      - name: Install
+        shell: sh
+        run: |
+          set -eux
+          case "${{ matrix.kind }}" in
+            deb) apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y ./packages/*.deb ;;
+            rpm) dnf install -y findutils ./packages/*.rpm ;;
+            zypper) zypper --non-interactive install --allow-unsigned-rpm findutils ./packages/*.rpm ;;
+            pacman) pacman -Syu --noconfirm && pacman -U --noconfirm ./packages/*.pkg.tar.xz ;;
+          esac
+
+      - name: Check the installed application
+        shell: bash
+        run: |
+          set -euo pipefail
+          sandbox=$(find / -xdev -type f -name chrome-sandbox -path '*Vortex*' 2>/dev/null | head -1)
+          [ -n "$sandbox" ] || { echo "::error::No installed chrome-sandbox"; exit 1; }
+          root=$(dirname "$sandbox")
+          echo "Installed at $root"
+          [ "$(stat -c '%U %a' "$sandbox")" = "root 4755" ] || { echo "::error::chrome-sandbox is $(stat -c '%U %a' "$sandbox")"; exit 1; }
+          missing=$(find "$root" -type f \( -name vortex -o -name '*.node' -o -name '*.so' -o -name '*.so.*' \) \
+            -not -path '*musl*' -print0 |
+            xargs -0 -I{} sh -c 'ldd "{}" 2>/dev/null | grep "not found" | sed "s#^#{}: #"' | sort -u)
+          [ -z "$missing" ] || { echo "::error::Unresolved libraries"; echo "$missing"; exit 1; }
+          ls /usr/share/applications | grep -i vortex
+
+      - name: Remove
+        shell: sh
+        run: |
+          set -eux
+          case "${{ matrix.kind }}" in
+            deb) apt-get remove -y vortex ;;
+            rpm) dnf remove -y vortex ;;
+            zypper) zypper --non-interactive remove vortex ;;
+            pacman) pacman -R --noconfirm vortex ;;
+          esac
+          ! find / -xdev -type f -name chrome-sandbox -path '*Vortex*' 2>/dev/null | grep -q .
+
   release:
-    needs: [sync, windows, linux, linux-sandboxed]
+    needs: [sync, windows, linux, linux-sandboxed, distro-install]
     if: ${{ !cancelled() && needs.windows.result == 'success' && needs.linux.result == 'success' }}
     runs-on: ubuntu-22.04
     env:
@@ -217,17 +312,30 @@ jobs:
         run: |
           sha=${{ needs.sync.outputs.sha }}
           upstream=${{ needs.sync.outputs.upstream }}
-          tag="nightly-$(date -u +%Y%m%d)-${sha::8}-${upstream::8}"
+          version=${{ needs.sync.outputs.version }}
           mkdir release
-          find assets -type f \( -name '*.exe' -o -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.xz' \
-            -o -name '*.AppImage' -o -name '*.tar.gz' -o -name '*.snap' -o -name '*.flatpak' \) -exec cp {} release/ \;
+          # Name every package after the nightly version, keeping its platform suffix.
+          publish() {
+            found=$(find assets -type f -name "$1")
+            [ -z "$found" ] && return
+            [ "$(printf '%s\n' "$found" | wc -l)" -eq 1 ] || { echo "::error::Several $1 files"; exit 1; }
+            cp "$found" "release/vortex-$version-$2"
+          }
+          publish '*.exe' windows-x64.exe
+          publish '*.deb' amd64.deb
+          publish '*.rpm' x86_64.rpm
+          publish '*.pkg.tar.xz' x86_64.pkg.tar.xz
+          publish '*.AppImage' x86_64.AppImage
+          publish '*.tar.gz' linux-x64.tar.gz
+          publish '*.snap' amd64.snap
+          publish '*.flatpak' x86_64.flatpak
           cd release && sha256sum * | tee SHA256SUMS && cd ..
-          gh release create "$tag" release/* --repo "$GITHUB_REPOSITORY" --target "$sha" \
-            --prerelease --title "Linux port nightly $(date -u +%Y-%m-%d)" \
+          gh release create "v$version" release/* --repo "$GITHUB_REPOSITORY" --target "$sha" \
+            --prerelease --title "Linux port nightly $version" \
             --notes "Unsigned development build of the linux branch at $sha merged with upstream master at $upstream. Not an official Nexus Mods release."
 
       - name: Keep the newest seven nightlies
         run: |
           gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,createdAt \
-            --jq '[.[] | select(.tagName | startswith("nightly-"))] | sort_by(.createdAt) | reverse | .[7:] | .[].tagName' |
+            --jq '[.[] | select(.tagName | test("-nightly\\.") or startswith("nightly-"))] | sort_by(.createdAt) | reverse | .[7:] | .[].tagName' |
           while read -r tag; do gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag; done
