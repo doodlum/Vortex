@@ -3,13 +3,18 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { stringify, type KVBlock } from "@nexusmods/steam-kv-parser";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 
 import {
   readCustomProtonName,
   resolveDependencyTarget,
   resolveExactRuntimeName,
 } from "./protonMetadata";
+
+// Every test builds and resolves a real Steam tree in a temporary directory. Each takes well
+// under a second alone, but a full verify run shares the disk with every other suite, which
+// stretched one past the default 5 seconds on Windows.
+vi.setConfig({ testTimeout: 30_000 });
 
 const temporaryRoots: string[] = [];
 
