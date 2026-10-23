@@ -28,6 +28,7 @@ import { removeGroupRule, removeRule, setGroup } from "./actions/userlist";
 import { NAMESPACE } from "./statics";
 import { EdgeType, groupsPath } from "./types/ILoot";
 import type { ICycleEdge, ILootRef } from "./types/ILoot";
+import type { ILOOTPlugin } from "./types/ILOOTList";
 import { IPluginLoot, IPlugins, IPluginsLoot } from "./types/IPlugins";
 import { findInvalidPlugins } from "./util/findInvalidPlugins";
 import {
@@ -41,6 +42,7 @@ import { isGhosted } from "./util/ghost";
 import { missingGroupFixes } from "./util/groups";
 import { lootErrorReporter, LootPhase } from "./util/LootErrorReporter";
 import { toLootError } from "./util/lootErrors";
+import { referenceName } from "./util/lootReference";
 import { downloadMasterlist, downloadPrelude } from "./util/masterlist";
 import { listPaths, MetadataLists } from "./util/metadataLists";
 import { explainMasterNotLoaded } from "./util/missingMasters";
@@ -50,6 +52,16 @@ import toPluginId from "./util/toPluginId";
 const MAX_RESTARTS = 3;
 
 const basename = (filePath: string) => path.basename(filePath);
+
+function matchesPlugin(pattern: string, name: string): boolean {
+  if (!/[:\*?|]/.test(pattern)) return pattern.toLowerCase() === name.toLowerCase();
+  try {
+    return new RegExp(`^(?:${pattern})$`, "iu").test(name);
+  } catch {
+    log("warn", "invalid userlist plugin pattern in cycle recovery", { pattern });
+    return false;
+  }
+}
 
 /** How a sort attempt ended; only "sorted" changed the load order. */
 type SortOutcome =
@@ -1114,16 +1126,32 @@ class LootInterface {
       cycle.map(async (edge: ICycleEdge, idx: number) => {
         const next = cycle[(idx + 1) % cycle.length];
         if (userTypes.includes(edge.typeOfEdgeToNextVertex)) {
-          result.push({
-            id: `removerule:${edge.name}:${next.name}:${edge.typeOfEdgeToNextVertex}`,
-            text: t('Remove custom rule between "{{name}}" and "{{next}}"', {
-              replace: {
-                name: edge.name,
-                next: next.name,
-              },
-            }),
-            value: false,
-          });
+          const state = this.mExtensionApi.store.getState();
+          const type =
+            edge.typeOfEdgeToNextVertex === EdgeType.userRequirement ? "requires" : "after";
+          const list = type === "requires" ? "req" : "after";
+          const plugins: ILOOTPlugin[] = state["userlist"]?.plugins ?? [];
+          for (const plugin of plugins.filter((entry) => matchesPlugin(entry.name, next.name))) {
+            for (const reference of plugin[list] ?? []) {
+              if (referenceName(reference).toLowerCase() !== edge.name.toLowerCase()) continue;
+              const condition = typeof reference === "string" ? undefined : reference.condition;
+              result.push({
+                // Preserve the stored owner (which may be a regex) and the exact condition.
+                id: `removerule:${encodeURIComponent(JSON.stringify({ pluginId: plugin.name, reference, type }))}`,
+                text: condition
+                  ? t(
+                      'Remove custom rule between "{{name}}" and "{{next}}" (condition: {{condition}})',
+                      {
+                        replace: { name: edge.name, next: next.name, condition },
+                      },
+                    )
+                  : t('Remove custom rule between "{{name}}" and "{{next}}"', {
+                      replace: { name: edge.name, next: next.name },
+                    }),
+                value: false,
+              });
+            }
+          }
         } else if (groupTypes.includes(edge.typeOfEdgeToNextVertex)) {
           const state = this.mExtensionApi.store.getState();
           const edgeGroup = this.getGroup(state, edge.name);
@@ -1192,9 +1220,8 @@ class LootInterface {
 
     const args = key.split(":");
     if (args[0] === "removerule") {
-      api.store.dispatch(
-        removeRule(args[2], args[1], args[3] === EdgeType.userRequirement ? "requires" : "after"),
-      );
+      const { pluginId, reference, type } = JSON.parse(decodeURIComponent(args[1]));
+      api.store.dispatch(removeRule(pluginId, reference, type));
     } else if (args[0] === "unassign") {
       api.store.dispatch(setGroup(args[1], undefined));
     } else if (args[0] === "resetgroups") {

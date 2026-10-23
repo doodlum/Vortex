@@ -8,6 +8,7 @@ import {
   setSafe,
 } from "../../../util/storeHelper";
 import * as actions from "../actions/userlist";
+import { referencesMatch } from "../util/lootReference";
 
 type RuleType = "after" | "requires" | "incompatible";
 
@@ -43,14 +44,26 @@ const userlistReducer: IReducerSpec = {
       }
       const list = listForType(payload.type);
       if (existing !== -1) {
-        const statePath = ["plugins", existing, list];
-        return addUniqueSafe(state, statePath, payload.reference);
+        const rules = state.plugins[existing][list] ?? [];
+        return rules.some((reference) => referencesMatch(reference, payload.reference))
+          ? state
+          : {
+              ...state,
+              plugins: state.plugins.map((plugin, index) =>
+                index === existing ? { ...plugin, [list]: [...rules, payload.reference] } : plugin,
+              ),
+            };
       } else {
-        const res = pushSafe(state, ["plugins"], {
-          name: payload.pluginId,
-          [list]: [payload.reference],
-        });
-        return res;
+        return {
+          ...state,
+          plugins: [
+            ...(state.plugins ?? []),
+            {
+              name: payload.pluginId,
+              [list]: [payload.reference],
+            },
+          ],
+        };
       }
     },
     [actions.removeRule as any]: (state, payload) => {
@@ -62,11 +75,18 @@ const userlistReducer: IReducerSpec = {
       }
       const list = listForType(payload.type);
       if (existing !== -1) {
-        return removeValueIf(
-          state,
-          ["plugins", existing, list],
-          (ref) => ref.toUpperCase() === payload.reference.toUpperCase(),
+        const rules = state.plugins[existing][list] ?? [];
+        const retained = rules.filter(
+          (reference) => !referencesMatch(reference, payload.reference),
         );
+        return retained.length === rules.length
+          ? state
+          : {
+              ...state,
+              plugins: state.plugins.map((plugin, index) =>
+                index === existing ? { ...plugin, [list]: retained } : plugin,
+              ),
+            };
       } else {
         return state;
       }
