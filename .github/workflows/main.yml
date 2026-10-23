@@ -114,6 +114,9 @@ jobs:
           echo "Electron native cache hit: ${{ steps.electron-native-cache.outputs.cache-hit }}"
           pnpm --filter @vortex/main exec electron-rebuild
 
+      - name: Install Electron binary
+        run: node scripts/ensure-electron.mjs
+
       - name: Build
         run: pnpm run build
 
