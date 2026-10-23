@@ -71,6 +71,7 @@ import type {
   IPersistor,
   IReducerSpec,
   IRunOptions,
+  LaunchRunner,
   IRunParameters,
   ISaveOptions,
   StateChangeCallback,
@@ -642,6 +643,7 @@ class ContextProxyHandler implements ProxyHandler<any> {
       registerMerge: undefined,
       registerInterpreter: undefined,
       registerStartHook: undefined,
+      registerLaunchRunner: undefined,
       registerMigration: undefined,
       registerToolVariables: undefined,
       registerLoadOrderPage: undefined,
@@ -675,6 +677,12 @@ interface IStartHook {
   priority: number;
   id: string;
   hook: (input: IRunParameters) => PromiseBB<IRunParameters>;
+}
+
+interface ILaunchRunnerEntry {
+  priority: number;
+  id: string;
+  runner: LaunchRunner;
 }
 
 function convertMD5Result(input: ILookupResult): IModLookupResult {
@@ -734,6 +742,7 @@ class ExtensionManager {
     [ext: string]: (input: IRunParameters) => IRunParameters;
   };
   private mStartHooks: IStartHook[];
+  private mLaunchRunners: ILaunchRunnerEntry[];
   private mToolParameterCBs: ToolParameterCB[];
   private mLoadingCallbacks: Array<(name: string, idx: number) => void> = [];
   private mProgrammaticMetaServers: { [id: string]: modmetaT.IServer } = {};
@@ -782,6 +791,7 @@ class ExtensionManager {
 
     this.mInterpreters = {};
     this.mStartHooks = [];
+    this.mLaunchRunners = [];
     this.mToolParameterCBs = [];
     this.mApi = {
       showErrorNotification: this.showErrorBox,
@@ -1228,11 +1238,15 @@ class ExtensionManager {
         this.mStartHooks.push({ priority, id, hook });
       },
     );
+    this.apply("registerLaunchRunner", (priority: number, id: string, runner: LaunchRunner) => {
+      this.mLaunchRunners.push({ priority, id, runner });
+    });
     this.apply("registerToolVariables", (func: ToolParameterCB) => {
       this.mToolParameterCBs.push(func);
     });
 
     this.mStartHooks.sort((lhs, rhs) => lhs.priority - rhs.priority);
+    this.mLaunchRunners.sort((lhs, rhs) => lhs.priority - rhs.priority);
 
     return reducers;
   }
@@ -2356,6 +2370,35 @@ class ExtensionManager {
     return this.runExecutableDirect(executable, args, options);
   };
 
+  /**
+   * Start a program through the first registered launch runner that takes it, mirroring what
+   * the spawn path reports: `onSpawned` with the pid, then `onExit` with the exit code. A
+   * non-zero code rejects only for `expectSuccess`, as for a spawned process. `undefined` when
+   * no runner takes the program.
+   */
+  private runThroughLaunchRunner(params: IRunParameters, cwd: string): PromiseBB<void> | undefined {
+    for (const entry of this.mLaunchRunners) {
+      const started = entry.runner({ ...params, cwd });
+      if (started === undefined) {
+        continue;
+      }
+      log("info", "program started by launch runner", {
+        runner: entry.id,
+        executable: params.executable,
+      });
+      return PromiseBB.resolve(started).then(({ pid, exited }) => {
+        params.options.onSpawned?.(pid);
+        return PromiseBB.resolve(exited).then(({ code }) => {
+          params.options.onExit?.(code, null);
+          if (params.options.expectSuccess && code !== 0) {
+            throw new ProcessCanceled(`${path.basename(params.executable)} exited with ${code}`);
+          }
+        });
+      });
+    }
+    return undefined;
+  }
+
   private runExecutableDirect = (
     executable: string,
     args: string[],
@@ -2417,173 +2460,181 @@ class ExtensionManager {
           }
           return PromiseBB.resolve();
         })
-        .then(
-          () =>
-            new PromiseBB<void>((resolve, reject) => {
-              const runExe = options.shell ? `"${executable}"` : executable;
-              const spawnOptions: SpawnOptions = {
-                cwd,
-                env,
-                detached: options.detach !== undefined ? options.detach : true,
-                shell: options.shell ?? false,
+        .then(() => {
+          // A registered launch runner (a virtual file system, say) may start the program
+          // itself; it reports the pid and exit through the same callbacks a spawn does.
+          const routed = this.runThroughLaunchRunner(
+            { executable, args, options: { ...options, env } },
+            cwd,
+          );
+          if (routed !== undefined) {
+            return routed;
+          }
+          return new PromiseBB<void>((resolve, reject) => {
+            const runExe = options.shell ? `"${executable}"` : executable;
+            const spawnOptions: SpawnOptions = {
+              cwd,
+              env,
+              detached: options.detach !== undefined ? options.detach : true,
+              shell: options.shell ?? false,
+            };
+
+            try {
+              const runParams = {
+                executable,
+                args,
+                options: { ...options, env },
               };
+              const vars = this.mToolParameterCBs.reduce((prev, cb) => {
+                return { ...prev, ...cb(runParams) };
+              }, {});
 
-              try {
-                const runParams = {
-                  executable,
-                  args,
-                  options: { ...options, env },
-                };
-                const vars = this.mToolParameterCBs.reduce((prev, cb) => {
-                  return { ...prev, ...cb(runParams) };
-                }, {});
+              args = args.map((arg) => applyVariables(arg, vars));
 
-                args = args.map((arg) => applyVariables(arg, vars));
+              const child = childProcess.spawn(
+                runExe,
+                options.shell ||
+                  (process.platform === "linux" &&
+                    (executable === "flatpak" ||
+                      (executable === "flatpak-spawn" && args[0] === "--host")))
+                  ? args
+                  : args.map((arg) => arg.replace(/"/g, "")),
+                spawnOptions,
+              );
+              if (truthy(child["exitCode"])) {
+                // brilliant, apparently there is no way for me to get at the stdout/stderr when running
+                // through a shell if starting the application fails immediately
+                return reject(new Error(`Failed to start (exit code ${child["exitCode"]})`));
+              }
+              if (options.onSpawned !== undefined) {
+                options.onSpawned(child.pid);
+              }
 
-                const child = childProcess.spawn(
-                  runExe,
-                  options.shell ||
-                    (process.platform === "linux" &&
-                      (executable === "flatpak" ||
-                        (executable === "flatpak-spawn" && args[0] === "--host")))
-                    ? args
-                    : args.map((arg) => arg.replace(/"/g, "")),
-                  spawnOptions,
-                );
-                if (truthy(child["exitCode"])) {
-                  // brilliant, apparently there is no way for me to get at the stdout/stderr when running
-                  // through a shell if starting the application fails immediately
-                  return reject(new Error(`Failed to start (exit code ${child["exitCode"]})`));
-                }
-                if (options.onSpawned !== undefined) {
-                  options.onSpawned(child.pid);
-                }
+              if (options.detach) {
+                child.unref();
+              }
 
-                if (options.detach) {
-                  child.unref();
-                }
-
-                let stdOut: string;
-                let errOut: string;
-                child
-                  .on("error", (err) => {
-                    reject(err);
-                  })
-                  .on("close", (code, signal) => {
-                    options.onExit?.(code, signal);
-                    const game = activeGameId(this.mApi.store.getState());
-                    if (code === null) {
-                      log("warn", "child process terminated by signal", {
-                        signal,
-                      });
-                      if (options.expectSuccess) {
-                        const err = new ProcessCanceled(
-                          `Process terminated by signal ${signal ?? "unknown"}`,
-                        );
-                        err["signal"] = signal;
-                        reject(err);
-                        return;
-                      }
-                      resolve();
+              let stdOut: string;
+              let errOut: string;
+              child
+                .on("error", (err) => {
+                  reject(err);
+                })
+                .on("close", (code, signal) => {
+                  options.onExit?.(code, signal);
+                  const game = activeGameId(this.mApi.store.getState());
+                  if (code === null) {
+                    log("warn", "child process terminated by signal", {
+                      signal,
+                    });
+                    if (options.expectSuccess) {
+                      const err = new ProcessCanceled(
+                        `Process terminated by signal ${signal ?? "unknown"}`,
+                      );
+                      err["signal"] = signal;
+                      reject(err);
                       return;
                     }
-                    if (game === "fallout3" && code === 0xc0000135) {
-                      // 0xC0000135 means that a dll couldn't be found.
-                      // In the context of FO3 it's commonly xlive or other redistribs are
-                      //  not installed.
-                      return reject(new MissingDependency());
-                    } else if (code === 0xe0434352) {
-                      // A .net error, unfortunately we can't now if/how the actual exception
-                      // text has been reported
-                      log("warn", ".NET error", { stdOut, errOut });
-                      if (game === "stardewvalley") {
-                        // In the case of SDV the interesting information seems to get printed to stdout
-                        return reject(new ThirdPartyError(stdOut || errOut));
-                      } else if (errOut) {
-                        return reject(new ThirdPartyError(errOut));
-                      } else {
-                        return reject(new ProcessCanceled(".NET error"));
-                      }
-                    } else if (code === 0xc000026b) {
-                      return reject(new ProcessCanceled("Windows shutting down"));
-                    } else if (code !== 0) {
-                      // TODO: the child process returns an exit code of 53 for SSE and
-                      // FO4, and an exit code of 1 for Skyrim. We don't know why but it
-                      // doesn't seem to affect anything
-                      log("warn", "child process exited with code: " + code.toString(16), {});
-                      if (errOut !== undefined) {
-                        log("warn", "child output", errOut.trim());
-                      }
-                      if (options.expectSuccess) {
-                        let lastLine = "<No output>";
-
-                        if (errOut !== undefined) {
-                          const lines = errOut.trim().split("\n");
-                          lastLine =
-                            lines.length > ERROR_OUTPUT_CUTOFF
-                              ? lines[lines.length - 1]
-                              : lines.join("\n");
-                        }
-
-                        // Sanitize the error message to prevent crashpad issues
-                        const sanitizedExecutable = executable.replace(/[^\x20-\x7E]/g, "?");
-                        const sanitizedLastLine = lastLine
-                          .replace(/[^\x20-\x7E]/g, "?")
-                          .substring(0, 500);
-                        const exitCodeHex = code.toString(16);
-
-                        const errorMessage = `Failed to run "${sanitizedExecutable}": "${sanitizedLastLine} (${exitCodeHex})"`;
-                        const err = new Error(errorMessage);
-                        err["exitCode"] = code;
-                        reject(err);
-                        return;
-                      }
-                    }
                     resolve();
-                  });
-                if (child.stderr !== undefined) {
-                  child.stderr.on("data", (chunk: Buffer) => {
-                    if (errOut === undefined) {
-                      errOut = "";
+                    return;
+                  }
+                  if (game === "fallout3" && code === 0xc0000135) {
+                    // 0xC0000135 means that a dll couldn't be found.
+                    // In the context of FO3 it's commonly xlive or other redistribs are
+                    //  not installed.
+                    return reject(new MissingDependency());
+                  } else if (code === 0xe0434352) {
+                    // A .net error, unfortunately we can't now if/how the actual exception
+                    // text has been reported
+                    log("warn", ".NET error", { stdOut, errOut });
+                    if (game === "stardewvalley") {
+                      // In the case of SDV the interesting information seems to get printed to stdout
+                      return reject(new ThirdPartyError(stdOut || errOut));
+                    } else if (errOut) {
+                      return reject(new ThirdPartyError(errOut));
+                    } else {
+                      return reject(new ProcessCanceled(".NET error"));
                     }
-                    try {
-                      errOut += chunk.toString();
-                    } catch (err) {
-                      log("warn", "error output from external process couldn't be processed", {
-                        executable,
-                      });
+                  } else if (code === 0xc000026b) {
+                    return reject(new ProcessCanceled("Windows shutting down"));
+                  } else if (code !== 0) {
+                    // TODO: the child process returns an exit code of 53 for SSE and
+                    // FO4, and an exit code of 1 for Skyrim. We don't know why but it
+                    // doesn't seem to affect anything
+                    log("warn", "child process exited with code: " + code.toString(16), {});
+                    if (errOut !== undefined) {
+                      log("warn", "child output", errOut.trim());
                     }
-                  });
-                }
-                if (child.stdout !== undefined) {
-                  child.stdout.on("data", (chunk: Buffer) => {
-                    if (stdOut === undefined) {
-                      stdOut = "";
-                    }
-                    try {
-                      stdOut += chunk.toString();
-                    } catch (err) {
-                      log("warn", "output from external process couldn't be processed", {
-                        executable,
-                      });
-                    }
-                  });
-                }
-              } catch (err) {
-                const code = getErrorCode(err);
-                if (code === "EINVAL") {
-                  err["attachLogOnReport"] = true;
-                  log("error", "Invalid spawn parameters", {
-                    runExe,
-                    args,
-                    options: JSON.stringify(options),
-                  });
-                }
+                    if (options.expectSuccess) {
+                      let lastLine = "<No output>";
 
-                return reject(err);
+                      if (errOut !== undefined) {
+                        const lines = errOut.trim().split("\n");
+                        lastLine =
+                          lines.length > ERROR_OUTPUT_CUTOFF
+                            ? lines[lines.length - 1]
+                            : lines.join("\n");
+                      }
+
+                      // Sanitize the error message to prevent crashpad issues
+                      const sanitizedExecutable = executable.replace(/[^\x20-\x7E]/g, "?");
+                      const sanitizedLastLine = lastLine
+                        .replace(/[^\x20-\x7E]/g, "?")
+                        .substring(0, 500);
+                      const exitCodeHex = code.toString(16);
+
+                      const errorMessage = `Failed to run "${sanitizedExecutable}": "${sanitizedLastLine} (${exitCodeHex})"`;
+                      const err = new Error(errorMessage);
+                      err["exitCode"] = code;
+                      reject(err);
+                      return;
+                    }
+                  }
+                  resolve();
+                });
+              if (child.stderr !== undefined) {
+                child.stderr.on("data", (chunk: Buffer) => {
+                  if (errOut === undefined) {
+                    errOut = "";
+                  }
+                  try {
+                    errOut += chunk.toString();
+                  } catch (err) {
+                    log("warn", "error output from external process couldn't be processed", {
+                      executable,
+                    });
+                  }
+                });
               }
-            }),
-        )
+              if (child.stdout !== undefined) {
+                child.stdout.on("data", (chunk: Buffer) => {
+                  if (stdOut === undefined) {
+                    stdOut = "";
+                  }
+                  try {
+                    stdOut += chunk.toString();
+                  } catch (err) {
+                    log("warn", "output from external process couldn't be processed", {
+                      executable,
+                    });
+                  }
+                });
+              }
+            } catch (err) {
+              const code = getErrorCode(err);
+              if (code === "EINVAL") {
+                err["attachLogOnReport"] = true;
+                log("error", "Invalid spawn parameters", {
+                  runExe,
+                  args,
+                  options: JSON.stringify(options),
+                });
+              }
+
+              return reject(err);
+            }
+          });
+        })
         .catch(ProcessCanceled, () => null)
         .catch({ code: "EACCES" }, (err) => {
           // Elevated execution is only supported on Windows
@@ -3130,6 +3181,7 @@ class ExtensionManager {
       symlink_activator_elevate: () => require("./extensions/symlink_activator_elevate/index.ts"),
       test_runner: () => require("./extensions/test_runner/index.ts"),
       tool_variables_base: () => require("./extensions/tool_variables_base/index.ts"),
+      vfs_deployment: () => require("./extensions/vfs_deployment/index.ts"),
       updater: () => require("./extensions/updater/index.ts"),
     };
 

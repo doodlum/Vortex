@@ -10,6 +10,7 @@ import type {
 import BlacklistSet from "../extensions/mod_management/util/BlacklistSet";
 import moveInit from "../extensions/move_activator";
 import symlinkInit from "../extensions/symlink_activator";
+import vfsInit from "../extensions/vfs_deployment";
 import type { IGame } from "../types/IGame";
 import type { Normalize } from "../util/getNormalizeFunc";
 import {
@@ -26,6 +27,7 @@ const METHOD_INIT = {
   hardlink: hardlinkInit,
   symlink: symlinkInit,
   move: moveInit,
+  vfs: vfsInit,
 } as const;
 
 export type DeploymentMethodName = keyof typeof METHOD_INIT;

@@ -480,6 +480,22 @@ export interface IRunParameters {
 }
 
 /**
+ * A program a launch runner started: its process id, and how the whole launch ended.
+ */
+export interface ILaunchRunnerStarted {
+  pid?: number;
+  exited: PromiseLike<{ code: number | null }>;
+}
+
+/**
+ * Starts a program in place of a plain spawn, after the start hooks have run, or returns
+ * `undefined` to leave it to the next runner and finally to the spawn.
+ */
+export type LaunchRunner = (
+  call: IRunParameters & { cwd: string },
+) => PromiseLike<ILaunchRunnerStarted> | undefined;
+
+/**
  * callback to be used to determine list of variables for the tool command line
  */
 export type ToolParameterCB = (options: IRunParameters) => {
@@ -1449,6 +1465,16 @@ export interface IExtensionContext {
     id: string,
     hook: (call: IRunParameters) => PromiseLike<IRunParameters>,
   ) => void;
+
+  /**
+   * register a launch runner: it may start a program that runExecutable would otherwise spawn
+   * (after interpreters and start hooks), for example inside a virtual file system session.
+   * Runners are tried in ascending priority; the first that returns a started launch owns it.
+   * @param {number} priority order relative to other runners
+   * @param {string} id identifier for logging
+   * @param {LaunchRunner} runner returns the started launch, or undefined to pass
+   */
+  registerLaunchRunner: (priority: number, id: string, runner: LaunchRunner) => void;
 
   /**
    * register a migration step. This migration is always called when the loaded extension has

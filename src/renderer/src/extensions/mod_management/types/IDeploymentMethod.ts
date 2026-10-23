@@ -153,6 +153,14 @@ export interface IDeploymentMethod {
   readonly noRedundancy?: boolean;
 
   /**
+   * if true, this method writes nothing into deployment targets: programs see the deployment
+   * through a virtual file system. Its manifests are kept in the staging folder
+   * (`vortex.vfs.deployment[.type].json`), never in the game folder, so they never collide with
+   * the manifests a linking method (or an older Vortex) left in a target.
+   */
+  readonly virtual?: boolean;
+
+  /**
    * returns more extensive description/explanation of the activator.
    *
    * @type {string}

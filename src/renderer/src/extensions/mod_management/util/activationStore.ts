@@ -34,9 +34,28 @@ const formats: { [version: number]: ManifestFormat } = {
   1: format_1,
 };
 
-/** A mod type's manifest in the deployment target and its two backups in the staging folder. */
-function manifestPaths(deployPath: string, stagingPath: string, modType: string) {
+/**
+ * A mod type's manifest in the deployment target and its two backups in the staging folder.
+ *
+ * A virtual method (`IDeploymentMethod.virtual`) writes nothing into the target, so its
+ * manifest and both backups live in the staging folder under their own names. A linking
+ * method's manifest (or one an older Vortex left) is never mistaken for a virtual one, and the
+ * other way round.
+ */
+function manifestPaths(
+  deployPath: string,
+  stagingPath: string,
+  modType: string,
+  virtual: boolean = false,
+) {
   const typeTag = modType !== undefined && modType.length > 0 ? modType + "." : "";
+  if (virtual) {
+    return {
+      manifestPath: path.join(stagingPath, `vortex.vfs.deployment.${typeTag}json`),
+      backupPath: path.join(stagingPath, `vortex.vfs.deployment.${typeTag}backup.json`),
+      binaryBackupPath: path.join(stagingPath, `vortex.vfs.deployment.${typeTag}msgpack`),
+    };
+  }
   const fileName = `vortex.deployment.${typeTag}json`;
   return {
     manifestPath: path.join(deployPath, fileName),
@@ -480,7 +499,12 @@ export function getManifest(
       return Promise.resolve(emptyManifest(instanceId));
     }
 
-    return getManifestImpl(api, instanceId, manifestPaths(deployPath, stagingPath, modType));
+    const virtual = getCurrentActivator(state, gameId, true)?.virtual === true;
+    return getManifestImpl(
+      api,
+      instanceId,
+      manifestPaths(deployPath, stagingPath, modType, virtual),
+    );
   } catch (err) {
     return Promise.reject(err);
   }
@@ -499,36 +523,41 @@ export function loadActivation(
   }
   const state: IState = api.store.getState();
   const instanceId = state.app.instanceId;
-  return getManifestImpl(api, instanceId, manifestPaths(deployPath, stagingPath, modType)).then(
-    (tagObject) => {
-      let result: Promise<IDeployedFile[]>;
-      if (tagObject.instance !== instanceId && tagObject.files.length > 0) {
-        let safe = true;
-        if (tagObject.deploymentMethod !== undefined) {
-          const previousActivator = getActivator(tagObject.deploymentMethod);
-          if (previousActivator !== undefined && !previousActivator.isFallbackPurgeSafe) {
-            safe = false;
-          }
+  return getManifestImpl(
+    api,
+    instanceId,
+    manifestPaths(deployPath, stagingPath, modType, activator?.virtual === true),
+  ).then((tagObject) => {
+    let result: Promise<IDeployedFile[]>;
+    if (activator?.virtual === true && tagObject.instance !== instanceId) {
+      // Another instance's virtual deployment put nothing on disk: start from nothing.
+      result = Promise.resolve([]);
+    } else if (tagObject.instance !== instanceId && tagObject.files.length > 0) {
+      let safe = true;
+      if (tagObject.deploymentMethod !== undefined) {
+        const previousActivator = getActivator(tagObject.deploymentMethod);
+        if (previousActivator !== undefined && !previousActivator.isFallbackPurgeSafe) {
+          safe = false;
         }
-        result = queryPurge(api, deployPath, tagObject.files, safe)
-          .then(() =>
-            saveActivation(
-              gameId,
-              modType,
-              state.app.instanceId,
-              deployPath,
-              stagingPath,
-              [],
-              activator.id,
-            ),
-          )
-          .then(() => Promise.resolve([]));
-      } else {
-        result = Promise.resolve(tagObject.files);
       }
-      return result;
-    },
-  );
+      result = queryPurge(api, deployPath, tagObject.files, safe)
+        .then(() =>
+          saveActivation(
+            gameId,
+            modType,
+            state.app.instanceId,
+            deployPath,
+            stagingPath,
+            [],
+            activator.id,
+          ),
+        )
+        .then(() => Promise.resolve([]));
+    } else {
+      result = Promise.resolve(tagObject.files);
+    }
+    return result;
+  });
 }
 
 export function saveActivation(
@@ -566,6 +595,7 @@ export function saveActivation(
     gamePath,
     stagingPath,
     modType,
+    activatorId !== undefined && getActivator(activatorId)?.virtual === true,
   );
 
   if (activation.length > 0) {
