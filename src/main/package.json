@@ -78,6 +78,8 @@
           "{projectRoot}/build/main.cjs.map",
           "{projectRoot}/build/bsdiff-worker.cjs",
           "{projectRoot}/build/bsdiff-worker.cjs.map",
+          "{projectRoot}/build/hash-worker.cjs",
+          "{projectRoot}/build/hash-worker.cjs.map",
           "{projectRoot}/build/hdiff.wasm"
         ]
       },

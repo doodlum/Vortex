@@ -1,5 +1,5 @@
 /**
- * Verify that the packaged app.asar contains the same dependency versions as
+ * Verify that the packaged app.asar contains the deployed hash worker and the same dependency versions as
  * the deploy tree electron-builder packaged from.
  *
  * Exists because electron-builder 26's node-module collector shipped an asar
@@ -85,6 +85,30 @@ function asarVersion(rel) {
   }
 }
 
+// Cache restoration must not silently omit the standalone hashing entry point.
+const deployedBuild = path.join(path.dirname(deployRoot), "build");
+let workerFailures = 0;
+for (const entry of ["hash-worker.cjs", "hash-worker.cjs.map"]) {
+  const deployed = path.join(deployedBuild, entry);
+  if (!fs.existsSync(deployed)) {
+    workerFailures += 1;
+    console.error("MISSING deployed " + entry);
+    continue;
+  }
+  let packaged;
+  try {
+    packaged = asar.extractFile(asarPath, entry);
+  } catch {
+    workerFailures += 1;
+    console.error("MISSING packaged " + entry);
+    continue;
+  }
+  if (!fs.readFileSync(deployed).equals(packaged)) {
+    workerFailures += 1;
+    console.error("MISMATCH " + entry + ": package differs from deployed build");
+  }
+}
+
 const nested = nestedPackages(deployRoot);
 let mismatches = 0;
 for (const entry of nested) {
@@ -99,9 +123,12 @@ for (const entry of nested) {
 }
 
 console.log(`checked ${nested.length} nested packages, ${mismatches} version mismatch(es)`);
+if (workerFailures > 0) {
+  console.error("the packaged hash worker does not match the deployed build");
+}
 if (mismatches > 0) {
   console.error(
     "the packaged asar does not match the deploy tree - the module collector mangled versions",
   );
-  process.exit(1);
 }
+if (mismatches > 0 || workerFailures > 0) process.exit(1);
