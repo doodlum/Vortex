@@ -32,16 +32,6 @@ export interface IInstalledProton {
   compatibilityName?: string;
 }
 
-/**
- * The Proton Vortex uses unless a profile picks one: Steam's own default for Windows games,
- * which Steam installs and updates as app 1493710.
- */
-export const RECOMMENDED_PROTON = {
-  configName: "proton_experimental",
-  steamAppId: "1493710",
-  label: "Proton Experimental",
-} as const;
-
 /** Convert an installed Proton folder to the compatibility-tool key Steam stores for a game. */
 export function protonConfigName(tool: IInstalledProton): string | undefined {
   if (tool.source === "custom") return tool.compatibilityName;
@@ -247,6 +237,83 @@ export async function getConfiguredProtonName(
   }
 }
 
+/** Where Vortex learned which Proton Steam runs a game with. */
+export type SteamProtonSource = "game" | "prefix" | "default" | "newest";
+
+export interface ISteamProtonChoice {
+  /** Steam's compatibility-tool key, such as `proton_experimental` or `GE-Proton10-4`. */
+  name?: string;
+  /** The installed tool, when it is installed. */
+  tool?: IInstalledProton;
+  source: SteamProtonSource;
+}
+
+export interface ISteamProtonReaders {
+  configured: (steamPath: string, appId: string) => Promise<string | undefined>;
+  read: (file: string) => Promise<string>;
+}
+
+function findProtonTool(tools: IInstalledProton[], name: string): IInstalledProton | undefined {
+  return tools.find((tool) => protonConfigName(tool) === name || tool.name === name);
+}
+
+/**
+ * The Proton that last ran a game's prefix, which Steam records in `compatdata/<appid>/config_info`.
+ * It reflects the version Steam chose itself, including Valve's per-game choices, when the game
+ * has no Steam setting of its own. Adapted from Amethyst Mod Manager (GPL-3.0),
+ * `find_proton_for_game` in src/Utils/launchers/steam.py.
+ */
+async function prefixProtonTool(
+  compatDataPath: string,
+  tools: IInstalledProton[],
+  read: ISteamProtonReaders["read"],
+): Promise<IInstalledProton | undefined> {
+  const lines = (await read(path.join(compatDataPath, "config_info")).catch(() => "")).split("\n");
+  for (const line of lines) {
+    const exact = tools.find((tool) => line.startsWith(tool.path + "/"));
+    if (exact !== undefined) return exact;
+    const folder = /\/(?:steamapps\/common|compatibilitytools\.d)\/([^/]+)\//.exec(line)?.[1];
+    const named = tools.find((tool) => path.basename(tool.path) === folder);
+    if (named !== undefined) return named;
+  }
+  return undefined;
+}
+
+/**
+ * The Proton Steam runs a game with, read from Steam's own files so that it works with a stock
+ * Steam client: the game's own setting, then the version that last ran its prefix, then Steam's
+ * default for Windows games, then the newest installed (Experimental before stable releases).
+ * Vortex never changes it; the user picks the version in Steam.
+ */
+export async function resolveSteamProton(
+  steamPath: string,
+  appId: string,
+  compatDataPath: string | undefined,
+  tools: IInstalledProton[],
+  readers: ISteamProtonReaders = {
+    configured: getConfiguredProtonName,
+    read: (file) => fsPromises.readFile(file, "utf8"),
+  },
+): Promise<ISteamProtonChoice> {
+  const perGame = await readers.configured(steamPath, appId);
+  if (perGame) return { name: perGame, tool: findProtonTool(tools, perGame), source: "game" };
+  if (compatDataPath !== undefined) {
+    const used = await prefixProtonTool(compatDataPath, tools, readers.read);
+    if (used !== undefined) return { name: protonConfigName(used), tool: used, source: "prefix" };
+  }
+  const steamDefault = await readers.configured(steamPath, "0");
+  if (steamDefault)
+    return { name: steamDefault, tool: findProtonTool(tools, steamDefault), source: "default" };
+  const official = tools.filter((tool) => tool.source === "steam");
+  const newest =
+    official.find((tool) => protonConfigName(tool) === "proton_experimental") ??
+    official.filter((tool) => /^Proton \d+(?:\.\d+)?$/i.test(tool.name)).at(-1);
+  return {
+    name: newest === undefined ? undefined : protonConfigName(newest),
+    tool: newest,
+    source: "newest",
+  };
+}
 /**
  * Find the default Proton version (fallback)
  */
@@ -341,22 +408,9 @@ export async function getProtonInfo(
 
   const compatDataPath = getCompatDataPath(steamAppsPath, appId);
 
-  // Try to get configured Proton, fall back to latest
-  let protonPath: string | undefined = configuredPath;
-
-  if (!protonPath && !confProtonName) {
-    // Game does not have Proton version override,
-    // or we couldn't find the override version
-    const defProtonName = await getDefaultProtonName(steamBasePath);
-    protonPath = await resolveProtonPath(steamBasePath, steamLibraryPaths, defProtonName);
-  }
-
-  if (!protonPath && !confProtonName && !(await getDefaultProtonName(steamBasePath))) {
-    // config.vdf does not contain a default Proton version,
-    // or the default version is not installed
-    protonPath = await findLatestProton(steamLibraryPaths);
-  }
-
+  const tools = await listInstalledProton(steamBasePath, steamLibraryPaths);
+  const protonPath = (await resolveSteamProton(steamBasePath, appId, compatDataPath, tools)).tool
+    ?.path;
   return { usesProton: true, compatDataPath, protonPath };
 }
 

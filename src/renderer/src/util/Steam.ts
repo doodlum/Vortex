@@ -13,20 +13,18 @@ import {
 } from "@/extensions/proton_management/orchestration";
 import { log } from "@/logging";
 
-import { activeProfile } from "../extensions/profile_management/selectors";
 import type { IExecInfo } from "../types/IExecInfo";
 import type { IExtensionApi } from "../types/IExtensionContext";
 import type { ICustomExecutionInfo, IGameStore, IGameStoreSnapshot } from "../types/IGameStore";
 import { GameEntryNotFound } from "../types/IGameStore";
 import type { IGameStoreEntry } from "../types/IGameStoreEntry";
-import { isSameGamePath } from "./linux/gamePath";
 import {
   getProtonInfo,
   buildProtonEnvironment,
   buildProtonCommand,
   inheritedProtonTuning,
 } from "./linux/proton";
-import { listInstalledProton, getSteamLibraryPaths } from "./linux/proton";
+import { getSteamLibraryPaths } from "./linux/proton";
 import { findSteamClientHome } from "./linux/steamClientHome";
 import { findLinuxSteamPath } from "./linux/steamPaths";
 import { notifySteamGamesChanged } from "./linux/steamRevision";
@@ -575,23 +573,8 @@ class Steam implements IGameStore {
       );
     }
 
-    const profile = activeProfile(api.getState());
-    const discovery =
-      profile === undefined
-        ? undefined
-        : api.getState().settings.gameMode.discovered[profile.gameId];
-    const override =
-      discovery?.path !== undefined && isSameGamePath(discovery.path, gameEntry.gamePath)
-        ? profile?.features?.["proton-version"]
-        : undefined;
-    let protonPath = preparation?.protonPath ?? gameEntry.protonPath;
-    if (typeof override === "string" && override.length > 0) {
-      const tools = await listInstalledProton(steamPath);
-      const selected = tools.find((tool) => tool.path === override);
-      if (selected === undefined)
-        throw new Error("The profile's selected Proton runtime is no longer installed.");
-      protonPath = selected.path;
-    }
+    const protonPath = preparation?.protonPath ?? gameEntry.protonPath;
+
     if (protonPath === undefined)
       throw new Error("No installed Proton runtime is available for this game.");
     // A launch of the game itself applies the user's Steam launch options, as Steam would:

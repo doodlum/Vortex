@@ -15,9 +15,7 @@ const mocks = vi.hoisted(() => ({
   entry: vi.fn(),
   install: vi.fn(),
   prefix: vi.fn(),
-  getOptions: vi.fn(),
-  setOptions: vi.fn(),
-  selectVersion: vi.fn(),
+  resolve: vi.fn(),
   ensure: vi.fn(),
   configure: vi.fn(),
   check: vi.fn(),
@@ -35,12 +33,7 @@ vi.mock("@/util/linux/steamRevision", () => ({ useSteamGamesRevision: () => 0 })
 vi.mock("@/util/useRelativeTime", () => ({ useRelativeTime: () => "now" }));
 vi.mock("@/util/linux/proton", () => ({
   listInstalledProton: async () => [{ name: "Proton", path: "/Proton", source: "steam" }],
-  protonConfigName: () => "proton_11",
-  RECOMMENDED_PROTON: {
-    configName: "proton_experimental",
-    steamAppId: "1493710",
-    label: "Proton Experimental",
-  },
+  resolveSteamProton: mocks.resolve,
   inspectPrefix: mocks.prefix,
 }));
 vi.mock("../selection", () => ({ activeProtonGame: mocks.entry }));
@@ -65,9 +58,6 @@ vi.mock("../shaderCache", () => ({
 }));
 vi.mock("../steamShaderSettings", async (original) => ({
   ...(await original<object>()),
-  getSteamLaunchOptions: mocks.getOptions,
-  setSteamLaunchOptions: mocks.setOptions,
-  setSteamCompatTool: mocks.selectVersion,
   ensureShaderCacheWrapper: mocks.ensure,
   configureShaderCache: mocks.configure,
   checkShaderCacheWrapper: mocks.check,
@@ -105,7 +95,11 @@ beforeEach(() => {
     compatDataPath: "/prefix",
   });
   mocks.prefix.mockResolvedValue({ components: ["vcrun2022"], winetricks: [] });
-  mocks.getOptions.mockResolvedValue("custom %command%");
+  mocks.resolve.mockResolvedValue({
+    name: "proton_experimental",
+    tool: { name: "Proton - Experimental", path: "/Proton" },
+    source: "game",
+  });
   mocks.install.mockResolvedValue(undefined);
 });
 
@@ -195,31 +189,46 @@ it("does not apply a dialog answer to a profile selected afterward", async () =>
   expect(mocks.install).not.toHaveBeenCalled();
 });
 
-it("provisions the shader launcher before changing Steam options and preserves a fresh read", async () => {
+const setIsolation = (value: boolean) => {
+  mocks.state.current.persistent = {
+    profiles: {
+      one: { id: "one", gameId: "game", features: { "proton-shader-cache-isolation": value } },
+    },
+  } as never;
+};
+
+const isolationChange = () =>
+  mocks.dispatch.mock.calls.filter(
+    ([action]) => action.payload?.featureId === "proton-shader-cache-isolation",
+  );
+
+it("provisions the shader launcher before protecting the cache for Vortex launches", async () => {
+  setIsolation(false);
   const { api } = view();
   await ready();
   vi.mocked(api.showDialog).mockResolvedValue({ action: "Enable isolation", input: {} });
-  mocks.getOptions.mockResolvedValue("new-custom %command% --game-flag");
   fireEvent.click(screen.getByTestId("proton-cache-isolation"));
-  await waitFor(() => expect(mocks.setOptions).toHaveBeenCalledOnce());
+  await waitFor(() => expect(isolationChange()).toHaveLength(1));
+  expect(isolationChange()[0][0].payload.value).toBe(true);
   expect(mocks.ensure).toHaveBeenCalledOnce();
   expect(mocks.configure).toHaveBeenCalledWith("22380", [
     path.join("/Steam", "steamapps", "shadercache"),
   ]);
-  expect(mocks.setOptions).toHaveBeenCalledWith(
-    "22380",
-    expect.stringMatching(/^new-custom .*%command% --game-flag$/),
-    expect.objectContaining({
-      steamPath: "/Steam",
-      gamePath: "/Steam/steamapps/common/Game",
-      assertCurrent: expect.any(Function),
-    }),
-  );
-  expect(mocks.ensure.mock.invocationCallOrder[0]).toBeLessThan(
-    mocks.setOptions.mock.invocationCallOrder[0],
+  expect(mocks.check.mock.invocationCallOrder[0]).toBeLessThan(
+    mocks.dispatch.mock.invocationCallOrder.at(-1)!,
   );
 });
 
+it("turns protection off without touching the launcher", async () => {
+  const { api } = view();
+  await ready();
+  expect(screen.getByTestId("proton-cache-isolation")).toHaveAttribute("aria-checked", "true");
+  vi.mocked(api.showDialog).mockResolvedValue({ action: "Disable isolation", input: {} });
+  fireEvent.click(screen.getByTestId("proton-cache-isolation"));
+  await waitFor(() => expect(isolationChange()).toHaveLength(1));
+  expect(isolationChange()[0][0].payload.value).toBe(false);
+  expect(mocks.ensure).not.toHaveBeenCalled();
+});
 it("refuses cache reset while a game or tool is running", async () => {
   mocks.state.current.session.base.toolsRunning = {
     running: { started: 1, exclusive: false, pid: 123 },
@@ -277,27 +286,16 @@ it("does not confirm installation into a relocated prefix with the same profile 
   expect(mocks.install).not.toHaveBeenCalled();
 });
 
-it("does not change Steam settings when launcher preflight fails", async () => {
+it("does not turn on protection when launcher preflight fails", async () => {
+  setIsolation(false);
   const { api } = view();
   await ready();
   vi.mocked(api.showDialog).mockResolvedValue({ action: "Enable isolation", input: {} });
   mocks.check.mockRejectedValueOnce(new Error("Python unavailable"));
   fireEvent.click(screen.getByTestId("proton-cache-isolation"));
   await waitFor(() => expect(api.showErrorNotification).toHaveBeenCalledOnce());
-  expect(mocks.setOptions).not.toHaveBeenCalled();
+  expect(isolationChange()).toHaveLength(0);
 });
-
-it("keeps cache reset disabled when Steam's launch settings cannot be read", async () => {
-  mocks.getOptions.mockRejectedValue(new Error("Steam is not running"));
-  const { api } = view();
-  await ready();
-  expect(screen.getByTestId("proton-reset-cache")).toBeDisabled();
-  fireEvent.click(screen.getByTestId("proton-reset-cache"));
-  expect(api.showDialog).not.toHaveBeenCalled();
-  expect(mocks.clear).not.toHaveBeenCalled();
-  expect(mocks.reset).not.toHaveBeenCalled();
-});
-
 it("names each setting control by its visible label", async () => {
   view();
   await ready();
@@ -332,26 +330,31 @@ it("shows an empty state instead of the settings when no Proton game is selected
 });
 
 it("gives keyboard users the reason a cache reset is unavailable", async () => {
-  mocks.getOptions.mockRejectedValue(new Error("Steam is not running"));
+  mocks.state.current.session.base.toolsRunning = {
+    running: { started: 1, exclusive: false, pid: 123 },
+  };
   view();
   await ready();
-  const reason = screen.getByLabelText(
-    "Start Steam so Vortex can read this game's launch settings",
-  );
+  const reason = screen.getByLabelText("Exit the game and its tools first");
   expect(reason).toHaveAttribute("tabindex", "0");
   expect(reason).toHaveAttribute("role", "group");
   expect(reason).toContainElement(screen.getByTestId("proton-reset-cache"));
 });
 
-it("shows an unavailable selected Proton as an error on its own setting", async () => {
-  mocks.state.current.persistent = {
-    profiles: {
-      one: { id: "one", gameId: "game", features: { "proton-version": "/gone/Proton 8.0" } },
-    },
-  } as never;
+it("shows the Proton Steam uses without offering to change it", async () => {
   view();
   await ready();
-  // Tests run without i18n initialised, so the path placeholder is not substituted.
-  const message = await screen.findByText(/is no longer installed\. Choose another version\./);
-  expect(message).toHaveClass("nxm-field-error-message");
+  const version = screen.getByTestId("proton-version");
+  expect(version).toHaveTextContent("Proton - Experimental");
+  expect(version).toHaveTextContent("open the game's Properties in Steam");
+  expect(screen.queryByRole("combobox")).toBeNull();
+  expect(screen.queryByRole("listbox")).toBeNull();
+});
+
+it("flags Steam's Proton when it isn't installed", async () => {
+  mocks.resolve.mockResolvedValue({ name: "proton_9", source: "game" });
+  view();
+  await ready();
+  // Tests run without i18n initialised, so the name placeholder is not substituted.
+  expect(screen.getByTestId("proton-version")).toHaveTextContent(/isn't installed/);
 });

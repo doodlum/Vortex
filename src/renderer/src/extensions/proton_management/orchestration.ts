@@ -14,14 +14,15 @@ import {
   isWindowsExecutable,
   listInstalledProton,
   prefixDowngradeWarning,
-  protonConfigName,
-  protonPrefixVersion,
   protonScriptPath,
-  RECOMMENDED_PROTON,
-  type IInstalledProton,
+  resolveSteamProton,
 } from "@/util/linux/proton";
 import { resolveDependencyTarget } from "@/util/linux/protonMetadata";
-import { parseSteamLaunchOptions, type ISteamLaunchOptions } from "@/util/linux/steamLaunchOptions";
+import {
+  parseSteamLaunchOptions,
+  readSteamLaunchOptions,
+  type ISteamLaunchOptions,
+} from "@/util/linux/steamLaunchOptions";
 import { findLinuxSteamPath } from "@/util/linux/steamPaths";
 import { log } from "@/util/log";
 import type { ISteamEntry } from "@/util/Steam";
@@ -36,17 +37,10 @@ import { publishProtonSetupStatus } from "./setupStatus";
 import {
   configureShaderCache,
   checkShaderCacheWrapper,
-  checkGameLaunchWrapper,
   disableDefaultToolRedirect,
   disableShaderCacheRedirect,
-  enableDefaultToolRedirect,
-  enableShaderCacheRedirect,
-  ensureGameLaunchWrapper,
   ensureShaderCacheWrapper,
   GAME_LAUNCH_WRAPPER,
-  getSteamLaunchOptions,
-  setSteamCompatTool,
-  setSteamLaunchOptions,
   SHADER_CACHE_WRAPPER,
 } from "./steamShaderSettings";
 
@@ -55,7 +49,6 @@ export interface IProtonTarget {
   profile: IProfile;
   game: ISteamEntry;
   steamPath: string;
-  selected: string;
   automatic: boolean;
   isolate: boolean;
   loader?: string;
@@ -86,23 +79,18 @@ export interface IProtonOrchestrationPorts {
   detect: typeof detectModRuntimeDependencies;
   inspect: typeof inspectPrefix;
   configured: typeof getConfiguredProtonName;
-  /** Asks Steam to install one of its apps, such as Proton Experimental. */
-  requestInstall: (steamAppId: string) => void;
-  /** Starts a no-op program with the profile's Proton, which runs Proton's own prefix setup. */
+  /** Starts a no-op program with Steam's Proton, which runs Proton's own prefix setup. */
   preparePrefix: (api: IExtensionApi, game: ISteamEntry) => Promise<void>;
   tools: typeof listInstalledProton;
   read: (file: string) => Promise<string>;
   write: (file: string, value: string) => Promise<void>;
   install: typeof installDependencies;
   resolveDependency: typeof resolveDependencyTarget;
-  getLaunchOptions: typeof getSteamLaunchOptions;
-  setLaunchOptions: typeof setSteamLaunchOptions;
-  setCompatTool: typeof setSteamCompatTool;
+  /** Reads the launch options Steam saved for a game; Vortex never changes them. */
+  getLaunchOptions: typeof readSteamLaunchOptions;
   configureCache: typeof configureShaderCache;
   ensureCache: typeof ensureShaderCacheWrapper;
   checkCache: typeof checkShaderCacheWrapper;
-  ensureLoader: typeof ensureGameLaunchWrapper;
-  checkLoader: typeof checkGameLaunchWrapper;
   publish: typeof publishProtonSetupStatus;
 }
 
@@ -133,10 +121,6 @@ export function currentProtonTarget(state: IState): IProtonTarget | undefined {
   } catch {
     // A game support that cannot name its executable leaves launch options to Steam.
   }
-  const selected =
-    typeof profile.features?.["proton-version"] === "string"
-      ? (profile.features["proton-version"] as string)
-      : "";
   const automatic = profile.features?.["proton-auto-dependencies"] !== false;
   const isolate = profile.features?.["proton-shader-cache-isolation"] !== false;
   const key = JSON.stringify([
@@ -146,20 +130,19 @@ export function currentProtonTarget(state: IState): IProtonTarget | undefined {
     path.resolve(game.gamePath),
     game.compatDataPath,
     steamPath,
-    selected,
     automatic,
     isolate,
     loader,
     Object.entries(profile.modState ?? {}).sort(([left], [right]) => left.localeCompare(right)),
     enabledModPaths(state, profile).sort(),
   ]);
-  return { key, profile, game, steamPath, selected, automatic, isolate, loader, executable };
+  return { key, profile, game, steamPath, automatic, isolate, loader, executable };
 }
 
 /**
  * The user's Steam launch options for a launch that starts the game itself (its executable or
- * the loader Vortex redirects Steam to), as Steam would apply them. Other tools in the game
- * folder never receive them. Options that need a shell are left out, with a log entry.
+ * its default loader), as Steam would apply them. Other tools in the game folder never receive
+ * them. Options that need a shell are left out, with a log entry.
  */
 function gameLaunchOptions(
   target: IProtonTarget,
@@ -193,7 +176,6 @@ const defaultPorts: IProtonOrchestrationPorts = {
   detect: detectModRuntimeDependencies,
   inspect: inspectPrefix,
   configured: getConfiguredProtonName,
-  requestInstall: (steamAppId) => window.api.shell.openUrl(`steam://install/${steamAppId}`),
   preparePrefix: async (api, game) => {
     if (prefixPreparer === undefined) throw new Error("Proton launches are unavailable");
     await prefixPreparer(api, game);
@@ -203,14 +185,10 @@ const defaultPorts: IProtonOrchestrationPorts = {
   write: (file, value) => fs.writeFile(file, value),
   install: installDependencies,
   resolveDependency: resolveDependencyTarget,
-  getLaunchOptions: getSteamLaunchOptions,
-  setLaunchOptions: setSteamLaunchOptions,
-  setCompatTool: setSteamCompatTool,
+  getLaunchOptions: readSteamLaunchOptions,
   configureCache: configureShaderCache,
   ensureCache: ensureShaderCacheWrapper,
   checkCache: checkShaderCacheWrapper,
-  ensureLoader: ensureGameLaunchWrapper,
-  checkLoader: checkGameLaunchWrapper,
   publish: publishProtonSetupStatus,
 };
 
@@ -242,7 +220,6 @@ export function createProtonCoordinator(
   const ports = { ...defaultPorts, ...overrides };
   let tail: Promise<void> = Promise.resolve();
   let previousObservedKey: string | undefined;
-  let installRequested = false;
 
   const targetNow = () => ports.target(api.getState());
   const assertTarget = (target: IProtonTarget) => {
@@ -282,93 +259,25 @@ export function createProtonCoordinator(
     return prefixDowngradeWarning(script, version);
   };
 
-  /** An installed Proton that can drive this game's prefix without downgrading it. */
-  const prefixCompatibleTool = async (
-    target: IProtonTarget,
-    tools: IInstalledProton[],
-    current: string | undefined,
-  ) => {
-    if (target.game.compatDataPath === undefined) return undefined;
-    const prefixVersion = (
-      await ports.read(path.join(target.game.compatDataPath, "version")).catch(() => "")
-    ).trim();
-    const candidates: Array<{ tool: IInstalledProton; name: string; version?: string }> = [];
-    for (const tool of tools) {
-      const name = protonConfigName(tool);
-      if (name === undefined) continue;
-      const script = await ports.read(protonScriptPath(tool.path)).catch(() => "");
-      if (script === "" || prefixDowngradeWarning(script, prefixVersion) !== undefined) continue;
-      candidates.push({ tool, name, version: protonPrefixVersion(script) });
-    }
-    assertTarget(target);
-    // Prefer the runtime Steam already uses, then the one that built the prefix.
-    return (
-      candidates.find((candidate) => candidate.name === current) ??
-      candidates.find((candidate) => candidate.version === prefixVersion) ??
-      candidates[0]
-    );
-  };
-
-  const synchronizeRuntime = async (target: IProtonTarget) => {
+  /** The Proton Steam runs this game with. Vortex follows Steam and never changes it. */
+  const steamRuntime = async (target: IProtonTarget) => {
     const tools = await ports.tools(target.steamPath);
     assertTarget(target);
-    let desired =
-      target.selected === ""
-        ? RECOMMENDED_PROTON.configName
-        : (() => {
-            const selected = tools.find((tool) => tool.path === target.selected);
-            return selected === undefined ? undefined : protonConfigName(selected);
-          })();
-    let installed =
-      desired === undefined
-        ? undefined
-        : tools.find(
-            (tool) =>
-              protonConfigName(tool) === desired &&
-              (target.selected === "" || tool.path === target.selected),
-          );
-    if (target.selected === "" && installed === undefined) {
-      // Steam downloads its own default Proton; scans and Retry pick it up once it's installed.
-      if (!installRequested) {
-        installRequested = true;
-        ports.requestInstall(RECOMMENDED_PROTON.steamAppId);
-      }
-      throw new Error(
-        `Steam is installing ${RECOMMENDED_PROTON.label}. Vortex finishes setting up this game once the download completes; select Retry setup if it doesn't.`,
-      );
-    }
-    if (desired === undefined || installed === undefined) {
-      throw new Error(
-        "The Proton version selected for this profile is no longer installed. Choose another version for this profile, or reinstall it in Steam.",
-      );
-    }
-    const perGame = await ports.configured(target.steamPath, target.game.appid);
-    const current = perGame ?? (await ports.configured(target.steamPath, "0"));
+    const choice = await resolveSteamProton(
+      target.steamPath,
+      target.game.appid,
+      target.game.compatDataPath,
+      tools,
+      { configured: ports.configured, read: ports.read },
+    );
     assertTarget(target);
-    if (target.selected === "" && (await downgradeWarning(target, installed.path)) !== undefined) {
-      // The default must not downgrade a prefix that a newer Proton built, even when Steam was
-      // already switched to an older release: use an installed runtime that can drive the
-      // prefix as it is.
-      const compatible = await prefixCompatibleTool(target, tools, current);
-      if (compatible !== undefined) {
-        desired = compatible.name;
-        installed = compatible.tool;
-      }
-    }
-    assertTarget(target);
-    if (current !== desired) {
-      // A required version change is not best-effort: otherwise dependency repair could
-      // prepare a different prefix/runtime from the game Steam will subsequently launch.
-      await ports.setCompatTool(target.game.appid, desired, {
-        steamPath: target.steamPath,
-        gamePath: target.game.gamePath,
-        assertCurrent: () => assertTarget(target),
-      });
-      assertTarget(target);
-    }
-    return installed.path;
+    if (choice.tool !== undefined) return choice.tool.path;
+    throw new Error(
+      choice.name === undefined
+        ? "No Proton is installed. Launch the game once from Steam so Steam installs Proton, then refresh."
+        : `Steam runs this game with ${choice.name}, which isn't installed. Launch the game once from Steam so Steam downloads it, or choose another version in the game's Steam properties under Compatibility.`,
+    );
   };
-
   const prepareShaderHelper = async (target: IProtonTarget) => {
     if (!target.isolate) return;
     assertTarget(target);
@@ -385,44 +294,29 @@ export function createProtonCoordinator(
     assertTarget(target);
   };
 
-  /** Synchronizes Vortex's own launch-option wrappers and returns the user's remaining options. */
-  const synchronizeLaunchOptions = async (target: IProtonTarget): Promise<string> => {
-    const current = await ports.getLaunchOptions(target.game.appid, {
-      steamPath: target.steamPath,
-      gamePath: target.game.gamePath,
-      assertCurrent: () => assertTarget(target),
-    });
-    assertTarget(target);
-    const userOptions = disableShaderCacheRedirect(
-      disableDefaultToolRedirect(current, GAME_LAUNCH_WRAPPER),
-      target.game.appid,
-      SHADER_CACHE_WRAPPER,
-    );
-    // Remove the old owned loader before deciding whether to add the current one.
-    // This also removes it when no default-primary loader remains configured.
-    let next = disableDefaultToolRedirect(current, GAME_LAUNCH_WRAPPER);
-    next = target.isolate
-      ? enableShaderCacheRedirect(next, target.game.appid, SHADER_CACHE_WRAPPER)
-      : disableShaderCacheRedirect(next, target.game.appid, SHADER_CACHE_WRAPPER);
-    if (target.loader !== undefined) {
-      await ports.ensureLoader();
+  /**
+   * The user's own Steam launch options, read from Steam's files. Redirects that earlier Vortex
+   * builds added to them are left out, since Vortex applies its own cache wrapper directly.
+   */
+  const userLaunchOptions = async (target: IProtonTarget): Promise<string | undefined> => {
+    try {
+      const saved = await ports.getLaunchOptions(target.steamPath, target.game.appid);
       assertTarget(target);
-      await ports.checkLoader();
+      return disableShaderCacheRedirect(
+        disableDefaultToolRedirect(saved, GAME_LAUNCH_WRAPPER),
+        target.game.appid,
+        SHADER_CACHE_WRAPPER,
+      );
+    } catch (error) {
       assertTarget(target);
-      next = enableDefaultToolRedirect(next, target.loader, GAME_LAUNCH_WRAPPER);
-    }
-    assertTarget(target);
-    if (next !== current) {
-      await ports.setLaunchOptions(target.game.appid, next, {
-        steamPath: target.steamPath,
-        gamePath: target.game.gamePath,
-        assertCurrent: () => assertTarget(target),
+      // Steam settings that can't be read leave the launch as Steam's plain command.
+      log("warn", "Could not read Steam launch options", {
+        appId: target.game.appid,
+        error: unknownToError(error).message,
       });
-      assertTarget(target);
+      return undefined;
     }
-    return userOptions;
   };
-
   const ensureDependencies = async (
     target: IProtonTarget,
     protonPath: string,
@@ -442,13 +336,13 @@ export function createProtonCoordinator(
     const prefix = target.game.compatDataPath;
     if ((await downgradeWarning(target, protonPath)) !== undefined) {
       // An older Proton only downgrades a prefix when it starts a program in it, as Steam does
-      // at game launch; Protontricks drives Wine directly and would skip that step. Let the
-      // selected Proton prepare the prefix first, exactly as launching the game would.
+      // at game launch; Protontricks drives Wine directly and would skip that step. Let
+      // Steam's Proton prepare the prefix first, exactly as launching the game would.
       ports.publish({
         appId: target.game.appid,
         phase: "installing",
         progress: 2,
-        message: "Preparing the game's prefix for the selected Proton",
+        message: "Preparing the game's prefix for Steam's Proton",
       });
       await ports.preparePrefix(api, target.game);
       assertTarget(target);
@@ -554,7 +448,7 @@ export function createProtonCoordinator(
     }
   };
 
-  const reconcile = async (target: IProtonTarget, directLaunch: boolean) => {
+  const reconcile = async (target: IProtonTarget) => {
     assertTarget(target);
     ports.publish({
       appId: target.game.appid,
@@ -562,45 +456,26 @@ export function createProtonCoordinator(
       progress: 0,
       message: "Checking Proton and enabled mods",
     });
-    const protonPath = await synchronizeRuntime(target);
+    const protonPath = await steamRuntime(target);
     await prepareShaderHelper(target);
-    let settingsError: unknown;
-    let userOptions: string | undefined;
-    try {
-      userOptions = await synchronizeLaunchOptions(target);
-    } catch (error) {
-      assertTarget(target);
-      settingsError = error;
-    }
+    const userOptions = await userLaunchOptions(target);
     await ensureDependencies(target, protonPath);
     assertTarget(target);
-    if (settingsError !== undefined) {
-      const error = new Error(
-        `Steam launch settings could not be synchronized. Start Steam with its settings service available, then refresh the Proton page. ${unknownToError(settingsError).message}`,
-      );
-      report(target, error);
-      // Vortex's direct command does not consume Steam launch options. Its runtime,
-      // dependency and private-cache preparation have already succeeded, so a CDP
-      // read failure alone must not prevent this otherwise valid direct launch.
-      if (!directLaunch) return { protonPath, userOptions };
-    } else {
-      api.dismissNotification?.("proton-setup-" + target.game.appid);
-      ports.publish({
-        appId: target.game.appid,
-        phase: "ready",
-        progress: 100,
-        message: "Proton setup is ready",
-      });
-    }
+    api.dismissNotification?.("proton-setup-" + target.game.appid);
+    ports.publish({
+      appId: target.game.appid,
+      phase: "ready",
+      progress: 100,
+      message: "Proton setup is ready",
+    });
     return { protonPath, userOptions };
   };
-
   const request = (): Promise<void> =>
     serialize(async () => {
       const target = targetNow();
       if (target === undefined) return;
       try {
-        await reconcile(target, false);
+        await reconcile(target);
       } catch (error) {
         report(target, error);
       }
@@ -615,7 +490,7 @@ export function createProtonCoordinator(
       return serialize(async () => {
         try {
           assertTarget(target);
-          const protonPath = await synchronizeRuntime(target);
+          const protonPath = await steamRuntime(target);
           await ensureDependencies(target, protonPath, true, onProgress);
           assertTarget(target);
           api.dismissNotification?.("proton-setup-" + target.game.appid);
@@ -649,7 +524,7 @@ export function createProtonCoordinator(
       return serialize(async () => {
         try {
           assertTarget(target);
-          const { protonPath, userOptions } = await reconcile(target, true);
+          const { protonPath, userOptions } = await reconcile(target);
           assertTarget(target);
           return {
             appId: target.game.appid,
@@ -671,7 +546,7 @@ export function createProtonCoordinator(
       // The Steam pre-conversion call is still required for current ordinary launches.
       const target = targetNow();
       if (target !== undefined && matchesActiveLaunch(target, input.executable, input.options)) {
-        await serialize(() => reconcile(target, true));
+        await serialize(() => reconcile(target));
       }
       return input;
     },

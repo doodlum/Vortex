@@ -321,3 +321,25 @@ describe("inheritedProtonTuning", () => {
     });
   });
 });
+
+describe("Steam's Proton for a game", () => {
+  it("follows the Proton that last ran the prefix before Steam's default and the newest", async () => {
+    const steam = await temporaryDirectory();
+    const common = path.join(steam, "steamapps", "common");
+    for (const name of ["Proton 9.0", "Proton - Experimental"]) {
+      await fs.mkdir(path.join(common, name), { recursive: true });
+      await fs.writeFile(path.join(common, name, "proton"), "");
+    }
+    const compatData = path.join(steam, "steamapps", "compatdata", "42");
+    await fs.mkdir(path.join(compatData, "pfx"), { recursive: true });
+    const info = () => getProtonInfo(steam, [steam], path.join(steam, "steamapps"), "42");
+
+    expect((await info()).protonPath).toBe(path.join(common, "Proton - Experimental"));
+    // Steam records the runtime it used in the prefix, through whichever path it was started.
+    await fs.writeFile(
+      path.join(compatData, "config_info"),
+      "5\n/home/user/.steam/steam/steamapps/common/Proton 9.0/files/share/fonts/\n",
+    );
+    expect((await info()).protonPath).toBe(path.join(common, "Proton 9.0"));
+  });
+});

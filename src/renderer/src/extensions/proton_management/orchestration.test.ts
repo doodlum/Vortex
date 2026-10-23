@@ -14,12 +14,7 @@ import {
   StaleProtonTarget,
   type IProtonTarget,
 } from "./orchestration";
-import {
-  enableDefaultToolRedirect,
-  enableShaderCacheRedirect,
-  GAME_LAUNCH_WRAPPER,
-  SHADER_CACHE_WRAPPER,
-} from "./steamShaderSettings";
+import { GAME_LAUNCH_WRAPPER, SHADER_CACHE_WRAPPER } from "./steamShaderSettings";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -46,7 +41,6 @@ function target(id = "10", changes: Partial<IProtonTarget> = {}): IProtonTarget 
       compatDataPath: path.resolve("/prefix", id),
     } as ISteamEntry,
     steamPath: path.resolve("/steam"),
-    selected: "",
     automatic: true,
     isolate: true,
     executable: path.resolve("/games", id, "Game.exe"),
@@ -70,8 +64,10 @@ function fixture(initial = target()) {
     target: vi.fn(() => current),
     detect: vi.fn(async () => [] as string[]),
     inspect: vi.fn(async () => inventory([])),
-    configured: vi.fn(async () => "proton_experimental"),
-    requestInstall: vi.fn(),
+    configured: vi.fn(
+      async (_steamPath: string, _appId: string): Promise<string | undefined> =>
+        "proton_experimental",
+    ),
     preparePrefix: vi.fn(async () => undefined),
     tools: vi.fn(
       async (): Promise<IInstalledProton[]> => [
@@ -112,13 +108,9 @@ function fixture(initial = target()) {
       runtimeWritePaths: [],
     })),
     getLaunchOptions: vi.fn(async () => "%command%"),
-    setLaunchOptions: vi.fn(async (_appId: string, value: string) => value),
-    setCompatTool: vi.fn(async () => undefined),
     configureCache: vi.fn(async () => undefined),
     ensureCache: vi.fn(async () => undefined),
     checkCache: vi.fn(async () => undefined),
-    ensureLoader: vi.fn(async () => undefined),
-    checkLoader: vi.fn(async () => undefined),
     publish: vi.fn(),
   };
   const coordinator = createProtonCoordinator(api, ports);
@@ -312,7 +304,6 @@ describe("Proton orchestration consumer contracts", () => {
     const f = fixture();
     f.ports.checkCache.mockRejectedValue(new Error("Python unavailable"));
     await expect(f.prepare()).rejects.toThrow("Python unavailable");
-    expect(f.ports.setLaunchOptions).not.toHaveBeenCalled();
     expect(f.ports.install).not.toHaveBeenCalled();
   });
   it("does no dependency work or marker IO when enabled mods require no recipes", async () => {
@@ -403,23 +394,13 @@ describe("Proton orchestration consumer contracts", () => {
       await waiting.promise;
       return installedTools;
     });
-    f.ports.configured.mockResolvedValue("proton_10");
     const first = f.coordinator.request();
     await entered.promise;
     f.setTarget(target("20"));
     const second = f.coordinator.request();
     waiting.resolve("proton_11");
     await Promise.all([first, second]);
-    expect(f.ports.setCompatTool).toHaveBeenCalledExactlyOnceWith(
-      "20",
-      "proton_experimental",
-      expect.objectContaining({
-        steamPath: target("20").steamPath,
-        gamePath: target("20").game.gamePath,
-        assertCurrent: expect.any(Function),
-      }),
-    );
-    expect(f.ports.configureCache).toHaveBeenCalledWith("20", expect.any(Array));
+    expect(f.ports.configureCache).toHaveBeenCalledExactlyOnceWith("20", expect.any(Array));
     expect(
       f.ports.publish.mock.calls.some(
         ([status]) => status.appId === "10" && status.phase === "error",
@@ -478,7 +459,7 @@ describe("Proton orchestration consumer contracts", () => {
     expect(f.ports.write).not.toHaveBeenCalled();
   });
 
-  it("provisions and configures cache helper before enabling the Steam redirect", async () => {
+  it("provisions and configures the cache helper before launch", async () => {
     const f = fixture();
     const result = await f.prepare();
     expect(result?.shaderWrapper).toBe(SHADER_CACHE_WRAPPER);
@@ -486,56 +467,45 @@ describe("Proton orchestration consumer contracts", () => {
       f.ports.configureCache.mock.invocationCallOrder[0],
     );
     expect(f.ports.configureCache.mock.invocationCallOrder[0]).toBeLessThan(
-      f.ports.setLaunchOptions.mock.invocationCallOrder[0],
+      f.ports.checkCache.mock.invocationCallOrder[0],
     );
     f.setTarget(target("20"));
     expect(result?.assertCurrent).toThrow(StaleProtonTarget);
   });
 
-  it("removes owned shader and default-loader redirects after preferences and primary tool change", async () => {
+  it("replays only the user's options, leaving out redirects earlier builds added to Steam", async () => {
     const f = fixture(target("10", { isolate: false }));
-    const previous = enableDefaultToolRedirect(
-      enableShaderCacheRedirect(
-        "ENV=original %command% --user-argument",
-        "10",
-        SHADER_CACHE_WRAPPER,
-      ),
-      "/old/loader.exe",
-      GAME_LAUNCH_WRAPPER,
+    f.ports.getLaunchOptions.mockResolvedValue(
+      `ENV=original '${SHADER_CACHE_WRAPPER}' 10 '${GAME_LAUNCH_WRAPPER}' '/old/loader.exe' %command% --user-argument`,
     );
-    f.ports.getLaunchOptions.mockResolvedValue(previous);
-    await f.prepare();
-    expect(f.ports.setLaunchOptions).toHaveBeenCalledWith(
-      "10",
-      "ENV=original %command% --user-argument",
-      expect.objectContaining({ gamePath: target().game.gamePath, steamPath: target().steamPath }),
-    );
+    const result = await f.prepare();
+    expect(f.ports.getLaunchOptions).toHaveBeenCalledWith(target().steamPath, "10");
+    expect(result?.launchOptions).toEqual({
+      env: { ENV: "original" },
+      prefix: [],
+      suffix: ["--user-argument"],
+    });
+    expect(result?.shaderWrapper).toBeUndefined();
     expect(f.ports.ensureCache).not.toHaveBeenCalled();
   });
 
-  it("does not require CDP for an unchanged runtime and allows prepared direct launch when Steam options cannot be read", async () => {
+  it("launches with Steam's plain command when its launch options can't be read", async () => {
     const f = fixture();
-    f.ports.getLaunchOptions.mockRejectedValue(new Error("Steam not running"));
+    f.ports.getLaunchOptions.mockRejectedValue(new Error("localconfig.vdf is unreadable"));
     const result = await f.prepare();
     expect(result?.shaderWrapper).toBe(SHADER_CACHE_WRAPPER);
-    expect(f.ports.setCompatTool).not.toHaveBeenCalled();
-    expect(f.ports.publish).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        appId: "10",
-        phase: "error",
-        message: expect.stringContaining("Steam launch settings"),
-      }),
-    );
+    expect(result?.launchOptions).toBeUndefined();
+    expect(f.ports.publish).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "ready" }));
   });
 
-  it("blocks direct launch if a required Steam runtime change fails", async () => {
+  it("explains how to get the Proton Steam chose when it isn't installed", async () => {
     const f = fixture();
     f.ports.configured.mockResolvedValue("proton_10");
-    f.ports.setCompatTool.mockRejectedValue(new Error("Start Steam"));
-    await expect(f.prepare()).rejects.toThrow("Start Steam");
+    await expect(f.prepare()).rejects.toThrow(
+      "Steam runs this game with proton_10, which isn't installed",
+    );
     expect(f.ports.install).not.toHaveBeenCalled();
   });
-
   it("ignores native helpers, sibling paths, unrelated explicit game IDs and other Steam entries", async () => {
     const f = fixture();
     await expect(
@@ -591,10 +561,10 @@ describe("Proton prefix downgrade protection", () => {
     [path.join(PROTON_9, "proton")]: 'CURRENT_PREFIX_VERSION="9.0-203"\n',
     [path.join(EXPERIMENTAL, "proton")]: 'CURRENT_PREFIX_VERSION="10.0-100"\n',
   };
-  const downgradeFixture = (selected: string) => {
-    const f = fixture(target("10", { selected }));
+  const downgradeFixture = (configured: string) => {
+    const f = fixture();
     f.ports.tools.mockResolvedValue(tools);
-    f.ports.configured.mockResolvedValue("proton_experimental");
+    f.ports.configured.mockResolvedValue(configured);
     f.ports.detect.mockResolvedValue(["vcrun2022"]);
     f.ports.inspect
       .mockResolvedValueOnce(inventory([]))
@@ -605,34 +575,17 @@ describe("Proton prefix downgrade protection", () => {
     return f;
   };
 
-  it("keeps the recommended Experimental runtime that built the prefix", async () => {
-    const f = downgradeFixture("");
+  it("uses the Experimental runtime that built the prefix without preparing it again", async () => {
+    const f = downgradeFixture("proton_experimental");
     await f.prepare();
-    expect(f.ports.setCompatTool).not.toHaveBeenCalled();
+    expect(f.ports.preparePrefix).not.toHaveBeenCalled();
     expect(f.ports.resolveDependency).toHaveBeenCalledWith(
       expect.objectContaining({ protonPath: EXPERIMENTAL }),
     );
     expect(f.ports.install).toHaveBeenCalledOnce();
   });
-
-  it("moves Steam back to a runtime that can drive the prefix after an earlier downgrade", async () => {
-    const f = downgradeFixture("");
-    // Steam was already switched to the older stable release, as an earlier build did.
-    f.ports.configured.mockResolvedValue("proton_9");
-    await f.prepare();
-    expect(f.ports.setCompatTool).toHaveBeenCalledWith(
-      "10",
-      "proton_experimental",
-      expect.objectContaining({ steamPath: path.resolve("/steam") }),
-    );
-    expect(f.ports.resolveDependency).toHaveBeenCalledWith(
-      expect.objectContaining({ protonPath: EXPERIMENTAL }),
-    );
-    expect(f.ports.install).toHaveBeenCalledOnce();
-  });
-
-  it("lets an explicitly selected older Proton downgrade the prefix first, as Steam would", async () => {
-    const f = downgradeFixture(PROTON_9);
+  it("lets the older Proton Steam chose downgrade the prefix first, as Steam would", async () => {
+    const f = downgradeFixture("proton_9");
     let prefixVersion = "10.0-100";
     f.ports.read.mockImplementation(async (file: string) =>
       path.basename(file) === "version" ? prefixVersion : (scripts[file] ?? prefixVersion),
@@ -650,8 +603,8 @@ describe("Proton prefix downgrade protection", () => {
     );
   });
 
-  it("refuses to install when the selected Proton could not downgrade the prefix", async () => {
-    const f = downgradeFixture(PROTON_9);
+  it("refuses to install when Steam's Proton could not downgrade the prefix", async () => {
+    const f = downgradeFixture("proton_9");
     await expect(f.prepare()).rejects.toThrow("prefix was created by Proton 10");
     expect(f.ports.preparePrefix).toHaveBeenCalledOnce();
     expect(f.ports.install).not.toHaveBeenCalled();
@@ -659,36 +612,38 @@ describe("Proton prefix downgrade protection", () => {
   });
 });
 
-describe("Recommended Proton", () => {
-  it("asks Steam once to install Proton Experimental when it is missing, then reports progress", async () => {
+describe("Steam's Proton choice", () => {
+  const PROTON_11 = path.resolve("/steam/steamapps/common/Proton 11.0");
+  const EXPERIMENTAL = path.resolve("/steam/steamapps/common/Proton - Experimental");
+
+  it("follows the version that last ran the prefix when the game has no Steam setting", async () => {
     const f = fixture();
-    f.ports.tools.mockResolvedValue([
-      {
-        id: "proton-11",
-        name: "Proton 11.0",
-        path: path.resolve("/steam/steamapps/common/Proton 11.0"),
-        source: "steam",
-      },
-    ]);
-    await expect(f.prepare()).rejects.toThrow("Steam is installing Proton Experimental");
-    await expect(f.prepare()).rejects.toThrow("Steam is installing Proton Experimental");
-    expect(f.ports.requestInstall).toHaveBeenCalledExactlyOnceWith("1493710");
-    expect(f.ports.setCompatTool).not.toHaveBeenCalled();
-    expect(f.ports.install).not.toHaveBeenCalled();
+    f.ports.configured.mockResolvedValue(undefined);
+    f.ports.read.mockImplementation(async (file: string) =>
+      path.basename(file) === "config_info"
+        ? "5\n/home/user/.steam/steam/steamapps/common/Proton 11.0/files/share/fonts/\n"
+        : "11.0",
+    );
+    expect((await f.prepare())?.protonPath).toBe(PROTON_11);
   });
 
-  it("points Steam at Proton Experimental by default instead of an older stable release", async () => {
+  it("falls back to Steam's default, then the newest installed Proton", async () => {
     const f = fixture();
-    f.ports.configured.mockResolvedValue("proton_11");
-    await f.prepare();
-    expect(f.ports.setCompatTool).toHaveBeenCalledWith(
-      "10",
-      "proton_experimental",
-      expect.objectContaining({ steamPath: path.resolve("/steam") }),
+    f.ports.configured.mockImplementation(async (_steam: string, appId: string) =>
+      appId === "0" ? "proton_11" : undefined,
     );
+    expect((await f.prepare())?.protonPath).toBe(PROTON_11);
+    f.ports.configured.mockResolvedValue(undefined);
+    expect((await f.prepare())?.protonPath).toBe(EXPERIMENTAL);
+  });
+
+  it("asks for Proton to be installed through Steam when none is", async () => {
+    const f = fixture();
+    f.ports.tools.mockResolvedValue([]);
+    f.ports.configured.mockResolvedValue(undefined);
+    await expect(f.prepare()).rejects.toThrow("No Proton is installed");
   });
 });
-
 describe("Steam launch options on direct game launches", () => {
   it("passes the user's options to a launch of the game itself, without Vortex's wrappers", async () => {
     const f = fixture();

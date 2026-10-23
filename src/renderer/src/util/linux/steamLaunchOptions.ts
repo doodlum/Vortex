@@ -1,3 +1,7 @@
+import * as fs from "fs/promises";
+import * as path from "path";
+
+import { parse, type KVBlock } from "@nexusmods/steam-kv-parser";
 /**
  * A Steam game's launch options, applied the way Steam applies them, for launches that Vortex
  * starts directly through Proton. `env` holds leading `KEY=VALUE` assignments, `prefix` a wrapper
@@ -74,4 +78,43 @@ export function parseSteamLaunchOptions(options: string): ISteamLaunchOptions | 
     env[assignment[1]] = assignment[2];
   }
   return { env, prefix: words.slice(index, command), suffix: words.slice(command + 1) };
+}
+
+function childBlock(parent: KVBlock | undefined, key: string): KVBlock | undefined {
+  const child = parent?.children.find((entry) => entry.key.toLowerCase() === key.toLowerCase());
+  return child?.type === "block" ? child : undefined;
+}
+
+/**
+ * The launch options Steam has saved for a game, read from Steam's own files so that it works
+ * with a stock Steam client. Steam keeps them per user in
+ * `userdata/<id>/config/localconfig.vdf`; the most recently written file is the active user's.
+ * Returns "" when there are none. Adapted from Amethyst Mod Manager (GPL-3.0),
+ * `steam_launch_options` in src/Utils/launchers/steam.py.
+ */
+export async function readSteamLaunchOptions(steamPath: string, appId: string): Promise<string> {
+  if (!/^\d+$/.test(appId)) throw new Error("Invalid Steam AppID");
+  const userdata = path.join(steamPath, "userdata");
+  let users: string[];
+  try {
+    users = await fs.readdir(userdata);
+  } catch {
+    return "";
+  }
+  let newest: { mtime: number; file: string } | undefined;
+  for (const user of users) {
+    const file = path.join(userdata, user, "config", "localconfig.vdf");
+    const stat = await fs.stat(file).catch(() => undefined);
+    if (stat?.isFile() === true && (newest === undefined || stat.mtimeMs > newest.mtime))
+      newest = { mtime: stat.mtimeMs, file };
+  }
+  if (newest === undefined) return "";
+  const root = parse(await fs.readFile(newest.file, "utf8"), { escapes: true });
+  if (root.key.toLowerCase() !== "userlocalconfigstore") return "";
+  const app = childBlock(
+    childBlock(childBlock(childBlock(childBlock(root, "Software"), "Valve"), "Steam"), "apps"),
+    appId,
+  );
+  const options = app?.children.find((entry) => entry.key.toLowerCase() === "launchoptions");
+  return options?.type === "leaf" ? options.value : "";
 }

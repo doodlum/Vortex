@@ -12,12 +12,10 @@ import type { IState } from "@/types/IState";
 import { Alert } from "@/ui/components/alert/Alert";
 import { Button } from "@/ui/components/button/Button";
 import { Description } from "@/ui/components/form/field/Description";
-import { ErrorMessage } from "@/ui/components/form/field/ErrorMessage";
 import { Field } from "@/ui/components/form/field/Field";
 import { Label } from "@/ui/components/form/field/Label";
 import { Switch } from "@/ui/components/form/switch/Switch";
 import { NoResults } from "@/ui/components/no_results/NoResults";
-import { Picker } from "@/ui/components/picker/Picker";
 import { Pill } from "@/ui/components/pill/Pill";
 import { Toolbar } from "@/ui/components/toolbar/Toolbar";
 import type { IToolbarAction } from "@/ui/components/toolbar/ToolbarGroup";
@@ -28,8 +26,8 @@ import { Typography } from "@/ui/components/typography/Typography";
 import {
   inspectPrefix,
   listInstalledProton,
-  protonConfigName,
-  RECOMMENDED_PROTON,
+  resolveSteamProton,
+  type SteamProtonSource,
 } from "@/util/linux/proton";
 import { findLinuxSteamPath } from "@/util/linux/steamPaths";
 import { useSteamGamesRevision } from "@/util/linux/steamRevision";
@@ -59,16 +57,10 @@ import {
   type IPrivateShaderCacheInfo,
 } from "../shaderCache";
 import {
-  disableShaderCacheRedirect,
-  enableShaderCacheRedirect,
   configureShaderCache,
   checkShaderCacheWrapper,
   ensureShaderCacheWrapper,
-  getSteamLaunchOptions,
   SHADER_CACHE_WRAPPER,
-  setSteamLaunchOptions,
-  setSteamCompatTool,
-  shaderCacheInvocation,
 } from "../steamShaderSettings";
 
 interface IProtonPageProps {
@@ -80,7 +72,8 @@ interface IPageData {
   appId?: string;
   compatDataPath?: string;
   required: string[];
-  tools: Array<{ configName?: string; label: string; value: string }>;
+  /** The Proton Steam runs this game with, which Vortex follows. */
+  runtime?: { label?: string; installed: boolean; source: SteamProtonSource };
   components: string[];
   installed: string[];
   shaderCache: IModShaderCacheInfo;
@@ -96,7 +89,13 @@ const EMPTY_DATA: IPageData = {
   shaderCache: { bytes: 0, files: 0 },
   shaderRoots: [],
   steamShaderRoots: [],
-  tools: [],
+};
+
+const RUNTIME_SOURCES: Record<SteamProtonSource, string> = {
+  game: "Set for this game in Steam.",
+  prefix: "The version Steam last ran this game with.",
+  default: "Steam's default for Windows games.",
+  newest: "The newest Proton installed, because Steam hasn't chosen one yet.",
 };
 
 const formatBytes = (bytes: number): string => {
@@ -161,13 +160,11 @@ const SettingRow = ({
   children,
   description,
   disabled,
-  error,
   label,
 }: {
   children: ReactNode;
   description?: string;
   disabled?: boolean;
-  error?: string;
   label: string;
 }) => (
   <Field className={`${ROW_CLASSES} flex-row`} disabled={disabled}>
@@ -175,8 +172,6 @@ const SettingRow = ({
       <Label>{label}</Label>
 
       {!!description && <Description className="text-body-sm">{description}</Description>}
-
-      {!!error && <ErrorMessage className="text-body-sm">{error}</ErrorMessage>}
     </div>
 
     <div className="flex shrink-0 items-center gap-x-2">{children}</div>
@@ -227,14 +222,12 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
   const [data, setData] = useState<IPageData>(EMPTY_DATA);
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<number>();
-  const [cacheRedirectEnabled, setCacheRedirectEnabled] = useState<boolean>();
-  const [steamSettingsAvailable, setSteamSettingsAvailable] = useState(true);
+
   const [dependencyProgress, setDependencyProgress] = useState<number>();
   const [dependencyStatus, setDependencyStatus] = useState<string>();
   const [pageError, setPageError] = useState<string>();
   const [setupStatus, setSetupStatus] = useState<IProtonSetupStatus>(protonSetupStatus);
-  const version = profile?.features?.["proton-version"];
-  const selected = typeof version === "string" ? version : "";
+  const cacheRedirectEnabled = profile?.features?.["proton-shader-cache-isolation"] !== false;
   const automatic = profile?.features?.["proton-auto-dependencies"] !== false;
   const pageFeedback = profile?.features?.["proton-page-feedback"] as string | undefined;
   const targetKey = currentProtonTarget(api.getState())?.key;
@@ -258,7 +251,6 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
     if (key !== loadedKey.current) {
       loadedKey.current = key;
       setData(EMPTY_DATA);
-      setCacheRedirectEnabled(undefined);
     }
     try {
       const steamPath = findLinuxSteamPath();
@@ -266,7 +258,6 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
       setMissingSetup(steamPath === undefined ? "steam" : entry === undefined ? "game" : undefined);
       if (steamPath === undefined || entry === undefined || profile === undefined) {
         setData(EMPTY_DATA);
-        setCacheRedirectEnabled(undefined);
         return;
       }
       const compatDataPath = entry.compatDataPath;
@@ -281,19 +272,8 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
           path.join(steamPath, "steamapps", "shadercache"),
         ]),
       ];
-      let launchOptions = "";
-      let settingsAvailable = true;
-      try {
-        launchOptions = await getSteamLaunchOptions(entry.appid, {
-          steamPath,
-          gamePath: entry.gamePath,
-        });
-      } catch {
-        settingsAvailable = false;
-      }
-      const redirectEnabled =
-        settingsAvailable &&
-        launchOptions.includes(shaderCacheInvocation(entry.appid, SHADER_CACHE_WRAPPER));
+      const redirectEnabled = cacheRedirectEnabled;
+      const runtime = await resolveSteamProton(steamPath, entry.appid, compatDataPath, tools);
       const shaderRoots = redirectEnabled
         ? [path.join(os.homedir(), ".cache", "vortex", "shadercache")]
         : steamShaderRoots;
@@ -308,17 +288,15 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
           : undefined,
       ]);
       if (request !== generation.current) return;
-      setSteamSettingsAvailable(settingsAvailable);
-      setCacheRedirectEnabled(settingsAvailable ? redirectEnabled : undefined);
       setData({
         appId: entry.appid,
         compatDataPath,
         required,
-        tools: tools.map((tool) => ({
-          configName: protonConfigName(tool),
-          label: tool.name,
-          value: tool.path,
-        })),
+        runtime: {
+          label: runtime.tool?.name ?? runtime.name,
+          installed: runtime.tool !== undefined,
+          source: runtime.source,
+        },
         components: inventory?.components ?? [],
         installed: inventory?.winetricks ?? [],
         shaderCache,
@@ -334,7 +312,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
         setLoading(false);
       }
     }
-  }, [api, profile, steamRevision, discovered]);
+  }, [api, cacheRedirectEnabled, profile, steamRevision, discovered]);
 
   useEffect(() => {
     if (active !== false) void refresh();
@@ -372,19 +350,6 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
     [api, targetKey],
   );
 
-  const steamSettingsTarget = useCallback(() => {
-    const target = currentProtonTarget(api.getState());
-    if (target === undefined || !sameTarget())
-      throw new ProcessCanceled("The selected Proton installation changed");
-    return {
-      steamPath: target.steamPath,
-      gamePath: target.game.gamePath,
-      assertCurrent: () => {
-        if (!sameTarget()) throw new ProcessCanceled("The selected Proton installation changed");
-      },
-    };
-  }, [api, sameTarget]);
-
   const retrySetup = async () => {
     if (!sameTarget()) return;
     setLoading(true);
@@ -396,66 +361,6 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
     }
   };
 
-  const options = useMemo(
-    () => [
-      { label: t("{{name}} (recommended)", { name: RECOMMENDED_PROTON.label }), value: "" },
-      // The recommended entry already stands for Steam's Experimental build.
-      ...data.tools.filter((tool) => tool.configName !== RECOMMENDED_PROTON.configName),
-      ...(selected !== "" && !data.tools.some((tool) => tool.value === selected)
-        ? [
-            {
-              label: t("Unavailable: {{name}}", { name: path.basename(selected) }),
-              value: selected,
-            },
-          ]
-        : []),
-    ],
-    [data.tools, selected, t],
-  );
-
-  const changeVersion = useCallback(
-    async (value: string) => {
-      if (profile === undefined || data.appId === undefined) return;
-      if (value === "") {
-        // The coordinator points Steam at the recommended Proton, installing it first if needed.
-        dispatch(setFeature(profile.id, "proton-version", ""));
-        api.sendNotification({
-          type: "success",
-          message: `Steam and Vortex will use ${RECOMMENDED_PROTON.label}`,
-          displayMS: 5000,
-        });
-        return;
-      }
-      const configName = data.tools.find((tool) => tool.value === value)?.configName;
-      if (configName === undefined) {
-        api.showErrorNotification(
-          "Failed to change Proton version",
-          new Error("Steam cannot identify this Proton installation"),
-        );
-        return;
-      }
-      if (!sameTarget()) return;
-      setLoading(true);
-      try {
-        await setSteamCompatTool(data.appId, configName, steamSettingsTarget());
-        if (!sameTarget()) return;
-        dispatch(setFeature(profile.id, "proton-version", value));
-        api.sendNotification({
-          type: "success",
-          message: `Steam and Vortex will use ${data.tools.find((tool) => tool.value === value)?.label}`,
-          displayMS: 5000,
-        });
-        await Steam.reloadGames();
-        if (sameTarget()) await refresh();
-      } catch (err) {
-        api.showErrorNotification("Failed to change Proton version", err);
-      } finally {
-        if (sameTarget()) setLoading(false);
-      }
-    },
-    [api, data.appId, data.tools, dispatch, profile, refresh, sameTarget, steamSettingsTarget],
-  );
-
   const missing = useMemo(
     () => data.required.filter((verb) => !data.installed.includes(verb)),
     [data.installed, data.required],
@@ -463,7 +368,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
   const visibleSetupStatus =
     setupStatus.appId === undefined || setupStatus.appId === data.appId ? setupStatus : undefined;
   const privateCacheMatchesSteam =
-    cacheRedirectEnabled === true && data.privateShaderCache?.matchesSteam === true;
+    cacheRedirectEnabled && data.privateShaderCache?.matchesSteam === true;
   const toolbarActions = useMemo<IToolbarAction[]>(
     () => [
       {
@@ -545,7 +450,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
       });
       return;
     }
-    const isolated = cacheRedirectEnabled === true;
+    const isolated = cacheRedirectEnabled;
     const action = "Reset cache";
     const result = await api.showDialog(
       "question",
@@ -616,8 +521,8 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
         enable ? "Isolate mod shader cache" : "Disable shader-cache isolation",
         {
           text: enable
-            ? "The game will start from a copy of Steam's cache and write mod-specific shaders only to the private copy."
-            : "The game will return to Steam's shared cache on its next launch.",
+            ? "When you start the game from Vortex, it begins from a copy of Steam's cache and writes mod-specific shaders only to the private copy."
+            : "When you start the game from Vortex, it will use Steam's shared cache again.",
           message: enable
             ? "If Steam updates its cache, Vortex automatically discards the old private copy and seeds a new one. Steam files and mods are never deleted."
             : "The existing private cache is preserved until you clear it.",
@@ -633,17 +538,10 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
           await configureShaderCache(data.appId, data.steamShaderRoots);
           await checkShaderCacheWrapper(data.appId);
         }
-        const current = await getSteamLaunchOptions(data.appId, steamSettingsTarget());
-        if (!sameTarget()) return;
-        const next = enable
-          ? enableShaderCacheRedirect(current, data.appId, SHADER_CACHE_WRAPPER)
-          : disableShaderCacheRedirect(current, data.appId, SHADER_CACHE_WRAPPER);
-        await setSteamLaunchOptions(data.appId, next, steamSettingsTarget());
         if (!sameTarget()) return;
         if (profile !== undefined) {
           dispatch(setFeature(profile.id, "proton-shader-cache-isolation", enable));
         }
-        setCacheRedirectEnabled(enable);
         api.sendNotification({
           type: "success",
           message: enable ? "Mod shader cache isolated" : "Shader-cache isolation disabled",
@@ -655,25 +553,21 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
         if (sameTarget()) setLoading(false);
       }
     },
-    [api, data.appId, data.steamShaderRoots, dispatch, profile, sameTarget, steamSettingsTarget],
+    [api, data.appId, data.steamShaderRoots, dispatch, profile, sameTarget],
   );
 
   const setupInProgress =
     visibleSetupStatus !== undefined &&
     ["checking", "installing", "verifying"].includes(visibleSetupStatus.phase);
-  const privateCache = cacheRedirectEnabled === true ? data.privateShaderCache : undefined;
-  const selectedUnavailable =
-    selected !== "" && !data.tools.some((tool) => tool.value === selected);
+  const privateCache = cacheRedirectEnabled ? data.privateShaderCache : undefined;
   const resetBlockedReason =
     data.appId === undefined
       ? undefined
-      : cacheRedirectEnabled === undefined
-        ? t("Start Steam so Vortex can read this game's launch settings")
-        : Object.keys(toolsRunning).length > 0
-          ? t("Exit the game and its tools first")
-          : privateCacheMatchesSteam
-            ? t("The private copy already matches Steam")
-            : undefined;
+      : Object.keys(toolsRunning).length > 0
+        ? t("Exit the game and its tools first")
+        : privateCacheMatchesSteam
+          ? t("The private copy already matches Steam")
+          : undefined;
   const hasAlerts =
     setupInProgress || visibleSetupStatus?.phase === "error" || pageError !== undefined;
 
@@ -776,32 +670,30 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
           <>
             <Section
               description={t(
-                "Choose one Proton version for both the Steam game and its mod tools, so they share the same Windows environment.",
+                "Vortex runs your mod tools with the same Proton version as Steam, so they share the game's Windows environment.",
               )}
               title={t("Windows compatibility")}
             >
-              <SettingRow
-                description={t(
-                  "A specific version stays selected for this profile until you change it here.",
-                )}
-                error={
-                  selectedUnavailable
-                    ? t("{{path}} is no longer installed. Choose another version.", {
-                        path: selected,
-                      })
-                    : undefined
+              <StatusRow
+                description={
+                  data.runtime === undefined
+                    ? undefined
+                    : `${t(RUNTIME_SOURCES[data.runtime.source])} ${t("To change it, open the game's Properties in Steam and choose Compatibility.")}`
                 }
-                disabled={loading || data.appId === undefined}
                 label={t("Proton version")}
+                testId="proton-version"
               >
-                <Picker
-                  button={{ className: "min-w-64 justify-between" }}
-                  options={options}
-                  value={selected}
-                  onChange={(value) => void changeVersion(value)}
-                />
-              </SettingRow>
-
+                {data.runtime?.label !== undefined && (
+                  <Pill
+                    brand={data.runtime.installed ? "neutral" : "warning"}
+                    icon={data.runtime.installed ? "check_circle" : "warning"}
+                  >
+                    {data.runtime.installed
+                      ? data.runtime.label
+                      : t("{{name}} isn't installed", { name: data.runtime.label })}
+                  </Pill>
+                )}
+              </StatusRow>
               <SettingRow
                 description={t(
                   "Before launch, Vortex installs the extra Windows software that your active mods need.",
@@ -911,25 +803,23 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
                 </Tooltip>
               }
               description={
-                cacheRedirectEnabled === undefined
-                  ? t("Vortex needs Steam's launch settings to tell where this game's cache is.")
-                  : cacheRedirectEnabled
-                    ? t("Steam's cache is protected. Mod changes stay in a private copy.")
-                    : t("Protection is off. Mod changes may reach Steam's cache.")
+                cacheRedirectEnabled
+                  ? t(
+                      "Steam's cache is protected when you start the game from Vortex. Mod changes stay in a private copy.",
+                    )
+                  : t("Protection is off. Mod changes may reach Steam's cache.")
               }
               title={t("Mod shader cache")}
             >
               <SettingRow
-                description={
-                  steamSettingsAvailable
-                    ? t("Recommended. Refreshes automatically when Steam's cache changes.")
-                    : t("Start Steam so Vortex can read and update this game's launch settings.")
-                }
-                disabled={!steamSettingsAvailable || cacheRedirectEnabled === undefined}
+                description={t(
+                  "Recommended. Applies to games started from Vortex; launches from Steam use Steam's cache.",
+                )}
+                disabled={loading || data.appId === undefined}
                 label={t("Protect Steam's shader cache")}
               >
                 <Switch
-                  checked={cacheRedirectEnabled === true}
+                  checked={cacheRedirectEnabled}
                   data-testid="proton-cache-isolation"
                   onChange={changeCacheRedirect}
                 />

@@ -143,27 +143,27 @@ Steam game when the store snapshot identifies it as using Proton. Before the fir
 Steam scan, no matching entry is available. Launch the game in Steam once to initialise
 its prefix, then rescan games if necessary.
 
-The version picker selects one installed Proton version for Steam and Vortex. The default,
-**Proton Experimental (recommended)**, is Steam's own default for Windows games. When it
-is missing, Vortex asks Steam to install it (`steam://install/1493710`) and finishes
-setting up the game once the download completes; **Retry setup** continues it sooner. A
-specific choice stays with the profile. The default never downgrades a prefix: when a
-newer Proton built the game's prefix, Vortex uses an installed Proton that can drive it as
-it is (the one Steam already uses, otherwise the one that built the prefix) and points
-Steam at it, which also repairs a game an earlier build had moved to an older release.
+Vortex works with a stock Steam client and never changes Steam's settings: it only reads
+Steam's own files. The page shows the Proton version Steam runs the game with, and why:
 
-You can still pick an older Proton, as in Steam. Proton downgrades a prefix only when it
-starts a program, which Steam does at game launch, while Protontricks drives Wine directly
-and an older Wine against a newer prefix can hang. Before installing Windows components,
-Vortex therefore starts a no-op command with the selected Proton, letting Proton remove its
+1. the game's own setting (Steam's **Properties → Compatibility**, kept in
+   `config/config.vdf`);
+2. otherwise the version that last ran the game's prefix, which Steam records in
+   `compatdata/<appid>/config_info` and which reflects Steam's own per-game choices;
+3. otherwise Steam's default for Windows games;
+4. otherwise the newest installed Proton, preferring Experimental to stable releases.
+
+To use another version, change it in Steam. If Steam's version is not installed, setup
+stops and asks you to launch the game once from Steam, which downloads it.
+
+Proton downgrades a prefix only when it starts a program, which Steam does at game launch,
+while Protontricks drives Wine directly and an older Wine against a newer prefix can hang.
+When Steam's version is older than the one that built the prefix, Vortex therefore starts a
+no-op command with it before installing Windows components, letting Proton remove its
 newer files exactly as a game launch would; saves and settings in the prefix are kept. If
 the prefix is still newer afterwards, setup stops with an explanation. GE-style versions
-cannot be ordered and are not checked. To apply Steam compatibility and launch settings, start Steam with
-`-cef-enable-debugging` and keep it running. Vortex uses the local settings endpoint
-at port 8080; an unavailable service gives setup guidance. An unavailable selected runtime
-produces an error rather than silently launching another runtime. Tools outside the game
-directory use their associated game's identity, not a string prefix of their tool path.
-
+cannot be ordered and are not checked. Tools outside the game directory use their
+associated game's identity, not a string prefix of their tool path.
 Proton launches receive the selected Steam app ID and game prefix, with the same app
 context Steam passes to a game (`SteamAppId`, `SteamGameId`, `SteamOverlayGameId`,
 `STEAM_COMPAT_APP_ID` and `STEAM_COMPAT_INSTALL_PATH`), so a context inherited from
@@ -188,8 +188,8 @@ launches retain the existing spawn, exit and window lifecycle.
 
 Installed Proton discovery scans the client and configured libraries, checks for the
 `proton` launcher, and supports custom compatibility tools. Missing libraries do not
-prevent scanning others. Per-game and default settings take precedence over the installed
-fallback, which prefers Experimental, then the numerically newest official stable version.
+prevent scanning others. Launches that the page's preparation doesn't cover use the same
+order as the page.
 
 The original Proton header, compatibility card, mod requirements, shader cache controls
 and local feedback footer are restored from `local/linux-support`. Required-component
@@ -230,7 +230,7 @@ records and the prefix version; completion is reported only after those checks p
 Failures leave one error notification and a setup alert with **Retry setup** above the
 page. The page follows Health Check's layout: bordered sections with small neutral
 actions, settings and statuses on raised rows, and Vortex's shared `Alert`, `Pill`,
-`Switch`, `Picker`, `Field`, `Toolbar` and `NoResults` components. Requirement pills
+`Switch`, `Field`, `Toolbar` and `NoResults` components. Requirement pills
 use neutral text with a coloured icon. Without Steam or a Proton game the page shows
 an empty state instead of the settings. A refresh keeps the last result on screen
 until the same installation has been read again.
@@ -250,8 +250,9 @@ bundle and provisions it under `~/.local/share/vortex/bin`; no manually supplied
 needed. Python 3.10 or newer is required in the launch environment and on the Steam host.
 The helper checks its configuration before Vortex enables protection. Flatpak also checks
 execution on the Steam host from `/`, since its packaged `/app/main` directory is not
-available outside the sandbox. Steam launches use
-a managed launch-option wrapper; Vortex's direct Proton commands invoke the same helper.
+available outside the sandbox. Protection is a profile setting, on by default, and applies
+to games started from Vortex, whose direct Proton commands invoke the helper. Vortex does
+not change Steam's launch options, so games started from Steam use Steam's shared cache.
 From Vortex Flatpak, direct Proton commands execute on the host with the selected game's
 environment and working directory, so the game can connect to the host Steam client.
 The local Flatpak portal process starts from the host root; sandbox-only environment variables are
@@ -262,24 +263,16 @@ prefix and Steam identity always take precedence. Arguments and environment valu
 Spawn callbacks identify the portal proxy; its exit status reports host signals as 128 plus
 the signal number. This route has been exercised with Steam installed through Snap;
 a Steam client inside its own Flatpak still needs separate runtime validation.
-Existing custom launch options are preserved. When Vortex starts the game itself directly
-through Proton (its executable, or the loader Vortex redirects Steam to), it applies your
-Steam launch options as Steam would: leading `KEY=VALUE` variables, a wrapper command before
-`%command%` (such as `gamemoderun`) and arguments after it, or, without `%command%`, the
-words as extra arguments. Vortex's own wrappers are removed first, your variables never
-override the game's Steam identity, and other tools in the game folder do not receive
-them. Options that need a shell (pipes, `;`, redirections, `$` substitutions or globs) are
-left out of direct launches with a log entry; Steam still applies them to its own launches.
-A detected Windows default-primary loader
-is redirected only for Steam game launches; separately selected tools keep their executable.
-Steam settings reads and writes require the connected client's root library and game
-installation to match the selected physical paths. Vortex validates both and rechecks
-them on the same connection before applying a change; unavailable or mismatched clients
-produce an error. Start the matching Steam client and refresh Games before retrying.
-Reads use a one-shot native app-details subscription so they reflect current launch
-options even when Steam’s library page has no active observer; the library store’s
-cached details can otherwise keep returning an earlier value after a successful write.
-
+When Vortex starts the game itself directly through Proton (its executable, or its
+default loader), it applies your Steam launch options as Steam would. It reads them from
+the most recently written `userdata/<id>/config/localconfig.vdf`, the active Steam user's:
+leading `KEY=VALUE` variables, a wrapper command before `%command%` (such as `gamemoderun`)
+and arguments after it, or, without `%command%`, the words as extra arguments. Wrappers
+that earlier Vortex builds added to the options are left out, your variables never override
+the game's Steam identity, and other tools in the game folder do not receive them. Options
+that need a shell (pipes, `;`, redirections, `$` substitutions or globs) are left out of
+direct launches with a log entry; Steam still applies them to its own launches. Unreadable
+options leave the launch as Steam's plain command.
 The private cache starts from the first nonempty configured Steam cache, excluding its
 `downloads` directory. The helper hashes source bytes and reseeds after a source change.
 The helper marks its child environment as prepared for Steam (`SteamEnv=1`) after
@@ -289,9 +282,8 @@ only to protected helper launches; it does not change the running Steam client.
 When no cache paths are inherited, defaults retain Steam’s seeded directory layout.
 The **Private copy** row compares actual private/source bytes, showing Steam-copy and
 added/changed sizes and file counts, and **Matches Steam** when nothing has changed. An
-unavailable source is not reported as an identical copy. **Reset cache** stays disabled
-until Vortex has read the game's Steam launch settings, because only those say whether the
-private copy or Steam's own cache is in use. It confirms first, refuses while tools are running, and replaces only a
+unavailable source is not reported as an identical copy. **Reset cache** confirms first,
+refuses while tools are running, and replaces only a
 marked Vortex-owned private cache. Steam downloads, precompiled source databases, mods
 and game files stay intact. With protection disabled, reset removes only the recognized
 generated cache files. The helper refuses links/special files inside cache trees,
@@ -309,7 +301,7 @@ The Linux launcher test runs disposable real-file and child-process fixtures, in
 copy/update/reset preservation, links, overlap, literal arguments/environment, signals and
 busy locks. Windows runs the portable management/launch controls and skips Linux-only
 filesystem/process fixtures. These tests need no account, game, Steam process or network.
-They do not establish vendor downloads, actual Steam settings acceptance, GPU cache
+They do not establish vendor downloads, real Steam configuration files, GPU cache
 behavior or packaged sandbox support; exercise those workflows separately in the app.
 Run the repository's full `pnpm run verify` with development sessions stopped before
 publication. Record source, packaged runtime and real-game evidence separately.
@@ -317,12 +309,13 @@ publication. Record source, packaged runtime and real-game evidence separately.
 ### Credits
 
 The prefix-downgrade check, recipe timeouts, Flatpak tuning-variable forwarding, the
-system-wide Protontricks fallback, the extra Steam app-context variables and the
-launch-option parsing for direct game launches are adapted
+system-wide Protontricks fallback, the extra Steam app-context variables, the
+launch-option parsing for direct game launches, reading launch options from
+`localconfig.vdf` and finding Steam's Proton through the prefix's `config_info` are adapted
 from [Amethyst Mod Manager](https://github.com/ChrisDKN/Amethyst-Mod-Manager) by ChrisDKN
 (GPL-3.0, commit `544d0055eab0916fbf65b9adabe761ddd3fff06a`): `src/Utils/wine/protontricks.py`,
-`src/Utils/flatpak/env.py`, `src/Utils/flatpak/i386.py` and
-`src/Utils/executables/launch.py`. Vortex is also GPL-3.0; the source comments name each
+`src/Utils/flatpak/env.py`, `src/Utils/flatpak/i386.py`,
+`src/Utils/executables/launch.py` and `src/Utils/launchers/steam.py`. Vortex is also GPL-3.0; the source comments name each
 origin.
 
 ## Native dependencies

@@ -349,7 +349,7 @@ describe("Steam Proton launches", () => {
 
   const gamePath = path.join(BASE_FOLDER, "steamapps", "common", "TestGame");
   const entry = { appid: "42", gameStoreId: "steam", name: "Test", gamePath } as ISteamEntry;
-  const makeApi = (discoveryPath: string, override = "") => {
+  const makeApi = (discoveryPath: string) => {
     const runExecutable = vi.fn().mockResolvedValue(undefined);
     const state = {
       settings: {
@@ -357,7 +357,7 @@ describe("Steam Proton launches", () => {
         gameMode: { discovered: { test: { path: discoveryPath } } },
       },
       persistent: {
-        profiles: { one: { id: "one", gameId: "test", features: { "proton-version": override } } },
+        profiles: { one: { id: "one", gameId: "test", features: {} } },
       },
     };
     return {
@@ -643,33 +643,16 @@ describe("Steam Proton launches", () => {
       }),
     );
   });
-  it("uses only the matching active game's profile override", async () => {
+  it("uses the Proton Steam chose for the game and never retries the Windows executable directly", async () => {
     proton.info.mockResolvedValue({
       usesProton: true,
       protonPath: "/steam-proton",
       compatDataPath: "/prefix",
     });
-    proton.installed.mockResolvedValue([{ path: "/override" }]);
-    const own = makeApi(gamePath, "/override");
-    await new Steam().runToolWithProton(own.api, "/outside/Tool.exe", [], {}, entry);
-    expect(own.runExecutable.mock.calls[0][0]).toBe(path.join("/override", "proton"));
-    const other = makeApi(gamePath + "Other", "/override");
-    await new Steam().runToolWithProton(other.api, "/outside/Tool.exe", [], {}, entry);
-    expect(other.runExecutable.mock.calls[0][0]).toBe(path.join("/steam-proton", "proton"));
-  });
-
-  it("refuses a missing profile override and never retries the Windows executable directly", async () => {
-    proton.info.mockResolvedValue({
-      usesProton: true,
-      protonPath: "/steam-proton",
-      compatDataPath: "/prefix",
-    });
-    proton.installed.mockResolvedValue([]);
-    const { api, runExecutable } = makeApi(gamePath, "/missing");
-    await expect(
-      new Steam().runToolWithProton(api, "/outside/Tool.exe", [], {}, entry),
-    ).rejects.toThrow("no longer installed");
-    expect(runExecutable).not.toHaveBeenCalled();
+    const { api, runExecutable } = makeApi(gamePath);
+    await new Steam().runToolWithProton(api, "/outside/Tool.exe", [], {}, entry);
+    expect(runExecutable.mock.calls[0][0]).toBe(path.join("/steam-proton", "proton"));
+    runExecutable.mockClear();
     proton.info.mockResolvedValue({ usesProton: false });
     await expect(
       new Steam().runToolWithProton(api, "/outside/Tool.exe", [], {}, entry),
