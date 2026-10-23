@@ -145,13 +145,22 @@ its prefix, then rescan games if necessary.
 
 The version picker selects one installed Proton version for Steam and Vortex. Latest
 stable follows the newest installed official stable tool; a specific choice stays with
-the profile. To apply Steam compatibility and launch settings, start Steam with
+the profile. Latest stable never downgrades a prefix: when the game's prefix was built by
+a newer Proton (for example Experimental) than the latest stable release, Vortex leaves
+the game on the runtime Steam already uses for it. With an explicitly selected older
+Proton, Vortex refuses to install Windows components into the newer prefix and explains
+how to continue; Proton downgrades a prefix only when the game itself launches, and an
+older Wine running against a newer prefix can hang instead of failing. GE-style versions
+cannot be ordered and are not checked. To apply Steam compatibility and launch settings, start Steam with
 `-cef-enable-debugging` and keep it running. Vortex uses the local settings endpoint
 at port 8080; an unavailable service gives setup guidance. An unavailable selected runtime
 produces an error rather than silently launching another runtime. Tools outside the game
 directory use their associated game's identity, not a string prefix of their tool path.
 
-Proton launches receive the selected Steam app ID and game prefix. The native Steam
+Proton launches receive the selected Steam app ID and game prefix, with the same app
+context Steam passes to a game (`SteamAppId`, `SteamGameId`, `SteamOverlayGameId`,
+`STEAM_COMPAT_APP_ID` and `STEAM_COMPAT_INSTALL_PATH`), so a context inherited from
+another game cannot leak in. The native Steam
 bridge also needs the SDK links that Steam creates on first startup. For Snap Steam,
 Vortex selects the matching Steam home for the Proton child process by checking the
 SDK library identity. Vortex keeps its own home, and an explicit tool HOME override
@@ -190,9 +199,12 @@ can be Wine built-ins. A changed Proton prefix version reapplies the detected re
 No detected recipes means no dependency-helper preparation. Initialize the game in Steam
 first; Vortex does not guess another game's prefix.
 
-Managed recipes need Flatpak and its **user** Flathub remote on the Steam host, network
-access for vendor redistributables, and an initialized prefix. Vortex installs/updates
-`com.github.Matoking.protontricks` as a user Flatpak and invokes it with the exact Steam
+Managed recipes need Flatpak and a Flathub remote on the Steam host, network access for
+vendor redistributables, and an initialized prefix. Vortex uses an existing
+`com.github.Matoking.protontricks` installation, preferring the per-user one. Otherwise it
+installs it per user, or system-wide when Flathub is only a system remote (as on Bazzite
+and Fedora Atomic; a system install may ask for authorization). It updates that
+installation and invokes it with the exact Steam
 client, App ID, initialized prefix and selected Proton metadata name. Custom tools use
 their internal compatibility-tool key. Duplicate or mismatched installations are refused.
 Both manual and automatic setup use this same serialized preparation. A one-shot sandbox
@@ -202,16 +214,24 @@ readable. The exact required Steam Runtime also receives writable access to its 
 Inherited Wine executable overrides are cleared; the final Protontricks runtime and
 prefix are checked before any recipe executes. Recipes run unattended and their
 installation records are checked afterward. From a Vortex Flatpak setup uses
-`flatpak-spawn --host`.
+`flatpak-spawn --host`. Each helper step is capped at 30 minutes and each recipe run at
+20 minutes; a run that stops responding is ended (SIGTERM, then SIGKILL after ten
+seconds) and reported as a setup error, so it cannot block later launches.
 Installation progress appears in Vortex's notification center and continues there when
 you leave the Proton page. The activity stays open while Vortex verifies installation
 records and the prefix version; completion is reported only after those checks pass.
-Failures leave one error notification and a themed setup alert with **Retry setup**.
-Requirement labels use the same themed pills as Health Check, with readable neutral text.
+Failures leave one error notification and a setup alert with **Retry setup** above the
+page. The page follows Health Check's layout: bordered sections with small neutral
+actions, settings and statuses on raised rows, and Vortex's shared `Alert`, `Pill`,
+`Switch`, `Picker`, `Field`, `Toolbar` and `NoResults` components. Requirement pills
+use neutral text with a coloured icon. Without Steam or a Proton game the page shows
+an empty state instead of the settings. A refresh keeps the last result on screen
+until the same installation has been read again.
 Native Flatpak dependency commands and Flatpak host commands preserve literal quoted
 arguments and environment values without invoking a shell.
 
-Install Flatpak using your distribution's package manager and add the user remote with:
+Install Flatpak using your distribution's package manager and, if no Flathub remote
+exists yet, add the user remote with:
 
 ```sh
 flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
@@ -228,7 +248,10 @@ a managed launch-option wrapper; Vortex's direct Proton commands invoke the same
 From Vortex Flatpak, direct Proton commands execute on the host with the selected game's
 environment and working directory, so the game can connect to the host Steam client.
 The local Flatpak portal process starts from the host root; sandbox-only environment variables are
-not forwarded. Arguments and environment values retain literal quotes without invoking a shell.
+not forwarded. Proton, Wine, DXVK, VKD3D, MangoHud, Gamescope and GPU-driver tuning
+variables that you set before starting Vortex (for example `PROTON_LOG=1` or
+`DXVK_HUD=fps`) are forwarded, as a native Vortex passes them on; the selected game's
+prefix and Steam identity always take precedence. Arguments and environment values retain literal quotes without invoking a shell.
 Spawn callbacks identify the portal proxy; its exit status reports host signals as 128 plus
 the signal number. This route has been exercised with Steam installed through Snap;
 a Steam client inside its own Flatpak still needs separate runtime validation.
@@ -249,9 +272,11 @@ setting the private cache paths. This prevents the native Steam bridge from repl
 them when a Windows game starts outside a Steam launch session. The marker applies
 only to protected helper launches; it does not change the running Steam client.
 When no cache paths are inherited, defaults retain Steam’s seeded directory layout.
-The split bar compares actual private/source bytes, showing Steam-copy and added/changed
-sizes and file counts. An unavailable source is not reported as an identical copy.
-**Reset cache** confirms first, refuses while tools are running, and replaces only a
+The **Private copy** row compares actual private/source bytes, showing Steam-copy and
+added/changed sizes and file counts, and **Matches Steam** when nothing has changed. An
+unavailable source is not reported as an identical copy. **Reset cache** stays disabled
+until Vortex has read the game's Steam launch settings, because only those say whether the
+private copy or Steam's own cache is in use. It confirms first, refuses while tools are running, and replaces only a
 marked Vortex-owned private cache. Steam downloads, precompiled source databases, mods
 and game files stay intact. With protection disabled, reset removes only the recognized
 generated cache files. The helper refuses links/special files inside cache trees,
@@ -273,6 +298,16 @@ They do not establish vendor downloads, actual Steam settings acceptance, GPU ca
 behavior or packaged sandbox support; exercise those workflows separately in the app.
 Run the repository's full `pnpm run verify` with development sessions stopped before
 publication. Record source, packaged runtime and real-game evidence separately.
+
+### Credits
+
+The prefix-downgrade check, recipe timeouts, Flatpak tuning-variable forwarding, the
+system-wide Protontricks fallback and the extra Steam app-context variables are adapted
+from [Amethyst Mod Manager](https://github.com/ChrisDKN/Amethyst-Mod-Manager) by ChrisDKN
+(GPL-3.0, commit `544d0055eab0916fbf65b9adabe761ddd3fff06a`): `src/Utils/wine/protontricks.py`,
+`src/Utils/flatpak/env.py`, `src/Utils/flatpak/i386.py` and
+`src/Utils/executables/launch.py`. Vortex is also GPL-3.0; the source comments name each
+origin.
 
 ## Native dependencies
 

@@ -15,6 +15,8 @@ import {
   getProtonInfo,
   buildProtonEnvironment,
   getSteamLibraryPaths,
+  inheritedProtonTuning,
+  prefixDowngradeWarning,
 } from "./proton";
 
 const temporaryPaths: string[] = [];
@@ -270,4 +272,52 @@ it("preserves an explicit caller home while keeping identity consistent with the
   expect(
     buildProtonEnvironment({ compatDataPath: "/prefix", steamPath: "/steam", appId: "413150" }),
   ).not.toHaveProperty("HOME");
+});
+
+describe("prefixDowngradeWarning", () => {
+  const script = (version: string) =>
+    `#!/usr/bin/env python3\nCURRENT_PREFIX_VERSION="${version}"\n`;
+
+  it("explains an older stock Proton driving a prefix a newer one built", () => {
+    expect(prefixDowngradeWarning(script("9.0-203"), "10.0-100\n")).toMatch(
+      /created by Proton 10 \(10\.0-100\).*Proton 9 \(9\.0-203\)/,
+    );
+    expect(prefixDowngradeWarning(script("10.0-100"), "10.1000-200")).toContain("Proton 10");
+  });
+
+  it("allows equal or newer runtimes, GE builds and unreadable inputs", () => {
+    expect(prefixDowngradeWarning(script("10.0-100"), "10.0-100")).toBeUndefined();
+    expect(prefixDowngradeWarning(script("10.0-100"), "9.0-203")).toBeUndefined();
+    expect(prefixDowngradeWarning(script("GE-Proton10-33"), "10.0-100")).toBeUndefined();
+    expect(prefixDowngradeWarning(script("9.0-203"), "GE-Proton10-33")).toBeUndefined();
+    expect(prefixDowngradeWarning("", "10.0-100")).toBeUndefined();
+    expect(prefixDowngradeWarning(script("9.0-203"), "")).toBeUndefined();
+  });
+});
+
+describe("inheritedProtonTuning", () => {
+  it("keeps tuning variables and drops identity, path and unrelated variables", () => {
+    expect(
+      inheritedProtonTuning({
+        PROTON_LOG: "1",
+        DXVK_HUD: "fps",
+        VKD3D_CONFIG: "dxr",
+        WINEDEBUG: "-all",
+        SteamDeck: "0",
+        __GL_SHADER_DISK_CACHE: "1",
+        WINEPREFIX: "/elsewhere",
+        STEAM_COMPAT_DATA_PATH: "/elsewhere",
+        SteamAppId: "999",
+        PATH: "/app/bin",
+        UNSET: undefined,
+      }),
+    ).toEqual({
+      PROTON_LOG: "1",
+      DXVK_HUD: "fps",
+      VKD3D_CONFIG: "dxr",
+      WINEDEBUG: "-all",
+      SteamDeck: "0",
+      __GL_SHADER_DISK_CACHE: "1",
+    });
+  });
 });

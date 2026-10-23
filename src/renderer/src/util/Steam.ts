@@ -17,7 +17,12 @@ import type { ICustomExecutionInfo, IGameStore, IGameStoreSnapshot } from "../ty
 import { GameEntryNotFound } from "../types/IGameStore";
 import type { IGameStoreEntry } from "../types/IGameStoreEntry";
 import { isSameGamePath } from "./linux/gamePath";
-import { getProtonInfo, buildProtonEnvironment, buildProtonCommand } from "./linux/proton";
+import {
+  getProtonInfo,
+  buildProtonEnvironment,
+  buildProtonCommand,
+  inheritedProtonTuning,
+} from "./linux/proton";
 import { listInstalledProton, getSteamLibraryPaths } from "./linux/proton";
 import { findSteamClientHome } from "./linux/steamClientHome";
 import { findLinuxSteamPath } from "./linux/steamPaths";
@@ -591,6 +596,7 @@ class Steam implements IGameStore {
       compatDataPath: gameEntry.compatDataPath,
       steamPath,
       appId: gameEntry.appid,
+      installPath: gameEntry.gamePath,
       steamHome: options.env?.HOME === undefined ? await findSteamClientHome(steamPath) : undefined,
       existingEnv: options.env,
     });
@@ -603,13 +609,15 @@ class Steam implements IGameStore {
     preparation?.assertCurrent();
     if (process.platform === "linux" && process.env.IS_FLATPAK === "true") {
       // Proton must share the Steam client's host process namespace. Forward only
-      // the selected launch environment; Flatpak's own PATH and /app paths are local.
+      // the selected launch environment and the user's Proton tuning variables;
+      // Flatpak's own PATH and /app paths are local.
+      const hostEnv = { ...inheritedProtonTuning(process.env), ...protonEnv };
       return api.runExecutable(
         "flatpak-spawn",
         [
           "--host",
           "--directory=" + (options.cwd || path.dirname(launchExecutable)),
-          ...Object.entries(protonEnv).map(([key, value]) => "--env=" + key + "=" + value),
+          ...Object.entries(hostEnv).map(([key, value]) => "--env=" + key + "=" + value),
           launchExecutable,
           ...launchArgs,
         ],

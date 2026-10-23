@@ -443,10 +443,11 @@ describe("Proton orchestration consumer contracts", () => {
     f.ports.inspect
       .mockResolvedValueOnce(inventory([]))
       .mockResolvedValueOnce(inventory(["vcrun2022"]));
-    f.ports.read
-      .mockResolvedValueOnce("11.0")
-      .mockResolvedValueOnce("11.0")
-      .mockResolvedValueOnce("12.0");
+    // Reads of the prefix version: before installing, by the downgrade check, after installing.
+    const versions = ["11.0", "11.0", "12.0"];
+    f.ports.read.mockImplementation(async (file: string) =>
+      path.basename(file) === "version" ? versions.shift()! : "11.0",
+    );
     await expect(f.prepare()).rejects.toThrow("prefix changed");
     expect(f.ports.write).not.toHaveBeenCalled();
   });
@@ -545,5 +546,54 @@ describe("Proton orchestration consumer contracts", () => {
     f.coordinator.observe();
     await f.coordinator.request();
     expect(f.ports.stable).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("Proton prefix downgrade protection", () => {
+  const PROTON_9 = path.resolve("/steam/steamapps/common/Proton 9.0");
+  const EXPERIMENTAL = path.resolve("/steam/steamapps/common/Proton - Experimental");
+  const tools = [
+    { id: "proton-9", name: "Proton 9.0", path: PROTON_9, source: "steam" as const },
+    {
+      id: "experimental",
+      name: "Proton - Experimental",
+      path: EXPERIMENTAL,
+      source: "steam" as const,
+    },
+  ];
+  const scripts: Record<string, string> = {
+    [path.join(PROTON_9, "proton")]: 'CURRENT_PREFIX_VERSION="9.0-203"\n',
+    [path.join(EXPERIMENTAL, "proton")]: 'CURRENT_PREFIX_VERSION="10.0-100"\n',
+  };
+  const downgradeFixture = (selected: string) => {
+    const f = fixture(target("10", { selected }));
+    f.ports.tools.mockResolvedValue(tools);
+    f.ports.stable.mockResolvedValue("proton_9");
+    f.ports.configured.mockResolvedValue("proton_experimental");
+    f.ports.detect.mockResolvedValue(["vcrun2022"]);
+    f.ports.inspect
+      .mockResolvedValueOnce(inventory([]))
+      .mockResolvedValueOnce(inventory(["vcrun2022"]));
+    f.ports.read.mockImplementation(async (file: string) =>
+      path.basename(file) === "version" ? "10.0-100" : (scripts[file] ?? "10.0-100"),
+    );
+    return f;
+  };
+
+  it("keeps a newer runtime instead of downgrading its prefix to the latest stable Proton", async () => {
+    const f = downgradeFixture("");
+    await f.prepare();
+    expect(f.ports.setCompatTool).not.toHaveBeenCalled();
+    expect(f.ports.resolveDependency).toHaveBeenCalledWith(
+      expect.objectContaining({ protonPath: EXPERIMENTAL }),
+    );
+    expect(f.ports.install).toHaveBeenCalledOnce();
+  });
+
+  it("refuses to install with an explicitly selected Proton older than the prefix", async () => {
+    const f = downgradeFixture(PROTON_9);
+    await expect(f.prepare()).rejects.toThrow("prefix was created by Proton 10");
+    expect(f.ports.install).not.toHaveBeenCalled();
+    expect(f.ports.write).not.toHaveBeenCalled();
   });
 });

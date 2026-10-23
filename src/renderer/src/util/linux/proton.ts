@@ -362,6 +362,8 @@ export interface IProtonEnvironmentOptions {
   compatDataPath: string;
   steamPath: string;
   appId: string;
+  /** The game's install directory, as Steam passes it to Proton. */
+  installPath?: string;
   steamHome?: string;
   existingEnv?: Record<string, string>;
 }
@@ -371,18 +373,106 @@ export function buildProtonEnvironment({
   compatDataPath,
   steamPath,
   appId,
+  installPath,
   steamHome,
   existingEnv,
 }: IProtonEnvironmentOptions): Record<string, string> {
   return {
     ...existingEnv,
     ...(steamHome !== undefined && existingEnv?.HOME === undefined ? { HOME: steamHome } : {}),
+    // The full app context Steam gives a game, so a context inherited from another game (for
+    // example from Gaming Mode) cannot leak in, and GE-Proton doesn't fall back to app ID 0.
+    // Adapted from Amethyst Mod Manager (GPL-3.0), src/Utils/executables/launch.py.
     SteamAppId: appId,
     SteamGameId: appId,
+    SteamOverlayGameId: appId,
+    STEAM_COMPAT_APP_ID: appId,
+    ...(installPath !== undefined ? { STEAM_COMPAT_INSTALL_PATH: installPath } : {}),
     STEAM_COMPAT_DATA_PATH: compatDataPath,
     STEAM_COMPAT_CLIENT_INSTALL_PATH: steamPath,
     WINEPREFIX: getWinePrefixPath(compatDataPath),
   };
+}
+
+// Variables people set to tune or debug Proton, Wine, DXVK and the GPU driver. Identity and
+// path variables (WINEPREFIX, STEAM_COMPAT_*, SteamAppId) are deliberately absent: Vortex sets
+// those for the selected game. Adapted from Amethyst Mod Manager (GPL-3.0),
+// src/Utils/flatpak/env.py.
+const TUNING_EXACT = new Set([
+  "WINEDEBUG",
+  "WINEDLLOVERRIDES",
+  "MANGOHUD",
+  "DRI_PRIME",
+  "SteamDeck",
+]);
+const TUNING_PREFIXES = [
+  "PROTON_",
+  "DXVK_",
+  "VKD3D_",
+  "MANGOHUD_",
+  "GAMESCOPE_",
+  "AMD_VULKAN_",
+  "__GL_",
+  "__NV_",
+];
+
+/**
+ * The Proton tuning variables in `env`. `flatpak-spawn --host` starts from the desktop's
+ * environment rather than Vortex's, so without forwarding these a Flatpak Vortex would drop
+ * options such as `PROTON_LOG=1` that a native Vortex passes on.
+ */
+export function inheritedProtonTuning(
+  env: Record<string, string | undefined>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(env).filter(
+      (entry): entry is [string, string] =>
+        entry[1] !== undefined &&
+        (TUNING_EXACT.has(entry[0]) ||
+          TUNING_PREFIXES.some((prefix) => entry[0].startsWith(prefix))),
+    ),
+  );
+}
+
+const PREFIX_VERSION_PATTERN = /^CURRENT_PREFIX_VERSION\s*=\s*"([^"]+)"/m;
+
+/** `[major, minor]` of a stock Proton prefix version such as `9.0-203`; undefined for GE builds. */
+export function numericPrefixVersion(version: string): [number, number] | undefined {
+  const match = /^(\d+)\.(\d+)-/.exec(version.trim());
+  return match === null ? undefined : [Number(match[1]), Number(match[2])];
+}
+
+/**
+ * Explains why the Proton at `protonPath` must not install into the prefix at `compatDataPath`,
+ * or returns undefined when it is safe. Proton downgrades a prefix only when a game launches, so
+ * running an older Proton's Wine against a prefix a newer one built can hang instead of failing.
+ * GE-style versions can't be ordered, so they're never reported.
+ *
+ * Adapted from Amethyst Mod Manager (GPL-3.0), `prefix_downgrade_warning` in
+ * src/Utils/wine/protontricks.py, https://github.com/ChrisDKN/Amethyst-Mod-Manager.
+ */
+export function prefixDowngradeWarning(
+  protonScript: string,
+  prefixVersion: string,
+): string | undefined {
+  const runtimeVersion = PREFIX_VERSION_PATTERN.exec(protonScript)?.[1];
+  const built = prefixVersion.trim();
+  if (runtimeVersion === undefined || built === "" || runtimeVersion === built) return undefined;
+  const older = numericPrefixVersion(runtimeVersion);
+  const newer = numericPrefixVersion(built);
+  if (older === undefined || newer === undefined) return undefined;
+  if (older[0] > newer[0] || (older[0] === newer[0] && older[1] >= newer[1])) return undefined;
+  return (
+    `This game's prefix was created by Proton ${newer[0]} (${built}), but Proton ${older[0]} ` +
+    `(${runtimeVersion}) is selected. Proton only downgrades a prefix when the game launches, so ` +
+    `installing into it now could hang. Launch the game once from Steam with Proton ${older[0]}, ` +
+    `or select a newer Proton, then try again.`
+  );
+}
+
+/** The `proton` launcher script of the Proton installed at `protonPath`. */
+export function protonScriptPath(protonPath: string): string {
+  return path.join(protonPath, "proton");
 }
 
 /**

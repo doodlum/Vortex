@@ -9,7 +9,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { IExtensionApi } from "@/types/IExtensionContext";
 
-import { DEPENDENCY_COMMAND_PYTHON, installDependencies } from "./dependencyInstaller";
+import {
+  DEPENDENCY_COMMAND_PYTHON,
+  installDependencies,
+  RECIPE_TIMEOUT_MS,
+} from "./dependencyInstaller";
 
 const TARGET = {
   steamPath: "/Steam",
@@ -202,11 +206,11 @@ describe("Proton dependency installer", () => {
     const api = { runExecutable } as unknown as IExtensionApi;
     await expect(
       installDependencies(api, "22380", ["xact"], undefined, { target: TARGET }),
-    ).rejects.toThrow("Flathub user remote");
+    ).rejects.toThrow("Flathub remote");
     expect(runExecutable).toHaveBeenCalledWith(
       "flatpak",
       ["info", "--user", "com.github.Matoking.protontricks"],
-      { cwd: "/", expectSuccess: true, shell: false },
+      expect.objectContaining({ cwd: "/", expectSuccess: true, shell: false }),
     );
     runExecutable.mockImplementation(() => PromiseBB.resolve());
     await expect(
@@ -227,7 +231,7 @@ describe("Proton dependency installer", () => {
       3,
       "flatpak-spawn",
       ["--host", "flatpak", ...expectedRun("2050650", ["vcrun2022", "xinput"])],
-      { cwd: "/", expectSuccess: true, shell: false },
+      expect.objectContaining({ cwd: "/", expectSuccess: true, shell: false }),
     );
   });
 
@@ -235,6 +239,7 @@ describe("Proton dependency installer", () => {
     process.env.IS_FLATPAK = "true";
     const runExecutable = vi
       .fn()
+      .mockReturnValueOnce(PromiseBB.reject(new Error("not installed")))
       .mockReturnValueOnce(PromiseBB.reject(new Error("not installed")))
       .mockReturnValue(PromiseBB.resolve());
     const api = { runExecutable } as unknown as IExtensionApi;
@@ -244,6 +249,13 @@ describe("Proton dependency installer", () => {
     expect(runExecutable.mock.calls[1][1]).toEqual([
       "--host",
       "flatpak",
+      "info",
+      "--system",
+      "com.github.Matoking.protontricks",
+    ]);
+    expect(runExecutable.mock.calls[2][1]).toEqual([
+      "--host",
+      "flatpak",
       "install",
       "--user",
       "--noninteractive",
@@ -251,7 +263,7 @@ describe("Proton dependency installer", () => {
       "flathub",
       "com.github.Matoking.protontricks",
     ]);
-    expect(runExecutable.mock.calls[2][1]).toEqual([
+    expect(runExecutable.mock.calls[3][1]).toEqual([
       "--host",
       "flatpak",
       "update",
@@ -260,5 +272,61 @@ describe("Proton dependency installer", () => {
       "-y",
       "com.github.Matoking.protontricks",
     ]);
+  });
+
+  it("uses a system-wide Protontricks when Flathub is only a system remote", async () => {
+    delete process.env.IS_FLATPAK;
+    const runExecutable = vi.fn((_command: string, args: string[]) =>
+      args[0] === "info" || (args[0] === "install" && args[1] === "--user")
+        ? PromiseBB.reject(new Error("No remote refs found for 'flathub'"))
+        : PromiseBB.resolve(),
+    );
+    await installDependencies(
+      { runExecutable } as unknown as IExtensionApi,
+      "22380",
+      ["xact"],
+      undefined,
+      { target: TARGET },
+    );
+    const calls = runExecutable.mock.calls.map((call) => call[1].slice(0, 2));
+    expect(calls).toEqual([
+      ["info", "--user"],
+      ["info", "--system"],
+      ["install", "--user"],
+      ["install", "--system"],
+      ["update", "--system"],
+      ["run", "--system"],
+    ]);
+  });
+
+  it("ends a recipe run that stops responding instead of waiting forever", async () => {
+    delete process.env.IS_FLATPAK;
+    vi.useFakeTimers();
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    try {
+      const runExecutable = vi.fn(
+        (_command: string, args: string[], options: { onSpawned?: (pid?: number) => void }) => {
+          if (args[0] !== "run") return PromiseBB.resolve();
+          options.onSpawned?.(4242);
+          return new PromiseBB<void>(() => undefined);
+        },
+      );
+      const operation = installDependencies(
+        { runExecutable } as unknown as IExtensionApi,
+        "22380",
+        ["xact"],
+        undefined,
+        { target: TARGET },
+      );
+      const outcome = expect(operation).rejects.toThrow("stopped responding");
+      await vi.advanceTimersByTimeAsync(RECIPE_TIMEOUT_MS);
+      await outcome;
+      expect(kill).toHaveBeenCalledWith(4242, "SIGTERM");
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(kill).toHaveBeenCalledWith(4242, "SIGKILL");
+    } finally {
+      kill.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });

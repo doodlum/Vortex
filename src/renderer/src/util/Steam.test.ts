@@ -413,6 +413,8 @@ describe("Steam Proton launches", () => {
       vi.stubGlobal("process", { ...original, platform: "linux" });
       vi.stubEnv("IS_FLATPAK", "true");
       vi.stubEnv("VORTEX_SANDBOX_ONLY", "must not reach host flags");
+      vi.stubEnv("PROTON_LOG", "1");
+      vi.stubEnv("SteamAppId", "999");
       try {
         const assertCurrent = vi.fn();
         preparation.run.mockResolvedValue({
@@ -447,11 +449,15 @@ describe("Steam Proton launches", () => {
         expect(args).toEqual([
           "--host",
           "--directory=/games/working directory",
+          "--env=PROTON_LOG=1",
           '--env=CUSTOM=literal "value"',
           "--env=EMPTY=",
           "--env=HOME=/steam-home",
           "--env=SteamAppId=42",
           "--env=SteamGameId=42",
+          "--env=SteamOverlayGameId=42",
+          "--env=STEAM_COMPAT_APP_ID=42",
+          "--env=STEAM_COMPAT_INSTALL_PATH=" + gamePath,
           "--env=STEAM_COMPAT_DATA_PATH=/prefix",
           "--env=STEAM_COMPAT_CLIENT_INSTALL_PATH=" + BASE_FOLDER,
           "--env=WINEPREFIX=" + path.join("/prefix", "pfx"),

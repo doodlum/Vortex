@@ -13,7 +13,9 @@ import {
   inspectPrefix,
   isWindowsExecutable,
   listInstalledProton,
+  prefixDowngradeWarning,
   protonConfigName,
+  protonScriptPath,
 } from "@/util/linux/proton";
 import { resolveDependencyTarget } from "@/util/linux/protonMetadata";
 import { findLinuxSteamPath } from "@/util/linux/steamPaths";
@@ -208,6 +210,16 @@ export function createProtonCoordinator(
     });
   };
 
+  /** Why the Proton at `protonPath` must not drive this game's prefix, if it must not. */
+  const downgradeWarning = async (target: IProtonTarget, protonPath: string) => {
+    if (target.game.compatDataPath === undefined) return undefined;
+    const [script, version] = await Promise.all([
+      ports.read(protonScriptPath(protonPath)).catch(() => ""),
+      ports.read(path.join(target.game.compatDataPath, "version")).catch(() => ""),
+    ]);
+    return prefixDowngradeWarning(script, version);
+  };
+
   const synchronizeRuntime = async (target: IProtonTarget) => {
     const tools = await ports.tools(target.steamPath);
     assertTarget(target);
@@ -235,6 +247,17 @@ export function createProtonCoordinator(
     const perGame = await ports.configured(target.steamPath, target.game.appid);
     const current = perGame ?? (await ports.configured(target.steamPath, "0"));
     assertTarget(target);
+    if (current !== desired && target.selected === "") {
+      // "Latest stable" must not silently downgrade a prefix that a newer Proton (such as
+      // Experimental) built: keep the game on the runtime Steam already uses for it.
+      const kept = tools.find((tool) => protonConfigName(tool) === current);
+      if (kept !== undefined && (await downgradeWarning(target, installed.path)) !== undefined) {
+        const keptWarning = await downgradeWarning(target, kept.path);
+        assertTarget(target);
+        if (keptWarning === undefined) return kept.path;
+      }
+      assertTarget(target);
+    }
     if (current !== desired) {
       // A required version change is not best-effort: otherwise dependency repair could
       // prepare a different prefix/runtime from the game Steam will subsequently launch.
@@ -352,7 +375,9 @@ export function createProtonCoordinator(
     };
     try {
       if (missing.length > 0) {
+        const downgrade = await downgradeWarning(target, protonPath);
         assertTarget(target);
+        if (downgrade !== undefined) throw new Error(downgrade);
         const dependencyTarget = await ports.resolveDependency({
           appId: target.game.appid,
           steamPath: target.steamPath,
