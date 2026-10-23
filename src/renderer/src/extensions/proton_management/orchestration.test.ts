@@ -502,7 +502,7 @@ describe("Proton orchestration consumer contracts", () => {
     const f = fixture();
     f.ports.configured.mockResolvedValue("proton_10");
     await expect(f.prepare()).rejects.toThrow(
-      "Steam runs this game with proton_10, which isn't installed",
+      "Steam runs this game with Proton 10, which isn't installed",
     );
     expect(f.ports.install).not.toHaveBeenCalled();
   });

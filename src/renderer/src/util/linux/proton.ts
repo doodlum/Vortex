@@ -42,6 +42,18 @@ export function protonConfigName(tool: IInstalledProton): string | undefined {
   return undefined;
 }
 
+/**
+ * The name Steam shows for a compatibility-tool key, such as "Proton 9" for `proton_9`. Custom
+ * tools (GE-Proton and others) already use their own name as the key.
+ */
+export function steamProtonLabel(configName: string): string {
+  const stable = /^proton_(\d+)$/i.exec(configName);
+  if (stable !== null) return `Proton ${stable[1]}`;
+  if (/^proton_experimental$/i.test(configName)) return "Proton Experimental";
+  if (/^proton_hotfix$/i.test(configName)) return "Proton Hotfix";
+  return configName;
+}
+
 export interface IPrefixInventory {
   components: string[];
   compatDataPath: string;

@@ -27,6 +27,7 @@ import {
   inspectPrefix,
   listInstalledProton,
   resolveSteamProton,
+  steamProtonLabel,
   type SteamProtonSource,
 } from "@/util/linux/proton";
 import { findLinuxSteamPath } from "@/util/linux/steamPaths";
@@ -97,6 +98,9 @@ const RUNTIME_SOURCES: Record<SteamProtonSource, string> = {
   default: "Steam's default for Windows games.",
   newest: "The newest Proton installed, because Steam hasn't chosen one yet.",
 };
+
+const CHANGE_IN_STEAM =
+  "To use another version, open the game's Properties in Steam and choose Compatibility.";
 
 const formatBytes = (bytes: number): string => {
   if (bytes === 0) return "0 B";
@@ -293,7 +297,9 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
         compatDataPath,
         required,
         runtime: {
-          label: runtime.tool?.name ?? runtime.name,
+          label:
+            runtime.tool?.name ??
+            (runtime.name === undefined ? undefined : steamProtonLabel(runtime.name)),
           installed: runtime.tool !== undefined,
           source: runtime.source,
         },
@@ -677,20 +683,31 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
               <StatusRow
                 description={
                   data.runtime === undefined
-                    ? undefined
-                    : `${t(RUNTIME_SOURCES[data.runtime.source])} ${t("To change it, open the game's Properties in Steam and choose Compatibility.")}`
+                    ? t("Reading Steam's settings…")
+                    : data.runtime.label === undefined
+                      ? t(
+                          "No Proton is installed yet. Launch the game once from Steam so Steam installs it.",
+                        )
+                      : `${t(RUNTIME_SOURCES[data.runtime.source])} ${t(CHANGE_IN_STEAM)}`
                 }
                 label={t("Proton version")}
                 testId="proton-version"
               >
+                {data.runtime !== undefined && data.runtime.label === undefined && (
+                  <Pill brand="warning" icon="warning">
+                    {t("No Proton installed")}
+                  </Pill>
+                )}
+
                 {data.runtime?.label !== undefined && (
-                  <Pill
-                    brand={data.runtime.installed ? "neutral" : "warning"}
-                    icon={data.runtime.installed ? "check_circle" : "warning"}
-                  >
-                    {data.runtime.installed
-                      ? data.runtime.label
-                      : t("{{name}} isn't installed", { name: data.runtime.label })}
+                  <Pill brand="neutral" icon={data.runtime.installed ? "check_circle" : undefined}>
+                    {data.runtime.label}
+                  </Pill>
+                )}
+
+                {data.runtime?.label !== undefined && !data.runtime.installed && (
+                  <Pill brand="warning" icon="warning">
+                    {t("Not installed")}
                   </Pill>
                 )}
               </StatusRow>

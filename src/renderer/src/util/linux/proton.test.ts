@@ -17,6 +17,7 @@ import {
   getSteamLibraryPaths,
   inheritedProtonTuning,
   prefixDowngradeWarning,
+  steamProtonLabel,
 } from "./proton";
 
 const temporaryPaths: string[] = [];
@@ -341,5 +342,14 @@ describe("Steam's Proton for a game", () => {
       "5\n/home/user/.steam/steam/steamapps/common/Proton 9.0/files/share/fonts/\n",
     );
     expect((await info()).protonPath).toBe(path.join(common, "Proton 9.0"));
+  });
+});
+
+describe("steamProtonLabel", () => {
+  it("names Valve's tools as Steam shows them and keeps custom tools' own names", () => {
+    expect(steamProtonLabel("proton_9")).toBe("Proton 9");
+    expect(steamProtonLabel("proton_experimental")).toBe("Proton Experimental");
+    expect(steamProtonLabel("proton_hotfix")).toBe("Proton Hotfix");
+    expect(steamProtonLabel("GE-Proton10-4")).toBe("GE-Proton10-4");
   });
 });

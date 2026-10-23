@@ -1,6 +1,6 @@
 import * as path from "path";
 
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import PromiseBB from "bluebird";
 import React from "react";
 import { beforeEach, expect, it, vi } from "vitest";
@@ -34,6 +34,7 @@ vi.mock("@/util/useRelativeTime", () => ({ useRelativeTime: () => "now" }));
 vi.mock("@/util/linux/proton", () => ({
   listInstalledProton: async () => [{ name: "Proton", path: "/Proton", source: "steam" }],
   resolveSteamProton: mocks.resolve,
+  steamProtonLabel: (name: string) => (name === "proton_9" ? "Proton 9" : name),
   inspectPrefix: mocks.prefix,
 }));
 vi.mock("../selection", () => ({ activeProtonGame: mocks.entry }));
@@ -351,10 +352,28 @@ it("shows the Proton Steam uses without offering to change it", async () => {
   expect(screen.queryByRole("listbox")).toBeNull();
 });
 
-it("flags Steam's Proton when it isn't installed", async () => {
+it("names Steam's Proton the way Steam does and flags it when it isn't installed", async () => {
   mocks.resolve.mockResolvedValue({ name: "proton_9", source: "game" });
   view();
   await ready();
-  // Tests run without i18n initialised, so the name placeholder is not substituted.
-  expect(screen.getByTestId("proton-version")).toHaveTextContent(/isn't installed/);
+  const version = screen.getByTestId("proton-version");
+  expect(version).toHaveTextContent("Proton 9");
+  expect(version).not.toHaveTextContent("proton_9");
+  expect(within(version).getByText("Not installed").closest(".nxm-pill")).not.toBeNull();
+});
+
+it("says so when Steam has no Proton choice and none is installed", async () => {
+  mocks.resolve.mockResolvedValue({ source: "newest" });
+  view();
+  await ready();
+  const version = screen.getByTestId("proton-version");
+  expect(version).toHaveTextContent("No Proton installed");
+  expect(version).toHaveTextContent("Launch the game once from Steam so Steam installs it.");
+  expect(version).not.toHaveTextContent("The newest Proton installed");
+});
+
+it("shows that it is reading Steam's settings until the version is known", async () => {
+  mocks.resolve.mockReturnValue(new Promise(() => undefined));
+  view();
+  expect(await screen.findByText("Reading Steam's settings…")).toBeInTheDocument();
 });

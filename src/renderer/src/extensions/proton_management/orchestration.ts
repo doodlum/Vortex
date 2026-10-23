@@ -16,6 +16,7 @@ import {
   prefixDowngradeWarning,
   protonScriptPath,
   resolveSteamProton,
+  steamProtonLabel,
 } from "@/util/linux/proton";
 import { resolveDependencyTarget } from "@/util/linux/protonMetadata";
 import {
@@ -275,7 +276,7 @@ export function createProtonCoordinator(
     throw new Error(
       choice.name === undefined
         ? "No Proton is installed. Launch the game once from Steam so Steam installs Proton, then refresh."
-        : `Steam runs this game with ${choice.name}, which isn't installed. Launch the game once from Steam so Steam downloads it, or choose another version in the game's Steam properties under Compatibility.`,
+        : `Steam runs this game with ${steamProtonLabel(choice.name)}, which isn't installed. Launch the game once from Steam so Steam downloads it. To use another version, open the game's Properties in Steam and choose Compatibility.`,
     );
   };
   const prepareShaderHelper = async (target: IProtonTarget) => {
