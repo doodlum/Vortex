@@ -49,6 +49,7 @@ function target(id = "10", changes: Partial<IProtonTarget> = {}): IProtonTarget 
     selected: "",
     automatic: true,
     isolate: true,
+    executable: path.resolve("/games", id, "Game.exe"),
     ...changes,
   };
 }
@@ -685,5 +686,37 @@ describe("Recommended Proton", () => {
       "proton_experimental",
       expect.objectContaining({ steamPath: path.resolve("/steam") }),
     );
+  });
+});
+
+describe("Steam launch options on direct game launches", () => {
+  it("passes the user's options to a launch of the game itself, without Vortex's wrappers", async () => {
+    const f = fixture();
+    f.ports.getLaunchOptions.mockResolvedValue("PROTON_LOG=1 gamemoderun %command% -windowed");
+    const result = await f.prepare();
+    expect(result?.launchOptions).toEqual({
+      env: { PROTON_LOG: "1" },
+      prefix: ["gamemoderun"],
+      suffix: ["-windowed"],
+    });
+  });
+
+  it("keeps the user's options away from other tools in the game folder", async () => {
+    const f = fixture();
+    f.ports.getLaunchOptions.mockResolvedValue("PROTON_LOG=1 %command% -windowed");
+    const result = await f.coordinator.prepareLaunch(
+      target().game,
+      path.join(target().game.gamePath, "Tool.exe"),
+      {},
+    );
+    expect(result).toBeDefined();
+    expect(result?.launchOptions).toBeUndefined();
+  });
+
+  it("leaves out options that need a shell", async () => {
+    const f = fixture();
+    f.ports.getLaunchOptions.mockResolvedValue("%command% | tee log");
+    const result = await f.prepare();
+    expect(result?.launchOptions).toBeUndefined();
   });
 });

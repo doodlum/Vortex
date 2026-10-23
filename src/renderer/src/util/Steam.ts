@@ -594,21 +594,28 @@ class Steam implements IGameStore {
     }
     if (protonPath === undefined)
       throw new Error("No installed Proton runtime is available for this game.");
-    const { executable, args: protonArgs } = buildProtonCommand(protonPath, exePath, args);
+    // A launch of the game itself applies the user's Steam launch options, as Steam would:
+    // their variables under the game's identity, their arguments after the program's own, and
+    // their wrapper command around Vortex's.
+    const userOptions = preparation?.launchOptions;
+    const { executable, args: protonArgs } = buildProtonCommand(protonPath, exePath, [
+      ...args,
+      ...(userOptions?.suffix ?? []),
+    ]);
     const protonEnv = buildProtonEnvironment({
       compatDataPath: gameEntry.compatDataPath,
       steamPath,
       appId: gameEntry.appid,
       installPath: gameEntry.gamePath,
       steamHome: options.env?.HOME === undefined ? await findSteamClientHome(steamPath) : undefined,
-      existingEnv: options.env,
+      existingEnv: { ...userOptions?.env, ...options.env },
     });
 
-    const launchExecutable = preparation?.shaderWrapper ?? executable;
-    const launchArgs =
+    const wrapped =
       preparation?.shaderWrapper === undefined
-        ? protonArgs
-        : [preparation.appId, executable, ...protonArgs];
+        ? [executable, ...protonArgs]
+        : [preparation.shaderWrapper, preparation.appId, executable, ...protonArgs];
+    const [launchExecutable, ...launchArgs] = [...(userOptions?.prefix ?? []), ...wrapped];
     preparation?.assertCurrent();
     if (process.platform === "linux" && process.env.IS_FLATPAK === "true") {
       // Proton must share the Steam client's host process namespace. Forward only
@@ -619,7 +626,7 @@ class Steam implements IGameStore {
         "flatpak-spawn",
         [
           "--host",
-          "--directory=" + (options.cwd || path.dirname(launchExecutable)),
+          "--directory=" + (options.cwd || path.dirname(wrapped[0])),
           ...Object.entries(hostEnv).map(([key, value]) => "--env=" + key + "=" + value),
           launchExecutable,
           ...launchArgs,

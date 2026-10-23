@@ -4,6 +4,7 @@ import * as path from "path";
 import { unknownToError } from "@vortex/shared";
 import { ProcessCanceled } from "@vortex/shared/errors";
 
+import { getGame } from "@/extensions/gamemode_management/util/getGame";
 import type { IExtensionApi, IRunParameters, IRunOptions } from "@/types/IExtensionContext";
 import type { IState } from "@/types/IState";
 import { isPathInsideGame, isSameGamePath } from "@/util/linux/gamePath";
@@ -20,7 +21,9 @@ import {
   type IInstalledProton,
 } from "@/util/linux/proton";
 import { resolveDependencyTarget } from "@/util/linux/protonMetadata";
+import { parseSteamLaunchOptions, type ISteamLaunchOptions } from "@/util/linux/steamLaunchOptions";
 import { findLinuxSteamPath } from "@/util/linux/steamPaths";
+import { log } from "@/util/log";
 import type { ISteamEntry } from "@/util/Steam";
 
 import { activeProfile } from "../profile_management/selectors";
@@ -56,6 +59,8 @@ export interface IProtonTarget {
   automatic: boolean;
   isolate: boolean;
   loader?: string;
+  /** The game's own executable, which Steam applies the game's launch options to. */
+  executable?: string;
 }
 
 export class StaleProtonTarget extends ProcessCanceled {
@@ -70,6 +75,8 @@ export interface IProtonPreparation {
   gamePath: string;
   protonPath: string;
   shaderWrapper?: string;
+  /** The user's Steam launch options, when this launch starts the game itself. */
+  launchOptions?: ISteamLaunchOptions;
   assertCurrent: () => void;
 }
 
@@ -118,6 +125,14 @@ export function currentProtonTarget(state: IState): IProtonTarget | undefined {
     isWindowsExecutable(primary.path)
       ? path.resolve(game.gamePath, primary.path)
       : undefined;
+  let executable: string | undefined;
+  try {
+    const relative = discovery?.executable ?? getGame(profile.gameId)?.executable(discovery?.path);
+    if (typeof relative === "string" && isWindowsExecutable(relative))
+      executable = path.resolve(game.gamePath, relative);
+  } catch {
+    // A game support that cannot name its executable leaves launch options to Steam.
+  }
   const selected =
     typeof profile.features?.["proton-version"] === "string"
       ? (profile.features["proton-version"] as string)
@@ -138,7 +153,31 @@ export function currentProtonTarget(state: IState): IProtonTarget | undefined {
     Object.entries(profile.modState ?? {}).sort(([left], [right]) => left.localeCompare(right)),
     enabledModPaths(state, profile).sort(),
   ]);
-  return { key, profile, game, steamPath, selected, automatic, isolate, loader };
+  return { key, profile, game, steamPath, selected, automatic, isolate, loader, executable };
+}
+
+/**
+ * The user's Steam launch options for a launch that starts the game itself (its executable or
+ * the loader Vortex redirects Steam to), as Steam would apply them. Other tools in the game
+ * folder never receive them. Options that need a shell are left out, with a log entry.
+ */
+function gameLaunchOptions(
+  target: IProtonTarget,
+  executable: string,
+  userOptions: string | undefined,
+): ISteamLaunchOptions | undefined {
+  if (userOptions === undefined) return undefined;
+  const launched = path.resolve(target.game.gamePath, executable);
+  const startsGame = [target.executable, target.loader].some(
+    (candidate) => candidate !== undefined && isSameGamePath(candidate, launched),
+  );
+  if (!startsGame) return undefined;
+  const parsed = parseSteamLaunchOptions(userOptions);
+  if (parsed === undefined)
+    log("warn", "Steam launch options need a shell, so Vortex's direct launch leaves them out", {
+      appId: target.game.appid,
+    });
+  return parsed;
 }
 
 type PrefixPreparer = (api: IExtensionApi, game: ISteamEntry) => Promise<void>;
@@ -346,13 +385,19 @@ export function createProtonCoordinator(
     assertTarget(target);
   };
 
-  const synchronizeLaunchOptions = async (target: IProtonTarget) => {
+  /** Synchronizes Vortex's own launch-option wrappers and returns the user's remaining options. */
+  const synchronizeLaunchOptions = async (target: IProtonTarget): Promise<string> => {
     const current = await ports.getLaunchOptions(target.game.appid, {
       steamPath: target.steamPath,
       gamePath: target.game.gamePath,
       assertCurrent: () => assertTarget(target),
     });
     assertTarget(target);
+    const userOptions = disableShaderCacheRedirect(
+      disableDefaultToolRedirect(current, GAME_LAUNCH_WRAPPER),
+      target.game.appid,
+      SHADER_CACHE_WRAPPER,
+    );
     // Remove the old owned loader before deciding whether to add the current one.
     // This also removes it when no default-primary loader remains configured.
     let next = disableDefaultToolRedirect(current, GAME_LAUNCH_WRAPPER);
@@ -375,6 +420,7 @@ export function createProtonCoordinator(
       });
       assertTarget(target);
     }
+    return userOptions;
   };
 
   const ensureDependencies = async (
@@ -519,8 +565,9 @@ export function createProtonCoordinator(
     const protonPath = await synchronizeRuntime(target);
     await prepareShaderHelper(target);
     let settingsError: unknown;
+    let userOptions: string | undefined;
     try {
-      await synchronizeLaunchOptions(target);
+      userOptions = await synchronizeLaunchOptions(target);
     } catch (error) {
       assertTarget(target);
       settingsError = error;
@@ -535,7 +582,7 @@ export function createProtonCoordinator(
       // Vortex's direct command does not consume Steam launch options. Its runtime,
       // dependency and private-cache preparation have already succeeded, so a CDP
       // read failure alone must not prevent this otherwise valid direct launch.
-      if (!directLaunch) return protonPath;
+      if (!directLaunch) return { protonPath, userOptions };
     } else {
       api.dismissNotification?.("proton-setup-" + target.game.appid);
       ports.publish({
@@ -545,7 +592,7 @@ export function createProtonCoordinator(
         message: "Proton setup is ready",
       });
     }
-    return protonPath;
+    return { protonPath, userOptions };
   };
 
   const request = (): Promise<void> =>
@@ -602,7 +649,7 @@ export function createProtonCoordinator(
       return serialize(async () => {
         try {
           assertTarget(target);
-          const protonPath = await reconcile(target, true);
+          const { protonPath, userOptions } = await reconcile(target, true);
           assertTarget(target);
           return {
             appId: target.game.appid,
@@ -610,6 +657,7 @@ export function createProtonCoordinator(
             gamePath: target.game.gamePath,
             protonPath,
             shaderWrapper: target.isolate ? SHADER_CACHE_WRAPPER : undefined,
+            launchOptions: gameLaunchOptions(target, executable, userOptions),
             assertCurrent: () => assertTarget(target),
           };
         } catch (error) {

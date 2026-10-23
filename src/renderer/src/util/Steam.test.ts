@@ -408,6 +408,47 @@ describe("Steam Proton launches", () => {
     expect(assertCurrent).toHaveBeenCalledOnce();
   });
 
+  it("applies the user's Steam launch options to a game launch in Steam's order", async () => {
+    preparation.run.mockResolvedValue({
+      appId: "42",
+      protonPath: "/prepared-proton",
+      shaderWrapper: "/private/vortex-shader-cache-run",
+      launchOptions: {
+        env: { PROTON_LOG: "1", SteamAppId: "999" },
+        prefix: ["gamemoderun", "--flag"],
+        suffix: ["-windowed"],
+      },
+      assertCurrent: vi.fn(),
+    });
+    proton.info.mockResolvedValue({ usesProton: true, compatDataPath: "/prefix" });
+    const { api, runExecutable } = makeApi(gamePath);
+    await new Steam().runToolWithProton(
+      api,
+      path.join(gamePath, "Game.exe"),
+      ["-own"],
+      { gameId: "test" },
+      entry,
+    );
+    expect(runExecutable).toHaveBeenCalledExactlyOnceWith(
+      "gamemoderun",
+      [
+        "--flag",
+        "/private/vortex-shader-cache-run",
+        "42",
+        path.join("/prepared-proton", "proton"),
+        "run",
+        path.join(gamePath, "Game.exe"),
+        "-own",
+        "-windowed",
+      ],
+      expect.objectContaining({
+        shell: false,
+        // The user's variables apply, but never over the selected game's identity.
+        env: expect.objectContaining({ PROTON_LOG: "1", SteamAppId: "42" }),
+      }),
+    );
+  });
+
   for (const protectedCache of [false, true]) {
     it("launches Flatpak Proton on the host with cache protection " + protectedCache, async () => {
       const original = process;

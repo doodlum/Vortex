@@ -262,7 +262,15 @@ prefix and Steam identity always take precedence. Arguments and environment valu
 Spawn callbacks identify the portal proxy; its exit status reports host signals as 128 plus
 the signal number. This route has been exercised with Steam installed through Snap;
 a Steam client inside its own Flatpak still needs separate runtime validation.
-Existing custom launch options are preserved. A detected Windows default-primary loader
+Existing custom launch options are preserved. When Vortex starts the game itself directly
+through Proton (its executable, or the loader Vortex redirects Steam to), it applies your
+Steam launch options as Steam would: leading `KEY=VALUE` variables, a wrapper command before
+`%command%` (such as `gamemoderun`) and arguments after it, or, without `%command%`, the
+words as extra arguments. Vortex's own wrappers are removed first, your variables never
+override the game's Steam identity, and other tools in the game folder do not receive
+them. Options that need a shell (pipes, `;`, redirections, `$` substitutions or globs) are
+left out of direct launches with a log entry; Steam still applies them to its own launches.
+A detected Windows default-primary loader
 is redirected only for Steam game launches; separately selected tools keep their executable.
 Steam settings reads and writes require the connected client's root library and game
 installation to match the selected physical paths. Vortex validates both and rechecks
@@ -309,7 +317,8 @@ publication. Record source, packaged runtime and real-game evidence separately.
 ### Credits
 
 The prefix-downgrade check, recipe timeouts, Flatpak tuning-variable forwarding, the
-system-wide Protontricks fallback and the extra Steam app-context variables are adapted
+system-wide Protontricks fallback, the extra Steam app-context variables and the
+launch-option parsing for direct game launches are adapted
 from [Amethyst Mod Manager](https://github.com/ChrisDKN/Amethyst-Mod-Manager) by ChrisDKN
 (GPL-3.0, commit `544d0055eab0916fbf65b9adabe761ddd3fff06a`): `src/Utils/wine/protontricks.py`,
 `src/Utils/flatpak/env.py`, `src/Utils/flatpak/i386.py` and
