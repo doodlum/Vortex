@@ -213,9 +213,13 @@ describe("Proton orchestration consumer contracts", () => {
         .mockResolvedValueOnce(inventory([]))
         .mockResolvedValueOnce(inventory(stage === "records" ? [] : ["vcrun2022"]));
       if (stage === "prefix") {
-        let reads = 0;
+        // Steam rebuilds the prefix while the recipes are being applied.
+        let changed = false;
+        f.ports.install.mockImplementation(async () => {
+          changed = true;
+        });
         f.ports.read.mockImplementation(async (file) =>
-          path.basename(file) === "version" ? (++reads === 1 ? "11.0" : "12.0") : "11.0",
+          path.basename(file) === "version" && changed ? "12.0" : "11.0",
         );
       }
       if (stage === "marker")
@@ -304,7 +308,9 @@ describe("Proton orchestration consumer contracts", () => {
     const f = fixture();
     await f.prepare();
     expect(f.ports.detect).toHaveBeenCalledOnce();
-    expect(f.ports.read).not.toHaveBeenCalled();
+    expect(f.ports.read.mock.calls.map(([file]) => path.basename(file))).not.toContain(
+      ".vortex-dependencies-version",
+    );
     expect(f.ports.inspect).not.toHaveBeenCalled();
     expect(f.ports.install).not.toHaveBeenCalled();
     expect(f.ports.write).not.toHaveBeenCalled();
@@ -443,10 +449,13 @@ describe("Proton orchestration consumer contracts", () => {
     f.ports.inspect
       .mockResolvedValueOnce(inventory([]))
       .mockResolvedValueOnce(inventory(["vcrun2022"]));
-    // Reads of the prefix version: before installing, by the downgrade check, after installing.
-    const versions = ["11.0", "11.0", "12.0"];
+    // Steam rebuilds the prefix while the recipes are being applied.
+    let changed = false;
+    f.ports.install.mockImplementation(async () => {
+      changed = true;
+    });
     f.ports.read.mockImplementation(async (file: string) =>
-      path.basename(file) === "version" ? versions.shift()! : "11.0",
+      path.basename(file) === "version" && changed ? "12.0" : "11.0",
     );
     await expect(f.prepare()).rejects.toThrow("prefix changed");
     expect(f.ports.write).not.toHaveBeenCalled();
@@ -584,6 +593,22 @@ describe("Proton prefix downgrade protection", () => {
     const f = downgradeFixture("");
     await f.prepare();
     expect(f.ports.setCompatTool).not.toHaveBeenCalled();
+    expect(f.ports.resolveDependency).toHaveBeenCalledWith(
+      expect.objectContaining({ protonPath: EXPERIMENTAL }),
+    );
+    expect(f.ports.install).toHaveBeenCalledOnce();
+  });
+
+  it("moves Steam back to a runtime that can drive the prefix after an earlier downgrade", async () => {
+    const f = downgradeFixture("");
+    // Steam was already switched to the older stable release, as an earlier build did.
+    f.ports.configured.mockResolvedValue("proton_9");
+    await f.prepare();
+    expect(f.ports.setCompatTool).toHaveBeenCalledWith(
+      "10",
+      "proton_experimental",
+      expect.objectContaining({ steamPath: path.resolve("/steam") }),
+    );
     expect(f.ports.resolveDependency).toHaveBeenCalledWith(
       expect.objectContaining({ protonPath: EXPERIMENTAL }),
     );

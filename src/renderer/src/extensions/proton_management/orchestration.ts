@@ -15,7 +15,9 @@ import {
   listInstalledProton,
   prefixDowngradeWarning,
   protonConfigName,
+  protonPrefixVersion,
   protonScriptPath,
+  type IInstalledProton,
 } from "@/util/linux/proton";
 import { resolveDependencyTarget } from "@/util/linux/protonMetadata";
 import { findLinuxSteamPath } from "@/util/linux/steamPaths";
@@ -220,10 +222,37 @@ export function createProtonCoordinator(
     return prefixDowngradeWarning(script, version);
   };
 
+  /** An installed Proton that can drive this game's prefix without downgrading it. */
+  const prefixCompatibleTool = async (
+    target: IProtonTarget,
+    tools: IInstalledProton[],
+    current: string | undefined,
+  ) => {
+    if (target.game.compatDataPath === undefined) return undefined;
+    const prefixVersion = (
+      await ports.read(path.join(target.game.compatDataPath, "version")).catch(() => "")
+    ).trim();
+    const candidates: Array<{ tool: IInstalledProton; name: string; version?: string }> = [];
+    for (const tool of tools) {
+      const name = protonConfigName(tool);
+      if (name === undefined) continue;
+      const script = await ports.read(protonScriptPath(tool.path)).catch(() => "");
+      if (script === "" || prefixDowngradeWarning(script, prefixVersion) !== undefined) continue;
+      candidates.push({ tool, name, version: protonPrefixVersion(script) });
+    }
+    assertTarget(target);
+    // Prefer the runtime Steam already uses, then the one that built the prefix.
+    return (
+      candidates.find((candidate) => candidate.name === current) ??
+      candidates.find((candidate) => candidate.version === prefixVersion) ??
+      candidates[0]
+    );
+  };
+
   const synchronizeRuntime = async (target: IProtonTarget) => {
     const tools = await ports.tools(target.steamPath);
     assertTarget(target);
-    const desired =
+    let desired =
       target.selected === ""
         ? await ports.stable(target.steamPath)
         : (() => {
@@ -231,7 +260,7 @@ export function createProtonCoordinator(
             return selected === undefined ? undefined : protonConfigName(selected);
           })();
     assertTarget(target);
-    const installed =
+    let installed =
       desired === undefined
         ? undefined
         : tools.find(
@@ -247,17 +276,17 @@ export function createProtonCoordinator(
     const perGame = await ports.configured(target.steamPath, target.game.appid);
     const current = perGame ?? (await ports.configured(target.steamPath, "0"));
     assertTarget(target);
-    if (current !== desired && target.selected === "") {
-      // "Latest stable" must not silently downgrade a prefix that a newer Proton (such as
-      // Experimental) built: keep the game on the runtime Steam already uses for it.
-      const kept = tools.find((tool) => protonConfigName(tool) === current);
-      if (kept !== undefined && (await downgradeWarning(target, installed.path)) !== undefined) {
-        const keptWarning = await downgradeWarning(target, kept.path);
-        assertTarget(target);
-        if (keptWarning === undefined) return kept.path;
+    if (target.selected === "" && (await downgradeWarning(target, installed.path)) !== undefined) {
+      // "Latest stable" must not downgrade a prefix that a newer Proton (such as Experimental)
+      // built, even when Steam was already switched to the older release: use an installed
+      // runtime that can drive the prefix as it is.
+      const compatible = await prefixCompatibleTool(target, tools, current);
+      if (compatible !== undefined) {
+        desired = compatible.name;
+        installed = compatible.tool;
       }
-      assertTarget(target);
     }
+    assertTarget(target);
     if (current !== desired) {
       // A required version change is not best-effort: otherwise dependency repair could
       // prepare a different prefix/runtime from the game Steam will subsequently launch.

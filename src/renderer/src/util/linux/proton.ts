@@ -436,6 +436,11 @@ export function inheritedProtonTuning(
 
 const PREFIX_VERSION_PATTERN = /^CURRENT_PREFIX_VERSION\s*=\s*"([^"]+)"/m;
 
+/** The prefix version a Proton launcher script creates, such as `10.1000-105`. */
+export function protonPrefixVersion(protonScript: string): string | undefined {
+  return PREFIX_VERSION_PATTERN.exec(protonScript)?.[1];
+}
+
 /** `[major, minor]` of a stock Proton prefix version such as `9.0-203`; undefined for GE builds. */
 export function numericPrefixVersion(version: string): [number, number] | undefined {
   const match = /^(\d+)\.(\d+)-/.exec(version.trim());

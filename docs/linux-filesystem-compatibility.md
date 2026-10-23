@@ -146,8 +146,10 @@ its prefix, then rescan games if necessary.
 The version picker selects one installed Proton version for Steam and Vortex. Latest
 stable follows the newest installed official stable tool; a specific choice stays with
 the profile. Latest stable never downgrades a prefix: when the game's prefix was built by
-a newer Proton (for example Experimental) than the latest stable release, Vortex leaves
-the game on the runtime Steam already uses for it. With an explicitly selected older
+a newer Proton (for example Experimental) than the latest stable release, Vortex uses an
+installed Proton that can drive the prefix as it is (the one Steam already uses, otherwise
+the one that built the prefix) and points Steam at it. This also repairs a game that an
+earlier build had already switched to the older release. With an explicitly selected older
 Proton, Vortex refuses to install Windows components into the newer prefix and explains
 how to continue; Proton downgrades a prefix only when the game itself launches, and an
 older Wine running against a newer prefix can hang instead of failing. GE-style versions
