@@ -34,7 +34,7 @@ import { validateFiles } from "./fileValidation";
 import { getVortexPath, setVortexPath } from "./getVortexPath";
 import { shutdownHashWorker } from "./hash/host";
 import { betterIpcMain } from "./ipc";
-import { log, setupLogging, changeLogPath } from "./logging";
+import { log, setupLogging, changeLogPath, flushLogFile } from "./logging";
 import MainWindow from "./MainWindow";
 import { ReloadBudget } from "./reloadBudget";
 import SplashScreen from "./SplashScreen";
@@ -220,6 +220,10 @@ class Application {
           // Terminate the worker_thread pools so no idle worker lingers past quit.
           void shutdownHashWorker();
           void shutdownBsdiffWorker();
+          // Let the log file receive the lines above; quitting ends its pending writes.
+          return flushLogFile();
+        })
+        .then(() => {
           if (process.platform !== "darwin") {
             app.quit();
           }

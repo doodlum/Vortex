@@ -106,6 +106,10 @@ class LoggerSingleton {
     return this.#instance;
   }
 
+  static peek(): winston.LoggerInstance | null {
+    return this.#instance;
+  }
+
   static log(level: Level, message: string, metadata?: unknown): void {
     // TODO: broken logging from tests
     if (!this.#instance) {
@@ -134,6 +138,31 @@ export function dropConsoleOnBrokenPipe(
   for (const stream of streams) {
     stream.on("error", onError);
   }
+}
+
+/**
+ * Waits until the log file has received every line logged so far, or for `timeoutMs`. The file
+ * transport writes through an asynchronous stream, so lines logged just before the process
+ * exits are otherwise lost. Stream writes complete in order, so an empty write's callback runs
+ * once every earlier line is written.
+ */
+export function flushLogFile(
+  logger: winston.LoggerInstance | null = LoggerSingleton.peek(),
+  timeoutMs = 2000,
+): Promise<void> {
+  const transport = logger?.transports["file"] as unknown as
+    | { _stream?: NodeJS.WritableStream & { writableEnded?: boolean } }
+    | undefined;
+  const stream = transport?._stream;
+  if (stream === undefined || typeof stream.write !== "function" || stream.writableEnded)
+    return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, timeoutMs);
+    stream.write("", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
 }
 
 export function setupLogging(basePath: string, useConsole: boolean): void {
