@@ -6,6 +6,7 @@ import { parse, type KVBlock } from "@nexusmods/steam-kv-parser";
 
 import * as fs from "../fs";
 import { log } from "../log";
+import { readCustomProtonName } from "./protonMetadata";
 
 export interface IProtonInfo {
   usesProton: boolean;
@@ -28,11 +29,12 @@ export interface IInstalledProton {
   name: string;
   path: string;
   source: "steam" | "custom";
+  compatibilityName?: string;
 }
 
 /** Convert an installed Proton folder to the compatibility-tool key Steam stores for a game. */
 export function protonConfigName(tool: IInstalledProton): string | undefined {
-  if (tool.source === "custom") return tool.name;
+  if (tool.source === "custom") return tool.compatibilityName;
   const stable = /^Proton (\d+)(?:\.\d+)?$/i.exec(tool.name);
   if (stable !== null) return `proton_${stable[1]}`;
   if (/^Proton(?:\s*-)?\s*Experimental$/i.test(tool.name)) return "proton_experimental";
@@ -98,7 +100,7 @@ export async function detectRuntimeDependencies(gamePath: string): Promise<strin
     let handle: fsPromises.FileHandle | undefined;
     try {
       handle = await fsPromises.open(filePath, "r");
-      const buffer = Buffer.alloc(1024 * 1024);
+      const buffer = Buffer.alloc(8 * 1024 * 1024);
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
       const imports = buffer.subarray(0, bytesRead).toString("latin1").replaceAll("\0", "");
       for (const signature of RUNTIME_SIGNATURES) {
@@ -169,7 +171,17 @@ export async function listInstalledProton(
         const resolved = await fsPromises.realpath(installPath);
         if (seen.has(resolved)) continue;
         seen.add(resolved);
-        result.push({ id: resolved, name, path: installPath, source: root.source });
+        const custom =
+          root.source === "custom"
+            ? await readCustomProtonName(installPath).catch(() => undefined)
+            : undefined;
+        result.push({
+          id: resolved,
+          name,
+          path: installPath,
+          source: root.source,
+          compatibilityName: custom?.path === resolved ? custom.name : undefined,
+        });
       }
     } catch {
       // An absent custom-tools directory is normal.

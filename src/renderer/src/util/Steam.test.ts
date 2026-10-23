@@ -24,6 +24,10 @@ import { Steam } from "./Steam";
 const steam = vi.hoisted(() => ({ installed: true, baseFolder: "C:\\Steam" }));
 const proton = vi.hoisted(() => ({ info: vi.fn(), installed: vi.fn() }));
 const steamHome = vi.hoisted(() => ({ find: vi.fn().mockResolvedValue("/steam-home") }));
+const preparation = vi.hoisted(() => ({ run: vi.fn() }));
+vi.mock("@/extensions/proton_management/orchestration", () => ({
+  prepareProtonLaunch: preparation.run,
+}));
 
 const BASE_FOLDER = steam.baseFolder;
 const ALT_LIBRARY = path.join("D:", "SteamLibrary");
@@ -338,6 +342,7 @@ describe("Steam.allGames", () => {
 
 describe("Steam Proton launches", () => {
   beforeEach(() => {
+    preparation.run.mockReset().mockResolvedValue(undefined);
     steamHome.find.mockReset().mockResolvedValue("/steam-home");
   });
 
@@ -359,6 +364,67 @@ describe("Steam Proton launches", () => {
       runExecutable,
     };
   };
+
+  it("prepares dependencies before runtime conversion and protects the actual direct child without replacing the chosen utility", async () => {
+    const assertCurrent = vi.fn();
+    preparation.run.mockResolvedValue({
+      appId: "42",
+      protonPath: "/prepared-proton",
+      shaderWrapper: "/private/vortex-shader-cache-run",
+      assertCurrent,
+    });
+    proton.info.mockResolvedValue({
+      usesProton: true,
+      protonPath: "/stale-proton",
+      compatDataPath: "/prefix",
+    });
+    const { api, runExecutable } = makeApi(gamePath);
+    await new Steam().runToolWithProton(
+      api,
+      "/outside/utility.exe",
+      ["$(literal)", "argument.exe"],
+      { gameId: "test" },
+      entry,
+    );
+    expect(preparation.run).toHaveBeenCalledExactlyOnceWith(api, entry, "/outside/utility.exe", {
+      gameId: "test",
+    });
+    expect(runExecutable).toHaveBeenCalledExactlyOnceWith(
+      "/private/vortex-shader-cache-run",
+      [
+        "42",
+        path.join("/prepared-proton", "proton"),
+        "run",
+        "/outside/utility.exe",
+        "$(literal)",
+        "argument.exe",
+      ],
+      expect.objectContaining({
+        shell: false,
+        env: expect.objectContaining({ SteamAppId: "42", STEAM_COMPAT_DATA_PATH: "/prefix" }),
+      }),
+    );
+    expect(assertCurrent).toHaveBeenCalledOnce();
+  });
+
+  it("does not launch if preparation becomes stale before dispatch", async () => {
+    preparation.run.mockResolvedValue({
+      protonPath: "/prepared-proton",
+      assertCurrent: () => {
+        throw new Error("stale profile");
+      },
+    });
+    proton.info.mockResolvedValue({
+      usesProton: true,
+      protonPath: "/stale-proton",
+      compatDataPath: "/prefix",
+    });
+    const { api, runExecutable } = makeApi(gamePath);
+    await expect(
+      new Steam().runToolWithProton(api, "/outside/utility.exe", [], {}, entry),
+    ).rejects.toThrow("stale profile");
+    expect(runExecutable).not.toHaveBeenCalled();
+  });
 
   it("resolves fresh Steam settings and preserves literal argv for an external tool", async () => {
     proton.info.mockResolvedValue({

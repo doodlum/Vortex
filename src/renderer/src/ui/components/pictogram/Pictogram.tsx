@@ -32,6 +32,7 @@ export type IPictogramName =
   | "no-mod"
   | "preferences"
   | "premium"
+  | "proton"
   | "puzzle-piece"
   | "settings"
   | "tools";

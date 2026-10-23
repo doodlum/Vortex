@@ -7,6 +7,7 @@ import { parse, type VDFObject, type VDFValue } from "simple-vdf";
 import * as winapi from "winapi-bindings";
 import { z } from "zod";
 
+import { prepareProtonLaunch } from "@/extensions/proton_management/orchestration";
 import { log } from "@/logging";
 
 import { activeProfile } from "../extensions/profile_management/selectors";
@@ -549,6 +550,7 @@ class Steam implements IGameStore {
   ): Promise<void> {
     const steamPath = this.#baseFolder;
     if (steamPath === undefined) throw new Error("Steam client path is unavailable.");
+    const preparation = await prepareProtonLaunch(api, gameEntry, exePath, options);
     // Steam's settings can change between scans. Resolve the game runtime again
     // at launch instead of relying on the cached discovery entry.
     const steamAppsPath = path.dirname(path.dirname(gameEntry.gamePath));
@@ -574,7 +576,7 @@ class Steam implements IGameStore {
       discovery?.path !== undefined && isSameGamePath(discovery.path, gameEntry.gamePath)
         ? profile?.features?.["proton-version"]
         : undefined;
-    let protonPath = gameEntry.protonPath;
+    let protonPath = preparation?.protonPath ?? gameEntry.protonPath;
     if (typeof override === "string" && override.length > 0) {
       const tools = await listInstalledProton(steamPath);
       const selected = tools.find((tool) => tool.path === override);
@@ -593,11 +595,18 @@ class Steam implements IGameStore {
       existingEnv: options.env,
     });
 
-    return api.runExecutable(executable, protonArgs, {
-      ...options,
-      env: protonEnv,
-      shell: false,
-    });
+    preparation?.assertCurrent();
+    return api.runExecutable(
+      preparation?.shaderWrapper ?? executable,
+      preparation?.shaderWrapper === undefined
+        ? protonArgs
+        : [preparation.appId, executable, ...protonArgs],
+      {
+        ...options,
+        env: protonEnv,
+        shell: false,
+      },
+    );
   }
 }
 

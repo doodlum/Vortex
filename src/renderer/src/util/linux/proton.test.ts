@@ -40,9 +40,14 @@ describe("Proton management", () => {
     await fs.mkdir(custom, { recursive: true });
     await fs.writeFile(path.join(official, "proton"), "");
     await fs.writeFile(path.join(custom, "proton"), "");
+    await fs.writeFile(
+      path.join(custom, "compatibilitytool.vdf"),
+      '"compatibilitytools" { "compat_tools" { "Exact-GE-Key" { "install_path" "." "from_oslist" "windows" "to_oslist" "linux" } } }',
+    );
 
     const tools = await listInstalledProton(steamPath);
 
+    expect(protonConfigName(tools.find((tool) => tool.source === "custom")!)).toBe("Exact-GE-Key");
     expect(tools.map((tool) => [tool.name, tool.source])).toEqual([
       ["GE-Proton11-3", "custom"],
       ["Proton 11.0", "steam"],
@@ -62,7 +67,13 @@ describe("Proton management", () => {
       }),
     ).toBe("proton_experimental");
     expect(
-      protonConfigName({ id: "three", name: "GE-Proton11-3", path: "three", source: "custom" }),
+      protonConfigName({
+        id: "three",
+        name: "GE-Proton11-3",
+        path: "three",
+        source: "custom",
+        compatibilityName: "GE-Proton11-3",
+      }),
     ).toBe("GE-Proton11-3");
   });
 
@@ -214,6 +225,15 @@ describe("Proton management", () => {
     );
 
     await expect(detectRuntimeDependencies(gamePath)).resolves.toEqual(["vcrun2022", "xinput"]);
+  });
+
+  it("finds hints beyond the first megabyte within the bounded eight-megabyte scan", async () => {
+    const gamePath = await temporaryDirectory();
+    await fs.writeFile(
+      path.join(gamePath, "large.dll"),
+      Buffer.concat([Buffer.alloc(2 * 1024 * 1024), Buffer.from("D3DCOMPILER_47.dll")]),
+    );
+    await expect(detectRuntimeDependencies(gamePath)).resolves.toEqual(["d3dcompiler_47"]);
   });
 });
 

@@ -9,7 +9,7 @@ export function notifySteamGamesChanged(): void {
   for (const listener of listeners) listener();
 }
 
-const subscribe = (listener: () => void): (() => void) => {
+export const subscribeSteamGamesChanged = (listener: () => void): (() => void) => {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
@@ -19,5 +19,5 @@ const getSnapshot = (): number => revision;
 
 /** Steam scans update an external snapshot, independently of Redux/profile changes. */
 export function useSteamGamesRevision(): number {
-  return useSyncExternalStore(subscribe, getSnapshot);
+  return useSyncExternalStore(subscribeSteamGamesChanged, getSnapshot);
 }

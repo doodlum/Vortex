@@ -1,0 +1,519 @@
+import * as fs from "fs/promises";
+import * as path from "path";
+
+import { unknownToError } from "@vortex/shared";
+import { ProcessCanceled } from "@vortex/shared/errors";
+
+import type { IExtensionApi, IRunParameters, IRunOptions } from "@/types/IExtensionContext";
+import type { IState } from "@/types/IState";
+import { isPathInsideGame, isSameGamePath } from "@/util/linux/gamePath";
+import {
+  findLatestStableProtonName,
+  getConfiguredProtonName,
+  inspectPrefix,
+  isWindowsExecutable,
+  listInstalledProton,
+  protonConfigName,
+} from "@/util/linux/proton";
+import { resolveDependencyTarget } from "@/util/linux/protonMetadata";
+import { findLinuxSteamPath } from "@/util/linux/steamPaths";
+import type { ISteamEntry } from "@/util/Steam";
+
+import { activeProfile } from "../profile_management/selectors";
+import type { IProfile } from "../profile_management/types/IProfile";
+import { installDependencies } from "./dependencyInstaller";
+import type { DependencyProgress } from "./dependencyInstaller";
+import { detectModRuntimeDependencies, enabledModPaths } from "./modRequirements";
+import { activeProtonGame } from "./selection";
+import { publishProtonSetupStatus } from "./setupStatus";
+import {
+  configureShaderCache,
+  checkShaderCacheWrapper,
+  checkGameLaunchWrapper,
+  disableDefaultToolRedirect,
+  disableShaderCacheRedirect,
+  enableDefaultToolRedirect,
+  enableShaderCacheRedirect,
+  ensureGameLaunchWrapper,
+  ensureShaderCacheWrapper,
+  GAME_LAUNCH_WRAPPER,
+  getSteamLaunchOptions,
+  setSteamCompatTool,
+  setSteamLaunchOptions,
+  SHADER_CACHE_WRAPPER,
+} from "./steamShaderSettings";
+
+export interface IProtonTarget {
+  key: string;
+  profile: IProfile;
+  game: ISteamEntry;
+  steamPath: string;
+  selected: string;
+  automatic: boolean;
+  isolate: boolean;
+  loader?: string;
+}
+
+export class StaleProtonTarget extends ProcessCanceled {
+  constructor() {
+    super("The active Proton profile or its installation changed. Retry this launch.");
+  }
+}
+
+export interface IProtonPreparation {
+  appId: string;
+  profileId: string;
+  gamePath: string;
+  protonPath: string;
+  shaderWrapper?: string;
+  assertCurrent: () => void;
+}
+
+/** Exported ports let tests exercise serial work, mutations and stale guards separately. */
+export interface IProtonOrchestrationPorts {
+  target: (state: IState) => IProtonTarget | undefined;
+  detect: typeof detectModRuntimeDependencies;
+  inspect: typeof inspectPrefix;
+  configured: typeof getConfiguredProtonName;
+  stable: typeof findLatestStableProtonName;
+  tools: typeof listInstalledProton;
+  read: (file: string) => Promise<string>;
+  write: (file: string, value: string) => Promise<void>;
+  install: typeof installDependencies;
+  resolveDependency: typeof resolveDependencyTarget;
+  getLaunchOptions: typeof getSteamLaunchOptions;
+  setLaunchOptions: typeof setSteamLaunchOptions;
+  setCompatTool: typeof setSteamCompatTool;
+  configureCache: typeof configureShaderCache;
+  ensureCache: typeof ensureShaderCacheWrapper;
+  checkCache: typeof checkShaderCacheWrapper;
+  ensureLoader: typeof ensureGameLaunchWrapper;
+  checkLoader: typeof checkGameLaunchWrapper;
+  publish: typeof publishProtonSetupStatus;
+}
+
+export function currentProtonTarget(state: IState): IProtonTarget | undefined {
+  const profile = activeProfile(state);
+  const game = activeProtonGame(state);
+  const steamPath = findLinuxSteamPath();
+  if (profile === undefined || game === undefined || steamPath === undefined) return undefined;
+  if (!/^[1-9][0-9]*$/.test(game.appid) || !path.isAbsolute(game.gamePath)) return undefined;
+  const discovery = state.settings.gameMode.discovered[profile.gameId];
+  const tools = discovery?.tools ?? {};
+  const primaryId = state.settings.interface.primaryTool?.[profile.gameId];
+  const primary =
+    primaryId === undefined
+      ? Object.values(tools).find((tool) => tool.defaultPrimary === true)
+      : tools[primaryId];
+  const loader =
+    primary?.defaultPrimary === true &&
+    typeof primary.path === "string" &&
+    isWindowsExecutable(primary.path)
+      ? path.resolve(game.gamePath, primary.path)
+      : undefined;
+  const selected =
+    typeof profile.features?.["proton-version"] === "string"
+      ? (profile.features["proton-version"] as string)
+      : "";
+  const automatic = profile.features?.["proton-auto-dependencies"] !== false;
+  const isolate = profile.features?.["proton-shader-cache-isolation"] !== false;
+  const key = JSON.stringify([
+    profile.id,
+    profile.gameId,
+    game.appid,
+    path.resolve(game.gamePath),
+    game.compatDataPath,
+    steamPath,
+    selected,
+    automatic,
+    isolate,
+    loader,
+    Object.entries(profile.modState ?? {}).sort(([left], [right]) => left.localeCompare(right)),
+    enabledModPaths(state, profile).sort(),
+  ]);
+  return { key, profile, game, steamPath, selected, automatic, isolate, loader };
+}
+
+const defaultPorts: IProtonOrchestrationPorts = {
+  target: currentProtonTarget,
+  detect: detectModRuntimeDependencies,
+  inspect: inspectPrefix,
+  configured: getConfiguredProtonName,
+  stable: findLatestStableProtonName,
+  tools: listInstalledProton,
+  read: (file) => fs.readFile(file, "utf8"),
+  write: (file, value) => fs.writeFile(file, value),
+  install: installDependencies,
+  resolveDependency: resolveDependencyTarget,
+  getLaunchOptions: getSteamLaunchOptions,
+  setLaunchOptions: setSteamLaunchOptions,
+  setCompatTool: setSteamCompatTool,
+  configureCache: configureShaderCache,
+  ensureCache: ensureShaderCacheWrapper,
+  checkCache: checkShaderCacheWrapper,
+  ensureLoader: ensureGameLaunchWrapper,
+  checkLoader: checkGameLaunchWrapper,
+  publish: publishProtonSetupStatus,
+};
+
+export function matchesActiveLaunch(
+  target: IProtonTarget,
+  executable: string,
+  options: IRunOptions,
+  game?: ISteamEntry,
+): boolean {
+  if (!isWindowsExecutable(executable)) return false;
+  if (
+    game !== undefined &&
+    (game.appid !== target.game.appid || !isSameGamePath(game.gamePath, target.game.gamePath))
+  )
+    return false;
+  if (options.gameId !== undefined) return options.gameId === target.profile.gameId;
+  const resolved = path.isAbsolute(executable)
+    ? executable
+    : options.cwd !== undefined && path.isAbsolute(options.cwd)
+      ? path.resolve(options.cwd, executable)
+      : undefined;
+  return resolved !== undefined && isPathInsideGame(resolved, target.game.gamePath);
+}
+
+export function createProtonCoordinator(
+  api: IExtensionApi,
+  overrides: Partial<IProtonOrchestrationPorts> = {},
+) {
+  const ports = { ...defaultPorts, ...overrides };
+  let tail: Promise<void> = Promise.resolve();
+  let previousObservedKey: string | undefined;
+  const reported = new Set<string>();
+
+  const targetNow = () => ports.target(api.getState());
+  const assertTarget = (target: IProtonTarget) => {
+    if (targetNow()?.key !== target.key) throw new StaleProtonTarget();
+  };
+  const serialize = <T>(run: () => Promise<T>): Promise<T> => {
+    const result = tail.then(run);
+    tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
+  const report = (target: IProtonTarget, error: unknown) => {
+    if (targetNow()?.key !== target.key) return;
+    const message = `Steam App ID ${target.game.appid}: ${unknownToError(error).message}`;
+    ports.publish({ appId: target.game.appid, phase: "error", message });
+    const identity = `${target.key}:${message}`;
+    if (!reported.has(identity)) {
+      reported.add(identity);
+      api.showErrorNotification("Could not prepare Proton for this game", new Error(message), {
+        allowReport: false,
+      });
+    }
+  };
+
+  const synchronizeRuntime = async (target: IProtonTarget) => {
+    const tools = await ports.tools(target.steamPath);
+    assertTarget(target);
+    const desired =
+      target.selected === ""
+        ? await ports.stable(target.steamPath)
+        : (() => {
+            const selected = tools.find((tool) => tool.path === target.selected);
+            return selected === undefined ? undefined : protonConfigName(selected);
+          })();
+    assertTarget(target);
+    const installed =
+      desired === undefined
+        ? undefined
+        : tools.find(
+            (tool) =>
+              protonConfigName(tool) === desired &&
+              (target.selected === "" || tool.path === target.selected),
+          );
+    if (desired === undefined || installed === undefined) {
+      throw new Error(
+        "Install a stable Proton in Steam or select an installed Proton version on the Proton page.",
+      );
+    }
+    const perGame = await ports.configured(target.steamPath, target.game.appid);
+    const current = perGame ?? (await ports.configured(target.steamPath, "0"));
+    assertTarget(target);
+    if (current !== desired) {
+      // A required version change is not best-effort: otherwise dependency repair could
+      // prepare a different prefix/runtime from the game Steam will subsequently launch.
+      await ports.setCompatTool(target.game.appid, desired, {
+        steamPath: target.steamPath,
+        gamePath: target.game.gamePath,
+        assertCurrent: () => assertTarget(target),
+      });
+      assertTarget(target);
+    }
+    return installed.path;
+  };
+
+  const prepareShaderHelper = async (target: IProtonTarget) => {
+    if (!target.isolate) return;
+    assertTarget(target);
+    await ports.ensureCache();
+    assertTarget(target);
+    await ports.configureCache(target.game.appid, [
+      ...new Set([
+        path.join(path.dirname(path.dirname(target.game.gamePath)), "shadercache"),
+        path.join(target.steamPath, "steamapps", "shadercache"),
+      ]),
+    ]);
+    assertTarget(target);
+    await ports.checkCache(target.game.appid);
+    assertTarget(target);
+  };
+
+  const synchronizeLaunchOptions = async (target: IProtonTarget) => {
+    const current = await ports.getLaunchOptions(target.game.appid, {
+      steamPath: target.steamPath,
+      gamePath: target.game.gamePath,
+      assertCurrent: () => assertTarget(target),
+    });
+    assertTarget(target);
+    // Remove the old owned loader before deciding whether to add the current one.
+    // This also removes it when no default-primary loader remains configured.
+    let next = disableDefaultToolRedirect(current, GAME_LAUNCH_WRAPPER);
+    next = target.isolate
+      ? enableShaderCacheRedirect(next, target.game.appid, SHADER_CACHE_WRAPPER)
+      : disableShaderCacheRedirect(next, target.game.appid, SHADER_CACHE_WRAPPER);
+    if (target.loader !== undefined) {
+      await ports.ensureLoader();
+      assertTarget(target);
+      await ports.checkLoader();
+      assertTarget(target);
+      next = enableDefaultToolRedirect(next, target.loader, GAME_LAUNCH_WRAPPER);
+    }
+    assertTarget(target);
+    if (next !== current) {
+      await ports.setLaunchOptions(target.game.appid, next, {
+        steamPath: target.steamPath,
+        gamePath: target.game.gamePath,
+        assertCurrent: () => assertTarget(target),
+      });
+      assertTarget(target);
+    }
+  };
+
+  const ensureDependencies = async (
+    target: IProtonTarget,
+    protonPath: string,
+    manual = false,
+    onProgress?: DependencyProgress,
+  ) => {
+    if (!target.automatic && !manual) return;
+    const required = [...new Set(await ports.detect(api.getState(), target.profile))].sort();
+    assertTarget(target);
+    // An empty scan neither provisions Protontricks nor requires a prefix/version marker.
+    if (required.length === 0) return;
+    if (target.game.compatDataPath === undefined) {
+      throw new Error(
+        "Launch this Windows game once in Steam to initialize its Proton prefix, then refresh Games.",
+      );
+    }
+    const prefix = target.game.compatDataPath;
+    const versionPath = path.join(prefix, "version");
+    const markerPath = path.join(prefix, ".vortex-dependencies-version");
+    const version = (await ports.read(versionPath)).trim();
+    assertTarget(target);
+    if (version.length === 0)
+      throw new Error(
+        "The Proton prefix has no version. Launch the game once in Steam and refresh Games.",
+      );
+    const marker = await ports
+      .read(markerPath)
+      .then((value) => value.trim())
+      .catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw error;
+      });
+    const inventory = await ports.inspect(prefix);
+    assertTarget(target);
+    // Runtime file presence can be Wine built-ins; only installation records establish
+    // that Protontricks applied the requested recipes for this prefix version.
+    const missing =
+      marker !== version
+        ? required
+        : required.filter((verb) => !inventory.winetricks.includes(verb));
+    if (missing.length > 0) {
+      assertTarget(target);
+      const dependencyTarget = await ports.resolveDependency({
+        appId: target.game.appid,
+        steamPath: target.steamPath,
+        gamePath: target.game.gamePath,
+        compatDataPath: prefix,
+        protonPath,
+      });
+      assertTarget(target);
+      await ports.install(api, target.game.appid, missing, onProgress, {
+        assertCurrent: () => assertTarget(target),
+        force: marker !== version,
+        target: dependencyTarget,
+      });
+      assertTarget(target);
+      ports.publish({
+        appId: target.game.appid,
+        phase: "verifying",
+        progress: 95,
+        message: "Verifying Windows dependency installation records",
+      });
+      const verified = await ports.inspect(prefix);
+      assertTarget(target);
+      const unresolved = required.filter((verb) => !verified.winetricks.includes(verb));
+      if (unresolved.length > 0)
+        throw new Error(
+          `Windows dependencies remain unverified: ${unresolved.join(", ")}. Open Protontricks for Steam App ID ${target.game.appid} and retry.`,
+        );
+    }
+    if ((await ports.read(versionPath)).trim() !== version) {
+      throw new ProcessCanceled(
+        "The Proton prefix changed during dependency setup. Retry after Steam finishes updating it.",
+      );
+    }
+    assertTarget(target);
+    await ports.write(markerPath, version);
+    assertTarget(target);
+  };
+
+  const reconcile = async (target: IProtonTarget, directLaunch: boolean) => {
+    assertTarget(target);
+    ports.publish({
+      appId: target.game.appid,
+      phase: "checking",
+      progress: 0,
+      message: "Checking Proton and enabled mods",
+    });
+    const protonPath = await synchronizeRuntime(target);
+    await prepareShaderHelper(target);
+    let settingsError: unknown;
+    try {
+      await synchronizeLaunchOptions(target);
+    } catch (error) {
+      assertTarget(target);
+      settingsError = error;
+    }
+    await ensureDependencies(target, protonPath);
+    assertTarget(target);
+    if (settingsError !== undefined) {
+      const error = new Error(
+        `Steam launch settings could not be synchronized. Start Steam with its settings service available, then refresh the Proton page. ${unknownToError(settingsError).message}`,
+      );
+      report(target, error);
+      // Vortex's direct command does not consume Steam launch options. Its runtime,
+      // dependency and private-cache preparation have already succeeded, so a CDP
+      // read failure alone must not prevent this otherwise valid direct launch.
+      if (!directLaunch) return protonPath;
+    } else {
+      ports.publish({
+        appId: target.game.appid,
+        phase: "ready",
+        progress: 100,
+        message: "Proton setup is ready",
+      });
+    }
+    return protonPath;
+  };
+
+  const request = (): Promise<void> =>
+    serialize(async () => {
+      const target = targetNow();
+      if (target === undefined) return;
+      try {
+        await reconcile(target, false);
+      } catch (error) {
+        report(target, error);
+      }
+    });
+
+  return {
+    request,
+    installManually: (expectedKey: string, onProgress?: DependencyProgress): Promise<void> => {
+      const target = targetNow();
+      if (target === undefined || target.key !== expectedKey)
+        return Promise.reject(new StaleProtonTarget());
+      return serialize(async () => {
+        try {
+          assertTarget(target);
+          const protonPath = await synchronizeRuntime(target);
+          await ensureDependencies(target, protonPath, true, onProgress);
+          assertTarget(target);
+          ports.publish({
+            appId: target.game.appid,
+            phase: "ready",
+            progress: 100,
+            message: "Windows dependencies are ready",
+          });
+        } catch (error) {
+          report(target, error);
+          throw error;
+        }
+      });
+    },
+    observe: () => {
+      const key = targetNow()?.key;
+      if (key === previousObservedKey) return;
+      previousObservedKey = key;
+      void request();
+    },
+    prepareLaunch: (
+      game: ISteamEntry | undefined,
+      executable: string,
+      options: IRunOptions,
+    ): Promise<IProtonPreparation | undefined> => {
+      const target = targetNow();
+      if (target === undefined || !matchesActiveLaunch(target, executable, options, game)) {
+        return Promise.resolve(undefined);
+      }
+      return serialize(async () => {
+        try {
+          assertTarget(target);
+          const protonPath = await reconcile(target, true);
+          assertTarget(target);
+          return {
+            appId: target.game.appid,
+            profileId: target.profile.id,
+            gamePath: target.game.gamePath,
+            protonPath,
+            shaderWrapper: target.isolate ? SHADER_CACHE_WRAPPER : undefined,
+            assertCurrent: () => assertTarget(target),
+          };
+        } catch (error) {
+          report(target, error);
+          throw error;
+        }
+      });
+    },
+    hook: async (input: IRunParameters): Promise<IRunParameters> => {
+      // Native commands (including Proton and our wrappers) never recurse here.
+      // The Steam pre-conversion call is still required for current ordinary launches.
+      const target = targetNow();
+      if (target !== undefined && matchesActiveLaunch(target, input.executable, input.options)) {
+        await serialize(() => reconcile(target, true));
+      }
+      return input;
+    },
+  };
+}
+
+const coordinators = new WeakMap<IExtensionApi, ReturnType<typeof createProtonCoordinator>>();
+
+export function protonCoordinator(api: IExtensionApi) {
+  let coordinator = coordinators.get(api);
+  if (coordinator === undefined) {
+    coordinator = createProtonCoordinator(api);
+    coordinators.set(api, coordinator);
+  }
+  return coordinator;
+}
+
+export function prepareProtonLaunch(
+  api: IExtensionApi,
+  game: ISteamEntry,
+  executable: string,
+  options: IRunOptions,
+): Promise<IProtonPreparation | undefined> {
+  return protonCoordinator(api).prepareLaunch(game, executable, options);
+}

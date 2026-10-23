@@ -34,6 +34,30 @@ backups parked through relinking. Distinct physical Linux backups are restored s
 Case-only updates, delayed Windows alias removal, partial disable and move placeholders
 have regression cases. Run the Linux cases on a case-sensitive filesystem.
 
+## Choosing a staging folder
+
+When game mods and Vortex user data are on different filesystems, Linux suggests staging
+under the highest writable folder on the mods' filesystem, outside the game directory.
+Existing symlinks are resolved before finding the filesystem and excluding the physical
+game directory. Missing trailing mod directories are retained while resolving their nearest
+existing ancestor. Permission errors and symlink loops are reported rather than treated as
+missing folders. If no writable folder on that filesystem exists outside the game, the
+suggestion fails with setup guidance. This also applies when the game occupies the entire
+mount. Windows continues to use its existing drive-root suggestion.
+
+From `src/renderer`, run:
+
+```sh
+pnpm exec vitest run src/extensions/gamemode_management/util/discovery.stagingVolume.test.ts src/extensions/mod_management/views/Settings.suggest.test.ts
+```
+
+The real cross-filesystem symlink fixture needs an ordinary Linux user, writable `/dev/shm`
+on a different device from the temporary directory, and symlink support. It skips when that
+second filesystem is unavailable; a skipped fixture does not verify this boundary. The
+other fixtures cover read-only mount points, missing directories, error propagation and the
+Windows control. No game, account or display is needed. Verify the actual suggested path
+and staging/deployment separately in the application.
+
 ## Staging scans during installation
 
 A staging scan can overlap an install, cancellation or reinstall. Reconciliation
@@ -119,8 +143,11 @@ Steam game when the store snapshot identifies it as using Proton. Before the fir
 Steam scan, no matching entry is available. Launch the game in Steam once to initialise
 its prefix, then rescan games if necessary.
 
-The version picker stores a profile override for launches made by Vortex. It does not
-rewrite Steam's compatibility choice or launch options. An unavailable selected runtime
+The version picker selects one installed Proton version for Steam and Vortex. Latest
+stable follows the newest installed official stable tool; a specific choice stays with
+the profile. To apply Steam compatibility and launch settings, start Steam with
+`-cef-enable-debugging` and keep it running. Vortex uses the local settings endpoint
+at port 8080; an unavailable service gives setup guidance. An unavailable selected runtime
 produces an error rather than silently launching another runtime. Tools outside the game
 directory use their associated game's identity, not a string prefix of their tool path.
 
@@ -148,11 +175,87 @@ Installed Proton discovery scans the client and configured libraries, checks for
 prevent scanning others. Per-game and default settings take precedence over the installed
 fallback, which prefers Experimental, then the numerically newest official stable version.
 
-The panel shows winetricks records, runtime file indicators and hints from enabled mod
-executables. File indicators can be Wine built-ins; byte hints are not proof of a required
-redistributable. Follow the mod's instructions and use Protontricks explicitly when needed.
-Profile changes and deployment do not install helpers or modify global Steam settings.
-The incomplete prototype shader-cache and dependency reconciliation was removed.
+The original Proton header, compatibility card, mod requirements, shader cache controls
+and local feedback footer are restored from `local/linux-support`. Required-component
+installation is enabled by default per profile. Turn it off to manage dependencies yourself.
+The manual **Install requirements** button asks for confirmation. Automatic setup runs on
+profile/deployment changes and before matching Windows launches; it serializes work and
+rechecks the selected profile before starting each external command or writing success.
+An already-started installer cannot be undone by switching profiles.
+
+Detection reads up to eight MiB from each enabled installed mod's `.exe`/`.dll`, recursing
+up to eight levels. These byte signatures are hints, not proof of a redistributable
+requirement. Installation and verification use Winetricks records, because runtime DLLs
+can be Wine built-ins. A changed Proton prefix version reapplies the detected recipes.
+No detected recipes means no dependency-helper preparation. Initialize the game in Steam
+first; Vortex does not guess another game's prefix.
+
+Managed recipes need Flatpak and its **user** Flathub remote on the Steam host, network
+access for vendor redistributables, and an initialized prefix. Vortex installs/updates
+`com.github.Matoking.protontricks` as a user Flatpak and invokes it with the exact Steam
+client, App ID, initialized prefix and selected Proton metadata name. Custom tools use
+their internal compatibility-tool key. Duplicate or mismatched installations are refused.
+Both manual and automatic setup use this same serialized preparation. A one-shot sandbox
+grant makes the selected prefix writable and the required client/library/runtime roots
+readable. The exact required Steam Runtime also receives writable access to its own
+`var` cache and existing deployment `.ref` lock files, which pressure-vessel needs.
+Inherited Wine executable overrides are cleared; the final Protontricks runtime and
+prefix are checked before any recipe executes. Recipes run unattended and their
+installation records are checked afterward. From a Vortex Flatpak setup uses
+`flatpak-spawn --host`.
+Install Flatpak using your distribution's package manager and add the user remote with:
+
+```sh
+flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+```
+
+**Protect Steam's shader cache** keeps a private per-game cache under
+`~/.cache/vortex/shadercache/<appid>`. Vortex ships the Python launcher in its application
+bundle and provisions it under `~/.local/share/vortex/bin`; no manually supplied script is
+needed. Python 3.10 or newer is required in the launch environment and on the Steam host.
+The helper checks its configuration before Vortex enables protection. Steam launches use
+a managed launch-option wrapper; Vortex's direct Proton commands invoke the same helper.
+Existing custom launch options are preserved. A detected Windows default-primary loader
+is redirected only for Steam game launches; separately selected tools keep their executable.
+Steam settings reads and writes require the connected client's root library and game
+installation to match the selected physical paths. Vortex validates both and rechecks
+them on the same connection before applying a change; unavailable or mismatched clients
+produce an error. Start the matching Steam client and refresh Games before retrying.
+Reads use a one-shot native app-details subscription so they reflect current launch
+options even when Steam’s library page has no active observer; the library store’s
+cached details can otherwise keep returning an earlier value after a successful write.
+
+The private cache starts from the first nonempty configured Steam cache, excluding its
+`downloads` directory. The helper hashes source bytes and reseeds after a source change.
+The helper marks its child environment as prepared for Steam (`SteamEnv=1`) after
+setting the private cache paths. This prevents the native Steam bridge from replacing
+them when a Windows game starts outside a Steam launch session. The marker applies
+only to protected helper launches; it does not change the running Steam client.
+When no cache paths are inherited, defaults retain Steam’s seeded directory layout.
+The split bar compares actual private/source bytes, showing Steam-copy and added/changed
+sizes and file counts. An unavailable source is not reported as an identical copy.
+**Reset cache** confirms first, refuses while tools are running, and replaces only a
+marked Vortex-owned private cache. Steam downloads, precompiled source databases, mods
+and game files stay intact. With protection disabled, reset removes only the recognized
+generated cache files. The helper refuses links/special files inside cache trees,
+unowned private directories, overlapping paths and concurrent resets. Source library
+aliases are resolved; private-cache ancestors must not be symlinks. Atomic replacement
+requires Linux `renameat2` support. A refusal is reported rather than deleting other data.
+
+From `src/renderer`, with Python 3.10+ available on Linux, run:
+
+```sh
+pnpm exec vitest run src/extensions/proton_management src/util/Steam.test.ts src/util/linux/proton.test.ts src/util/linux/protonMetadata.test.ts src/util/StarterInfo.test.ts src/ExtensionManager.proton.test.ts
+```
+
+The Linux launcher test runs disposable real-file and child-process fixtures, including
+copy/update/reset preservation, links, overlap, literal arguments/environment, signals and
+busy locks. Windows runs the portable management/launch controls and skips Linux-only
+filesystem/process fixtures. These tests need no account, game, Steam process or network.
+They do not establish vendor downloads, actual Steam settings acceptance, GPU cache
+behavior or packaged sandbox support; exercise those workflows separately in the app.
+Run the repository's full `pnpm run verify` with development sessions stopped before
+publication. Record source, packaged runtime and real-game evidence separately.
 
 ## Native dependencies
 
