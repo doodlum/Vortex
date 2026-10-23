@@ -467,7 +467,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
   const toolbarActions = useMemo<IToolbarAction[]>(
     () => [
       {
-        label: t("Refresh"),
+        label: t("common:::refresh"),
         icon: "refresh",
         isLoading: loading,
         testId: "proton-refresh",
@@ -695,7 +695,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
       </PageHeader>
 
       {hasAlerts && (
-        <PageContent isFullWidth className="shrink-0">
+        <PageContent className="shrink-0">
           {setupInProgress && (
             <Alert className="border-b-0" data-testid="proton-setup-progress" severity="info">
               {t(visibleSetupStatus.message ?? "Preparing Proton")}
@@ -769,7 +769,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
               size="sm"
               onClick={() => void refreshSteam()}
             >
-              {t("Refresh")}
+              {t("common:::refresh")}
             </Button>
           </NoResults>
         ) : (
