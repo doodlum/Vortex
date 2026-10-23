@@ -683,11 +683,13 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
               <StatusRow
                 description={
                   data.runtime === undefined
-                    ? t("Reading Steam's settings…")
+                    ? loading
+                      ? t("Reading Steam's settings…")
+                      : pageError !== undefined
+                        ? t("Couldn't read Steam's settings.")
+                        : undefined
                     : data.runtime.label === undefined
-                      ? t(
-                          "No Proton is installed yet. Launch the game once from Steam so Steam installs it.",
-                        )
+                      ? t("Steam hasn't chosen a version for this game yet.")
                       : `${t(RUNTIME_SOURCES[data.runtime.source])} ${t(CHANGE_IN_STEAM)}`
                 }
                 label={t("Proton version")}

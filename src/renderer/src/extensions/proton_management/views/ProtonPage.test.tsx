@@ -368,7 +368,7 @@ it("says so when Steam has no Proton choice and none is installed", async () => 
   await ready();
   const version = screen.getByTestId("proton-version");
   expect(version).toHaveTextContent("No Proton installed");
-  expect(version).toHaveTextContent("Launch the game once from Steam so Steam installs it.");
+  expect(version).toHaveTextContent("Steam hasn't chosen a version for this game yet.");
   expect(version).not.toHaveTextContent("The newest Proton installed");
 });
 
@@ -376,4 +376,13 @@ it("shows that it is reading Steam's settings until the version is known", async
   mocks.resolve.mockReturnValue(new Promise(() => undefined));
   view();
   expect(await screen.findByText("Reading Steam's settings…")).toBeInTheDocument();
+});
+
+it("stops claiming to read Steam's settings once reading them has failed", async () => {
+  mocks.resolve.mockRejectedValue(new Error("config.vdf is unreadable"));
+  view();
+  const version = await screen.findByTestId("proton-version");
+  await waitFor(() => expect(version).toHaveTextContent("Couldn't read Steam's settings."));
+  expect(version).not.toHaveTextContent("Reading Steam's settings…");
+  expect(screen.getByRole("alert")).toHaveTextContent("config.vdf is unreadable");
 });
