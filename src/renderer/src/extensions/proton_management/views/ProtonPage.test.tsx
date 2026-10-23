@@ -330,3 +330,27 @@ it("shows an empty state instead of the settings when no Proton game is selected
   expect(await screen.findByText("No Proton game selected")).toBeInTheDocument();
   expect(screen.queryByTestId("proton-automatic")).toBeNull();
 });
+
+it("gives keyboard users the reason a cache reset is unavailable", async () => {
+  mocks.getOptions.mockRejectedValue(new Error("Steam is not running"));
+  view();
+  await ready();
+  const reason = screen.getByLabelText(
+    "Start Steam so Vortex can read this game's launch settings",
+  );
+  expect(reason).toHaveAttribute("tabindex", "0");
+  expect(reason).toContainElement(screen.getByTestId("proton-reset-cache"));
+});
+
+it("shows an unavailable selected Proton as an error on its own setting", async () => {
+  mocks.state.current.persistent = {
+    profiles: {
+      one: { id: "one", gameId: "game", features: { "proton-version": "/gone/Proton 8.0" } },
+    },
+  } as never;
+  view();
+  await ready();
+  // Tests run without i18n initialised, so the path placeholder is not substituted.
+  const message = await screen.findByText(/is no longer installed\. Choose another version\./);
+  expect(message).toHaveClass("nxm-field-error-message");
+});

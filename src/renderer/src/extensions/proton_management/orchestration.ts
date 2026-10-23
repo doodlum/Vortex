@@ -219,13 +219,18 @@ export function createProtonCoordinator(
   };
   const report = (target: IProtonTarget, error: unknown) => {
     if (targetNow()?.key !== target.key) return;
-    const message = `Steam App ID ${target.game.appid}: ${unknownToError(error).message}`;
+    const message = unknownToError(error).message;
+    // The Proton page already belongs to this game; notifications can come from any page.
     ports.publish({ appId: target.game.appid, phase: "error", message });
-    api.showErrorNotification("Could not prepare Proton for this game", new Error(message), {
-      id: "proton-setup-" + target.game.appid,
-      allowReport: false,
-      allowSuppress: false,
-    });
+    api.showErrorNotification(
+      "Could not prepare Proton for this game",
+      new Error(`Steam App ID ${target.game.appid}: ${message}`),
+      {
+        id: "proton-setup-" + target.game.appid,
+        allowReport: false,
+        allowSuppress: false,
+      },
+    );
   };
 
   /** Why the Proton at `protonPath` must not drive this game's prefix, if it must not. */
@@ -295,7 +300,7 @@ export function createProtonCoordinator(
     }
     if (desired === undefined || installed === undefined) {
       throw new Error(
-        "The Proton version selected for this profile is no longer installed. Choose another version on the Proton page.",
+        "The Proton version selected for this profile is no longer installed. Choose another version for this profile, or reinstall it in Steam.",
       );
     }
     const perGame = await ports.configured(target.steamPath, target.game.appid);

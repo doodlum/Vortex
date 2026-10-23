@@ -12,6 +12,7 @@ import type { IState } from "@/types/IState";
 import { Alert } from "@/ui/components/alert/Alert";
 import { Button } from "@/ui/components/button/Button";
 import { Description } from "@/ui/components/form/field/Description";
+import { ErrorMessage } from "@/ui/components/form/field/ErrorMessage";
 import { Field } from "@/ui/components/form/field/Field";
 import { Label } from "@/ui/components/form/field/Label";
 import { Switch } from "@/ui/components/form/switch/Switch";
@@ -160,11 +161,13 @@ const SettingRow = ({
   children,
   description,
   disabled,
+  error,
   label,
 }: {
   children: ReactNode;
   description?: string;
   disabled?: boolean;
+  error?: string;
   label: string;
 }) => (
   <Field className={`${ROW_CLASSES} flex-row`} disabled={disabled}>
@@ -172,6 +175,8 @@ const SettingRow = ({
       <Label>{label}</Label>
 
       {!!description && <Description className="text-body-sm">{description}</Description>}
+
+      {!!error && <ErrorMessage className="text-body-sm">{error}</ErrorMessage>}
     </div>
 
     <div className="flex shrink-0 items-center gap-x-2">{children}</div>
@@ -237,14 +242,10 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
   const givePageFeedback = useCallback(
     (helpful: boolean) => {
       if (profile === undefined) return;
+      // The strip itself thanks the user, so no toast repeats it.
       dispatch(setFeature(profile.id, "proton-page-feedback", helpful ? "helpful" : "not-helpful"));
-      api.sendNotification({
-        type: "success",
-        message: "Thanks for your feedback",
-        displayMS: 4000,
-      });
     },
-    [api, dispatch, profile],
+    [dispatch, profile],
   );
 
   const refresh = useCallback(async () => {
@@ -780,14 +781,15 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
               title={t("Windows compatibility")}
             >
               <SettingRow
-                description={
+                description={t(
+                  "A specific version stays selected for this profile until you change it here.",
+                )}
+                error={
                   selectedUnavailable
                     ? t("{{path}} is no longer installed. Choose another version.", {
                         path: selected,
                       })
-                    : t(
-                        "A specific version stays selected for this profile until you change it here.",
-                      )
+                    : undefined
                 }
                 disabled={loading || data.appId === undefined}
                 label={t("Proton version")}
@@ -857,7 +859,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
 
               <StatusRow
                 description={
-                  data.installed.length === 0
+                  data.appId !== undefined && data.installed.length === 0
                     ? t("Winetricks has no additional Windows components recorded for this game.")
                     : undefined
                 }
@@ -887,17 +889,24 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
                   disabled={resetBlockedReason === undefined}
                   placement="bottom"
                 >
-                  <Button
-                    appearance="subdued"
-                    brand="neutral"
-                    data-testid="proton-reset-cache"
-                    disabled={data.appId === undefined || resetBlockedReason !== undefined}
-                    leftIcon="delete_sweep"
-                    size="sm"
-                    onClick={clearShaderCache}
+                  {/* A disabled button takes no focus, so its wrapper carries the reason to keyboard users. */}
+                  <span
+                    aria-label={resetBlockedReason}
+                    className="inline-flex"
+                    tabIndex={resetBlockedReason === undefined ? undefined : 0}
                   >
-                    {t("Reset cache")}
-                  </Button>
+                    <Button
+                      appearance="subdued"
+                      brand="neutral"
+                      data-testid="proton-reset-cache"
+                      disabled={data.appId === undefined || resetBlockedReason !== undefined}
+                      leftIcon="delete_sweep"
+                      size="sm"
+                      onClick={clearShaderCache}
+                    >
+                      {t("Reset cache")}
+                    </Button>
+                  </span>
                 </Tooltip>
               }
               description={
@@ -971,10 +980,10 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
 
               <div className="flex shrink-0 items-center gap-x-2">
                 <TooltipDelayGroup>
-                  <Tooltip content={t("Helpful")} placement="bottom">
+                  <Tooltip content={t("common:::helpful")} placement="bottom">
                     <Button
                       appearance="subdued"
-                      aria-label={t("Helpful")}
+                      aria-label={t("common:::helpful")}
                       brand="neutral"
                       disabled={pageFeedback !== undefined}
                       leftIcon="thumb_up"
@@ -983,10 +992,10 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
                     />
                   </Tooltip>
 
-                  <Tooltip content={t("Not helpful")} placement="bottom">
+                  <Tooltip content={t("common:::not_helpful")} placement="bottom">
                     <Button
                       appearance="subdued"
-                      aria-label={t("Not helpful")}
+                      aria-label={t("common:::not_helpful")}
                       brand="neutral"
                       disabled={pageFeedback !== undefined}
                       leftIcon="thumb_down"
