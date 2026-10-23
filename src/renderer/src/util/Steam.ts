@@ -7,7 +7,10 @@ import { parse, type VDFObject, type VDFValue } from "simple-vdf";
 import * as winapi from "winapi-bindings";
 import { z } from "zod";
 
-import { prepareProtonLaunch } from "@/extensions/proton_management/orchestration";
+import {
+  prepareProtonLaunch,
+  setProtonPrefixPreparer,
+} from "@/extensions/proton_management/orchestration";
 import { log } from "@/logging";
 
 import { activeProfile } from "../extensions/profile_management/selectors";
@@ -633,6 +636,18 @@ class Steam implements IGameStore {
 }
 
 const instance: Steam = new Steam();
+
+// A no-op program started with the profile's Proton runs Proton's own prefix setup, which is
+// how Steam downgrades a prefix when a game starts with an older Proton.
+setProtonPrefixPreparer((api, game) =>
+  instance.runToolWithProton(
+    api,
+    "C:\\windows\\system32\\cmd.exe",
+    ["/c", "exit"],
+    { cwd: game.gamePath, shell: false },
+    game,
+  ),
+);
 
 export default instance;
 

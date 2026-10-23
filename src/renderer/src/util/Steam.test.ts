@@ -24,9 +24,10 @@ import { Steam } from "./Steam";
 const steam = vi.hoisted(() => ({ installed: true, baseFolder: "C:\\Steam" }));
 const proton = vi.hoisted(() => ({ info: vi.fn(), installed: vi.fn() }));
 const steamHome = vi.hoisted(() => ({ find: vi.fn().mockResolvedValue("/steam-home") }));
-const preparation = vi.hoisted(() => ({ run: vi.fn() }));
+const preparation = vi.hoisted(() => ({ run: vi.fn(), register: vi.fn() }));
 vi.mock("@/extensions/proton_management/orchestration", () => ({
   prepareProtonLaunch: preparation.run,
+  setProtonPrefixPreparer: preparation.register,
 }));
 
 const BASE_FOLDER = steam.baseFolder;
@@ -634,4 +635,21 @@ describe("Steam Proton launches", () => {
     ).rejects.toThrow("No installed Proton");
     expect(runExecutable).not.toHaveBeenCalled();
   });
+});
+
+it("registers a Proton prefix preparer that starts a no-op program in the game's prefix", async () => {
+  expect(preparation.register).toHaveBeenCalledOnce();
+  const [preparer] = preparation.register.mock.calls[0];
+  const run = vi.spyOn(Steam.prototype, "runToolWithProton").mockResolvedValue(undefined);
+  const api = {} as never;
+  const game = { appid: "42", gamePath: "/games/Game" } as never;
+  await preparer(api, game);
+  expect(run).toHaveBeenCalledWith(
+    api,
+    "C:\\windows\\system32\\cmd.exe",
+    ["/c", "exit"],
+    { cwd: "/games/Game", shell: false },
+    game,
+  );
+  run.mockRestore();
 });

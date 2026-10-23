@@ -21,7 +21,7 @@ import {
 } from "@/util/linux/proton";
 import { resolveDependencyTarget } from "@/util/linux/protonMetadata";
 import { findLinuxSteamPath } from "@/util/linux/steamPaths";
-import Steam, { type ISteamEntry } from "@/util/Steam";
+import type { ISteamEntry } from "@/util/Steam";
 
 import { activeProfile } from "../profile_management/selectors";
 import type { IProfile } from "../profile_management/types/IProfile";
@@ -141,6 +141,14 @@ export function currentProtonTarget(state: IState): IProtonTarget | undefined {
   return { key, profile, game, steamPath, selected, automatic, isolate, loader };
 }
 
+type PrefixPreparer = (api: IExtensionApi, game: ISteamEntry) => Promise<void>;
+let prefixPreparer: PrefixPreparer | undefined;
+
+/** Steam's Proton launcher registers here, so this module needn't import (and construct) it. */
+export function setProtonPrefixPreparer(preparer: PrefixPreparer): void {
+  prefixPreparer = preparer;
+}
+
 const defaultPorts: IProtonOrchestrationPorts = {
   target: currentProtonTarget,
   detect: detectModRuntimeDependencies,
@@ -148,13 +156,8 @@ const defaultPorts: IProtonOrchestrationPorts = {
   configured: getConfiguredProtonName,
   requestInstall: (steamAppId) => window.api.shell.openUrl(`steam://install/${steamAppId}`),
   preparePrefix: async (api, game) => {
-    await Steam.runToolWithProton(
-      api,
-      "C:\\windows\\system32\\cmd.exe",
-      ["/c", "exit"],
-      { cwd: game.gamePath, shell: false },
-      game,
-    );
+    if (prefixPreparer === undefined) throw new Error("Proton launches are unavailable");
+    await prefixPreparer(api, game);
   },
   tools: listInstalledProton,
   read: (file) => fs.readFile(file, "utf8"),
