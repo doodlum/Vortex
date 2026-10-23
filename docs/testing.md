@@ -9,6 +9,18 @@ extension tests.
 package. It **excludes the E2E suite** (`@vortex/e2e`), which needs a packaged
 app and a real game install and runs separately.
 
+The root test command first installs the pinned Electron binary in one process and checks
+that its executable exists. It does not launch Electron. This finishes before Nx starts
+parallel test workers, whose first Electron imports would otherwise race to extract the
+same binary. CI performs the same check before its parallel build/test work. Installer
+failure stops the command; tests are not skipped or started against an incomplete install.
+The output check reads the installer's path record directly, so validation cannot invoke
+Electron's lazy downloader a second time. The root gate also runs the scripts regression
+suite before its Nx package tests.
+For a directly scoped Vitest run on a fresh checkout, run
+`node scripts/ensure-electron.mjs` once first. Separate commands using the same dependencies
+must still finish provisioning before starting concurrent tests.
+
 To run a single test file or directory, use `pnpm exec vitest run <path>` from
 inside the project directory that owns it (e.g. `src/renderer`). `pnpm run
 test` itself is an nx invocation across all projects and cannot be scoped.
