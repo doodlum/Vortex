@@ -203,6 +203,14 @@ Inherited Wine executable overrides are cleared; the final Protontricks runtime 
 prefix are checked before any recipe executes. Recipes run unattended and their
 installation records are checked afterward. From a Vortex Flatpak setup uses
 `flatpak-spawn --host`.
+Installation progress appears in Vortex's notification center and continues there when
+you leave the Proton page. The activity stays open while Vortex verifies installation
+records and the prefix version; completion is reported only after those checks pass.
+Failures leave one error notification and a themed setup alert with **Retry setup**.
+Requirement labels use the same themed pills as Health Check, with readable neutral text.
+Native Flatpak dependency commands and Flatpak host commands preserve literal quoted
+arguments and environment values without invoking a shell.
+
 Install Flatpak using your distribution's package manager and add the user remote with:
 
 ```sh

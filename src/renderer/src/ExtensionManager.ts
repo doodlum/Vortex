@@ -2444,8 +2444,8 @@ class ExtensionManager {
                   runExe,
                   options.shell ||
                     (process.platform === "linux" &&
-                      executable === "flatpak-spawn" &&
-                      args[0] === "--host")
+                      (executable === "flatpak" ||
+                        (executable === "flatpak-spawn" && args[0] === "--host")))
                     ? args
                     : args.map((arg) => arg.replace(/"/g, "")),
                   spawnOptions,

@@ -137,7 +137,7 @@ async function install(
       DEPENDENCY_COMMAND,
       appId,
     ]);
-    report(100, "Windows dependencies installed");
+    report(90, "Windows components applied; checking installation records");
   } catch (err) {
     if (err instanceof ProcessCanceled) throw err;
     check();

@@ -10,9 +10,11 @@ import { useDispatch, useSelector } from "react-redux";
 import ProgressBar from "@/controls/ProgressBar";
 import type { IExtensionApi } from "@/types/IExtensionContext";
 import type { IState } from "@/types/IState";
+import { Alert } from "@/ui/components/alert/Alert";
 import { Button } from "@/ui/components/button/Button";
 import { Switch } from "@/ui/components/form/switch/Switch";
 import { Picker } from "@/ui/components/picker/Picker";
+import { Pill } from "@/ui/components/pill/Pill";
 import { Typography } from "@/ui/components/typography/Typography";
 import {
   findLatestStableProtonName,
@@ -271,6 +273,17 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
     };
   }, [api, sameTarget]);
 
+  const retrySetup = async () => {
+    if (!sameTarget()) return;
+    setLoading(true);
+    try {
+      await protonCoordinator(api).request();
+      if (sameTarget()) await refresh();
+    } finally {
+      if (sameTarget()) setLoading(false);
+    }
+  };
+
   const options = useMemo(
     () => [
       { label: t("Latest stable"), value: "" },
@@ -377,14 +390,15 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
         throw new Error(`Components were not installed correctly: ${unresolved.join(", ")}`);
       }
       await refresh();
-      api.sendNotification({
-        type: "success",
-        message: "Mod requirements installed and verified",
-        displayMS: 5000,
-      });
     } catch (err) {
-      if (sameTarget() && !(err instanceof ProcessCanceled))
-        api.showErrorNotification("Failed to install Windows dependencies", err);
+      if (sameTarget() && !(err instanceof ProcessCanceled)) {
+        const status = protonSetupStatus();
+        if (status.phase !== "error" || status.appId !== data.appId)
+          api.showErrorNotification("Failed to install Windows dependencies", err, {
+            id: "proton-setup-" + data.appId,
+            allowReport: false,
+          });
+      }
     } finally {
       if (sameTarget()) {
         setDependencyProgress(undefined);
@@ -558,38 +572,48 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
         )}
         {visibleSetupStatus !== undefined &&
           ["checking", "installing", "verifying"].includes(visibleSetupStatus.phase) && (
-            <div className="rounded-lg border border-stroke-weak bg-surface-low p-4">
-              <Typography typographyType="body-sm">
-                {t(visibleSetupStatus.message ?? "Preparing Proton")}
-              </Typography>
+            <div className="space-y-2">
+              <Alert severity="info">{t(visibleSetupStatus.message ?? "Preparing Proton")}</Alert>
               <ProgressBar max={100} min={0} now={visibleSetupStatus.progress ?? 0} />
             </div>
           )}
         {visibleSetupStatus?.phase === "error" && (
-          <div className="rounded-md bg-danger-subdued p-4">
-            <Typography typographyType="body-sm">{t("Automatic setup failed")}</Typography>
-            <Typography appearance="subdued" className="mt-1" typographyType="body-sm">
-              {visibleSetupStatus.message}
-            </Typography>
-          </div>
+          <Alert
+            severity="danger"
+            role="alert"
+            data-testid="proton-setup-error"
+            action={
+              <Button
+                brand="neutral"
+                size="sm"
+                leftIcon="refresh"
+                disabled={loading}
+                onClick={() => void retrySetup()}
+              >
+                {t("Retry setup")}
+              </Button>
+            }
+          >
+            <strong>{t("Proton setup failed")}</strong> {visibleSetupStatus.message}
+          </Alert>
         )}
-        {pageError !== undefined && (
-          <div className="rounded-md bg-danger-subdued p-4">
-            <Typography typographyType="body-sm">
-              {t("Proton setup could not be checked")}
-            </Typography>
-            <Typography appearance="subdued" className="mt-1" typographyType="body-sm">
-              {pageError}
-            </Typography>
-            <Button
-              className="mt-3"
-              leftIcon="refresh"
-              size="sm"
-              onClick={() => void refreshSteam()}
-            >
-              {t("Try again")}
-            </Button>
-          </div>
+        {pageError !== undefined && visibleSetupStatus?.phase !== "error" && (
+          <Alert
+            severity="danger"
+            role="alert"
+            action={
+              <Button
+                brand="neutral"
+                leftIcon="refresh"
+                size="sm"
+                onClick={() => void refreshSteam()}
+              >
+                {t("Try again")}
+              </Button>
+            }
+          >
+            <strong>{t("Proton setup could not be checked")}</strong> {pageError}
+          </Alert>
         )}
         <section className="rounded-lg border border-stroke-weak bg-surface-low p-6">
           <Typography as="h3" typographyType="heading-sm">
@@ -674,12 +698,9 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
               <Typography appearance="subdued">{t("Still needed by your mods")}</Typography>
               <div className="mt-2 flex flex-wrap gap-2">
                 {missing.map((item) => (
-                  <span
-                    className="rounded-full bg-warning-subdued px-3 py-1 text-body-sm"
-                    key={item}
-                  >
+                  <Pill brand="warning" icon="warning" key={item}>
                     {item}
-                  </span>
+                  </Pill>
                 ))}
               </div>
             </div>
@@ -687,9 +708,9 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
           <div className="mt-4 flex flex-wrap gap-2">
             {data.installed.length > 0 ? (
               data.installed.map((item) => (
-                <span className="rounded-full bg-surface-mid px-3 py-1 text-body-sm" key={item}>
+                <Pill brand="success" icon="check_circle" key={item}>
                   {item}
-                </span>
+                </Pill>
               ))
             ) : (
               <Typography appearance="subdued">

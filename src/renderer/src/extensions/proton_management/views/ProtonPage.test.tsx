@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   check: vi.fn(),
   reset: vi.fn(),
   clear: vi.fn(),
+  request: vi.fn(),
 }));
 vi.mock("react-redux", () => ({
   useDispatch: () => mocks.dispatch,
@@ -41,7 +42,7 @@ vi.mock("@/util/linux/proton", () => ({
 vi.mock("../selection", () => ({ activeProtonGame: mocks.entry }));
 vi.mock("../modRequirements", () => ({ detectModRuntimeDependencies: async () => ["vcrun2022"] }));
 vi.mock("../orchestration", () => ({
-  protonCoordinator: () => ({ installManually: mocks.install }),
+  protonCoordinator: () => ({ installManually: mocks.install, request: mocks.request }),
   currentProtonTarget: (state: IState) => ({
     steamPath: "/Steam",
     game: mocks.entry(),
@@ -88,6 +89,7 @@ import { ProtonPage } from "./ProtonPage";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  publishProtonSetupStatus({ phase: "idle" });
   mocks.state.current = {
     persistent: { profiles: { one: { id: "one", gameId: "game", features: {} } } },
     settings: { profiles: { activeProfileId: "one" }, gameMode: { discovered: {} } },
@@ -117,6 +119,21 @@ function view() {
 async function ready() {
   await waitFor(() => expect(screen.getByTestId("proton-install-requirements")).not.toBeDisabled());
 }
+
+it("uses shared themed requirement pills and a readable setup alert with retry", async () => {
+  view();
+  await ready();
+  expect(screen.getByText("vcrun2022").closest(".nxm-pill")).not.toBeNull();
+  await act(async () => {
+    publishProtonSetupStatus({ phase: "error", appId: "22380", message: "A setup command failed" });
+  });
+  const alert = screen.getByRole("alert");
+  expect(alert).toHaveClass("nxm-alert-danger");
+  expect(alert).toHaveTextContent("A setup command failed");
+  expect(alert).not.toHaveTextContent("Automatic setup failed");
+  fireEvent.click(screen.getByRole("button", { name: "Retry setup" }));
+  await waitFor(() => expect(mocks.request).toHaveBeenCalledOnce());
+});
 
 it("restores the full header and management controls; DLL hints alone do not mark recipes installed", async () => {
   view();

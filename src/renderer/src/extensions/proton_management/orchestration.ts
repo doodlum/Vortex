@@ -184,7 +184,6 @@ export function createProtonCoordinator(
   const ports = { ...defaultPorts, ...overrides };
   let tail: Promise<void> = Promise.resolve();
   let previousObservedKey: string | undefined;
-  const reported = new Set<string>();
 
   const targetNow = () => ports.target(api.getState());
   const assertTarget = (target: IProtonTarget) => {
@@ -202,13 +201,11 @@ export function createProtonCoordinator(
     if (targetNow()?.key !== target.key) return;
     const message = `Steam App ID ${target.game.appid}: ${unknownToError(error).message}`;
     ports.publish({ appId: target.game.appid, phase: "error", message });
-    const identity = `${target.key}:${message}`;
-    if (!reported.has(identity)) {
-      reported.add(identity);
-      api.showErrorNotification("Could not prepare Proton for this game", new Error(message), {
-        allowReport: false,
-      });
-    }
+    api.showErrorNotification("Could not prepare Proton for this game", new Error(message), {
+      id: "proton-setup-" + target.game.appid,
+      allowReport: false,
+      allowSuppress: false,
+    });
   };
 
   const synchronizeRuntime = async (target: IProtonTarget) => {
@@ -338,44 +335,80 @@ export function createProtonCoordinator(
       marker !== version
         ? required
         : required.filter((verb) => !inventory.winetricks.includes(verb));
-    if (missing.length > 0) {
+    const notificationId = "proton-dependencies-" + target.game.appid;
+    let activity = false;
+    const progress = (value: number, message: string) => {
       assertTarget(target);
-      const dependencyTarget = await ports.resolveDependency({
-        appId: target.game.appid,
-        steamPath: target.steamPath,
-        gamePath: target.game.gamePath,
-        compatDataPath: prefix,
-        protonPath,
+      api.sendNotification({
+        id: notificationId,
+        type: "activity",
+        title: "Installing Windows components",
+        message,
+        progress: value,
+        noDismiss: true,
+        allowSuppress: false,
       });
-      assertTarget(target);
-      await ports.install(api, target.game.appid, missing, onProgress, {
-        assertCurrent: () => assertTarget(target),
-        force: marker !== version,
-        target: dependencyTarget,
-      });
-      assertTarget(target);
-      ports.publish({
-        appId: target.game.appid,
-        phase: "verifying",
-        progress: 95,
-        message: "Verifying Windows dependency installation records",
-      });
-      const verified = await ports.inspect(prefix);
-      assertTarget(target);
-      const unresolved = required.filter((verb) => !verified.winetricks.includes(verb));
-      if (unresolved.length > 0)
-        throw new Error(
-          `Windows dependencies remain unverified: ${unresolved.join(", ")}. Open Protontricks for Steam App ID ${target.game.appid} and retry.`,
+      onProgress?.(value, message);
+    };
+    try {
+      if (missing.length > 0) {
+        assertTarget(target);
+        const dependencyTarget = await ports.resolveDependency({
+          appId: target.game.appid,
+          steamPath: target.steamPath,
+          gamePath: target.game.gamePath,
+          compatDataPath: prefix,
+          protonPath,
+        });
+        assertTarget(target);
+        activity = true;
+        progress(0, "Preparing Windows dependency installation");
+        await ports.install(
+          api,
+          target.game.appid,
+          missing,
+          (value, message) => progress(Math.min(value, 90), message),
+          {
+            assertCurrent: () => assertTarget(target),
+            force: marker !== version,
+            target: dependencyTarget,
+          },
         );
+        assertTarget(target);
+        progress(95, "Verifying Windows dependency installation records");
+        ports.publish({
+          appId: target.game.appid,
+          phase: "verifying",
+          progress: 95,
+          message: "Verifying Windows dependency installation records",
+        });
+        const verified = await ports.inspect(prefix);
+        assertTarget(target);
+        const unresolved = required.filter((verb) => !verified.winetricks.includes(verb));
+        if (unresolved.length > 0)
+          throw new Error(
+            `Windows dependencies remain unverified: ${unresolved.join(", ")}. Open Protontricks for Steam App ID ${target.game.appid} and retry.`,
+          );
+      }
+      if ((await ports.read(versionPath)).trim() !== version) {
+        throw new ProcessCanceled(
+          "The Proton prefix changed during dependency setup. Retry after Steam finishes updating it.",
+        );
+      }
+      assertTarget(target);
+      await ports.write(markerPath, version);
+      assertTarget(target);
+      if (activity) {
+        progress(100, "Mod requirements installed and verified");
+        api.sendNotification({
+          id: "proton-dependencies-complete-" + target.game.appid,
+          type: "success",
+          message: "Mod requirements installed and verified",
+        });
+      }
+    } finally {
+      if (activity) api.dismissNotification?.(notificationId);
     }
-    if ((await ports.read(versionPath)).trim() !== version) {
-      throw new ProcessCanceled(
-        "The Proton prefix changed during dependency setup. Retry after Steam finishes updating it.",
-      );
-    }
-    assertTarget(target);
-    await ports.write(markerPath, version);
-    assertTarget(target);
   };
 
   const reconcile = async (target: IProtonTarget, directLaunch: boolean) => {
@@ -407,6 +440,7 @@ export function createProtonCoordinator(
       // read failure alone must not prevent this otherwise valid direct launch.
       if (!directLaunch) return protonPath;
     } else {
+      api.dismissNotification?.("proton-setup-" + target.game.appid);
       ports.publish({
         appId: target.game.appid,
         phase: "ready",
@@ -440,6 +474,7 @@ export function createProtonCoordinator(
           const protonPath = await synchronizeRuntime(target);
           await ensureDependencies(target, protonPath, true, onProgress);
           assertTarget(target);
+          api.dismissNotification?.("proton-setup-" + target.game.appid);
           ports.publish({
             appId: target.game.appid,
             phase: "ready",

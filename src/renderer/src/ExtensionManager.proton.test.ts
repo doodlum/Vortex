@@ -178,6 +178,21 @@ test("host dependency commands preserve their JSON environment and Python comman
   expect(launch.spawn.mock.calls[0].slice(0, 2)).toEqual(["flatpak-spawn", args]);
 });
 
+test("native Flatpak dependency dispatch preserves JSON and Python quotes", async () => {
+  const { api } = harness();
+  const args = [
+    "run",
+    "--user",
+    "--env=TARGET=" + JSON.stringify({ gamePath: '/games/quoted "game"' }),
+    "com.github.Matoking.protontricks",
+    "-c",
+    "python3 -c 'print(\"literal value\")'",
+    "42",
+  ];
+  await api.runExecutable("flatpak", args, { cwd: "/", shell: false });
+  expect(launch.spawn.mock.calls[0].slice(0, 2)).toEqual(["flatpak", args]);
+});
+
 test("registered Linux interpreter remains authoritative", async () => {
   const { api, internals } = harness();
   internals.mInterpreters[".exe"] = (input) => ({

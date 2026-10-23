@@ -62,6 +62,8 @@ function fixture(initial = target()) {
   const api = {
     getState: () => ({}) as IState,
     showErrorNotification: vi.fn(),
+    sendNotification: vi.fn(),
+    dismissNotification: vi.fn(),
   } as unknown as IExtensionApi;
   const ports = {
     target: vi.fn(() => current),
@@ -132,12 +134,123 @@ function fixture(initial = target()) {
 }
 
 describe("Proton orchestration consumer contracts", () => {
+  it("keeps automatic installation in notifications through record verification and clears the activity", async () => {
+    const f = fixture();
+    const verifying = deferred<IPrefixInventory>();
+    const entered = deferred<void>();
+    f.ports.detect.mockResolvedValue(["vcrun2022"]);
+    f.ports.inspect.mockResolvedValueOnce(inventory([])).mockImplementationOnce(async () => {
+      entered.resolve();
+      return verifying.promise;
+    });
+    f.ports.install.mockImplementation(async (_api, _app, _verbs, progress) => {
+      progress?.(100, "Applied components");
+    });
+    const operation = f.coordinator.request();
+    await entered.promise;
+    const notifications = vi.mocked(f.api.sendNotification);
+    expect(notifications).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "proton-dependencies-10",
+        type: "activity",
+        noDismiss: true,
+        progress: 95,
+      }),
+    );
+    expect(notifications.mock.calls.some(([n]) => n.progress === 100 || n.type === "success")).toBe(
+      false,
+    );
+    expect(f.api.dismissNotification).not.toHaveBeenCalledWith("proton-dependencies-10");
+    verifying.resolve(inventory(["vcrun2022"]));
+    await operation;
+    expect(f.api.dismissNotification).toHaveBeenCalledWith("proton-dependencies-10");
+    expect(notifications).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "success", id: "proton-dependencies-complete-10" }),
+    );
+    for (const [notification] of notifications.mock.calls)
+      expect(notification.displayMS).toBeUndefined();
+  });
+
+  it("clears failed and stale installation activities without reporting success", async () => {
+    for (const stale of [false, true]) {
+      const f = fixture();
+      f.ports.detect.mockResolvedValue(["vcrun2022"]);
+      f.ports.install.mockImplementation(async () => {
+        if (stale) f.setTarget(target("20"));
+        throw new Error("installation failed");
+      });
+      await f.coordinator.request();
+      expect(f.api.dismissNotification).toHaveBeenCalledWith("proton-dependencies-10");
+      expect(vi.mocked(f.api.sendNotification).mock.calls.some(([n]) => n.type === "success")).toBe(
+        false,
+      );
+      expect(f.api.showErrorNotification).toHaveBeenCalledTimes(stale ? 0 : 1);
+    }
+  });
+
+  it("uses a stable error notification for repeated failures and removes it after recovery", async () => {
+    const f = fixture();
+    f.ports.stable
+      .mockRejectedValueOnce(new Error("missing runtime"))
+      .mockRejectedValueOnce(new Error("missing runtime"));
+    await f.coordinator.request();
+    await f.coordinator.request();
+    expect(f.api.showErrorNotification).toHaveBeenCalledTimes(2);
+    expect(f.api.showErrorNotification).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.any(Error),
+      expect.objectContaining({ id: "proton-setup-10", allowReport: false }),
+    );
+    await f.coordinator.request();
+    expect(f.api.dismissNotification).toHaveBeenCalledWith("proton-setup-10");
+  });
+
+  it("does not leave activity or claim completion after verification or prefix identity changes", async () => {
+    for (const stage of ["records", "prefix", "marker"] as const) {
+      const f = fixture();
+      f.ports.detect.mockResolvedValue(["vcrun2022"]);
+      f.ports.inspect
+        .mockResolvedValueOnce(inventory([]))
+        .mockResolvedValueOnce(inventory(stage === "records" ? [] : ["vcrun2022"]));
+      if (stage === "prefix") {
+        let reads = 0;
+        f.ports.read.mockImplementation(async (file) =>
+          path.basename(file) === "version" ? (++reads === 1 ? "11.0" : "12.0") : "11.0",
+        );
+      }
+      if (stage === "marker")
+        f.ports.write.mockImplementation(async () => {
+          f.setTarget(target("20"));
+        });
+      await f.coordinator.request();
+      expect(f.api.dismissNotification).toHaveBeenCalledWith("proton-dependencies-10");
+      expect(
+        vi
+          .mocked(f.api.sendNotification)
+          .mock.calls.some(([n]) => n.progress === 100 || n.type === "success"),
+      ).toBe(false);
+      if (stage !== "marker") expect(f.ports.write).not.toHaveBeenCalled();
+    }
+  });
+
+  it("does not create an installation notification when no components are required", async () => {
+    const f = fixture();
+    await f.coordinator.request();
+    expect(f.api.sendNotification).not.toHaveBeenCalled();
+    expect(f.ports.install).not.toHaveBeenCalled();
+  });
+
   it("uses the selected runtime and verified prefix for a manual install with automation disabled", async () => {
     const f = fixture(target("10", { automatic: false }));
     f.ports.detect.mockResolvedValue(["xact"]);
     f.ports.inspect.mockResolvedValueOnce(inventory([])).mockResolvedValueOnce(inventory(["xact"]));
     const progress = vi.fn();
+    f.ports.install.mockImplementation(async (_api, _appid, _verbs, update) => {
+      update?.(55, "Applying components");
+    });
     await f.coordinator.installManually("profile-10", progress);
+    expect(progress).toHaveBeenCalledWith(55, "Applying components");
+    expect(progress).toHaveBeenCalledWith(100, "Mod requirements installed and verified");
     expect(f.ports.resolveDependency).toHaveBeenCalledWith({
       appId: "10",
       steamPath: target().steamPath,
@@ -149,7 +262,7 @@ describe("Proton orchestration consumer contracts", () => {
       f.api,
       "10",
       ["xact"],
-      progress,
+      expect.any(Function),
       expect.objectContaining({ target: await f.ports.resolveDependency.mock.results[0].value }),
     );
     expect(f.ports.write).toHaveBeenCalledOnce();
@@ -208,7 +321,7 @@ describe("Proton orchestration consumer contracts", () => {
       f.api,
       "10",
       ["vcrun2022"],
-      undefined,
+      expect.any(Function),
       expect.objectContaining({
         assertCurrent: expect.any(Function),
         force: false,
@@ -244,7 +357,7 @@ describe("Proton orchestration consumer contracts", () => {
       f.api,
       "10",
       ["vcrun2022", "xinput"],
-      undefined,
+      expect.any(Function),
       expect.objectContaining({
         assertCurrent: expect.any(Function),
         force: true,
