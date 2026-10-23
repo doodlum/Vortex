@@ -695,7 +695,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
       </PageHeader>
 
       {hasAlerts && (
-        <PageContent className="shrink-0">
+        <PageContent isFullWidth className="shrink-0">
           {setupInProgress && (
             <Alert className="border-b-0" data-testid="proton-setup-progress" severity="info">
               {t(visibleSetupStatus.message ?? "Preparing Proton")}
@@ -892,7 +892,8 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
                   {/* A disabled button takes no focus, so its wrapper carries the reason to keyboard users. */}
                   <span
                     aria-label={resetBlockedReason}
-                    className="inline-flex"
+                    className="inline-flex rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-info-subdued"
+                    role={resetBlockedReason === undefined ? undefined : "group"}
                     tabIndex={resetBlockedReason === undefined ? undefined : 0}
                   >
                     <Button
@@ -975,7 +976,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
               <Typography appearance="moderate" typographyType="body-sm">
                 {pageFeedback === undefined
                   ? t("Was this page helpful?")
-                  : t("Thanks for your feedback")}
+                  : t("common:::thanks_for_your_feedback")}
               </Typography>
 
               <div className="flex shrink-0 items-center gap-x-2">

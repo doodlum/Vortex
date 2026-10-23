@@ -339,6 +339,7 @@ it("gives keyboard users the reason a cache reset is unavailable", async () => {
     "Start Steam so Vortex can read this game's launch settings",
   );
   expect(reason).toHaveAttribute("tabindex", "0");
+  expect(reason).toHaveAttribute("role", "group");
   expect(reason).toContainElement(screen.getByTestId("proton-reset-cache"));
 });
 
