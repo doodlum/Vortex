@@ -47,7 +47,6 @@ import {
 import { withTrackedActivity } from "../../../util/errorHandling";
 import * as fs from "../../../util/fs";
 import getNormalizeFunc from "../../../util/getNormalizeFunc";
-import { getVolumePath } from "../../../util/getVolumePath";
 import getVortexPath from "../../../util/getVortexPath";
 import { log } from "../../../util/log";
 import { showError } from "../../../util/message";
@@ -59,7 +58,7 @@ import { ciEqual, isChildPath, isPathValid, isReservedDirectory } from "../../..
 import { currentGame, currentGameDiscovery } from "../../gamemode_management/selectors";
 import type { IDiscoveryResult } from "../../gamemode_management/types/IDiscoveryResult";
 import type { IGameStored } from "../../gamemode_management/types/IGameStored";
-import { stagingVolume } from "../../gamemode_management/util/discovery";
+import { suggestStagingPathFromPaths } from "../../gamemode_management/util/discovery";
 import { setDeploymentNecessary } from "../actions/deployment";
 import { setActivator, setInstallPath, setInstallPathMode } from "../actions/settings";
 import { setTransferMods } from "../actions/transactions";
@@ -134,7 +133,7 @@ const modernActivatorDescriptions: Record<string, string> = {
   move_activator: "Moves mod files into the game directory to deploy them.",
 };
 
-class Settings extends ComponentEx<IProps, IComponentState> {
+export class Settings extends ComponentEx<IProps, IComponentState> {
   private mLastFileUpdate: number = 0;
   constructor(props: IProps) {
     super(props);
@@ -1053,24 +1052,12 @@ class Settings extends ComponentEx<IProps, IComponentState> {
   private suggestPath = async () => {
     const { discovery, modPaths, onShowError, suggestInstallPathDirectory } = this.props;
     try {
-      // stat the volume root rather than the full mod path — the mod directory
-      // may not exist yet (e.g. first-time setup), but we only need the device id
-      const volume = getVolumePath(modPaths[""]);
-      const [modPathStats, userDataStats] = await Promise.all([
-        fs.statAsync(volume),
-        window.api.app.getPath("userData").then((userDataPath) => fs.statAsync(userDataPath)),
-      ]);
-
-      let suggestion: string;
-      if (modPathStats.dev === userDataStats.dev) {
-        suggestion = path.join("{USERDATA}", "{game}", "mods");
-      } else {
-        suggestion = path.join(
-          await stagingVolume(modPaths[""], discovery?.path),
-          suggestInstallPathDirectory,
-          "{game}",
-        );
-      }
+      const suggestion = await suggestStagingPathFromPaths(
+        modPaths[""],
+        discovery?.path,
+        await window.api.app.getPath("userData"),
+        suggestInstallPathDirectory,
+      );
       this.changePath(suggestion);
     } catch (err) {
       if (err instanceof UserCanceled) {

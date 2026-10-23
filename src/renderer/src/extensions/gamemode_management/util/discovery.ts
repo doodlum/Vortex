@@ -1,5 +1,5 @@
 import { constants as fsConstants } from "node:fs";
-import { access, stat } from "node:fs/promises";
+import { access, realpath, stat } from "node:fs/promises";
 import * as path from "node:path";
 
 import { getErrorCode, getErrorMessageOrDefault, unknownToError } from "@vortex/shared";
@@ -732,41 +732,37 @@ export async function suggestStagingPath(api: IExtensionApi, gameId: string): Pr
   const state = api.getState();
   const modPaths = modPathsForGame(state, gameId);
 
-  let statModPath: fs.Stats;
-
-  const idModPath = async (testPath: string) => {
-    try {
-      statModPath = await fs.statAsync(testPath);
-    } catch (err) {
-      const code = getErrorCode(err);
-      if (code === "ENOENT") {
-        await idModPath(path.dirname(testPath));
-      } else {
-        throw err;
-      }
-    }
-  };
-
-  await idModPath(modPaths[""]);
-  const statUserData = await fs.statAsync(getVortexPath("userData"));
-
-  let suggestion: string;
-
-  if (statModPath.dev === statUserData.dev) {
-    // main mod folder is on same drive as userdata, use a subdirectory below that
-    suggestion = path.join("{USERDATA}", "{game}", "mods");
-  } else {
-    // different drives, suggest path on same drive
-    const volume = await stagingVolume(
-      modPaths[""],
-      state.settings.gameMode.discovered[gameId]?.path,
-    );
-    suggestion = path.join(volume, state.settings.mods.suggestInstallPathDirectory, "{game}");
-  }
-
-  return suggestion;
+  return suggestStagingPathFromPaths(
+    modPaths[""],
+    state.settings.gameMode.discovered[gameId]?.path,
+    getVortexPath("userData"),
+    state.settings.mods.suggestInstallPathDirectory,
+  );
 }
 
+/** Shared automatic/Settings suggestion: identify the device before looking for a writable ancestor. */
+export async function suggestStagingPathFromPaths(
+  modPath: string,
+  gamePath: string | undefined,
+  userDataPath: string,
+  stagingDirectory: string,
+): Promise<string> {
+  let current = modPath;
+  let modStat: fs.Stats;
+  for (;;) {
+    try {
+      modStat = await fs.statAsync(current);
+      break;
+    } catch (err) {
+      const parent = path.dirname(current);
+      if (getErrorCode(err) !== "ENOENT" || parent === current) throw err;
+      current = parent;
+    }
+  }
+  const userDataStat = await fs.statAsync(userDataPath);
+  if (modStat.dev === userDataStat.dev) return path.join("{USERDATA}", "{game}", "mods");
+  return path.join(await stagingVolume(modPath, gamePath), stagingDirectory, "{game}");
+}
 /**
  * The folder on the game's filesystem to suggest staging below. Windows drive roots are writable,
  * but a Linux mount point (`/`, `/mnt/games`) is usually root-owned, so there it is the highest
@@ -776,14 +772,23 @@ export async function stagingVolume(
   modPath: string,
   gamePath: string | undefined,
 ): Promise<string> {
-  const volume = getVolumePath(modPath);
-  if (process.platform === "win32") return volume;
+  if (process.platform === "win32") return getVolumePath(modPath);
+  const physicalModPath =
+    process.platform === "linux" ? await resolvePhysicalPath(modPath) : modPath;
+  const physicalGamePath =
+    process.platform === "linux" && gamePath !== undefined
+      ? await resolvePhysicalPath(gamePath)
+      : gamePath;
+  const volume = getVolumePath(physicalModPath);
   const insideGame = (candidate: string) => {
-    if (gamePath === undefined) return false;
-    const relative = path.relative(gamePath, candidate);
-    return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+    if (physicalGamePath === undefined) return false;
+    const relative = path.relative(physicalGamePath, candidate);
+    return (
+      relative === "" ||
+      (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+    );
   };
-  let current = path.resolve(modPath);
+  let current = path.resolve(physicalModPath);
   while (!(await pathExists(current)) && path.dirname(current) !== current)
     current = path.dirname(current);
   let best: string | undefined;
@@ -793,7 +798,28 @@ export async function stagingVolume(
     if (current === volume || parent === current) break;
     current = parent;
   }
-  return best ?? volume;
+  if (best === undefined) {
+    throw new SetupError(
+      "No writable staging folder is available on the mods' filesystem outside the game directory. Choose or create a writable folder outside the game on that filesystem.",
+    );
+  }
+  return best;
+}
+
+/** Follow the existing ancestor's symlinks while retaining directories not created yet. */
+async function resolvePhysicalPath(filePath: string): Promise<string> {
+  let current = path.resolve(filePath);
+  const missing: string[] = [];
+  for (;;) {
+    try {
+      return path.join(await realpath(current), ...missing);
+    } catch (err) {
+      const parent = path.dirname(current);
+      if (getErrorCode(err) !== "ENOENT" || parent === current) throw err;
+      missing.unshift(path.basename(current));
+      current = parent;
+    }
+  }
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
