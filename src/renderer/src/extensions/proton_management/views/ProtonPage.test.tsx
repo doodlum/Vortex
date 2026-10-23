@@ -169,7 +169,8 @@ it("requires affirmative installation and verifies Winetricks records afterward"
   });
   fireEvent.click(screen.getByTestId("proton-install-requirements"));
   await waitFor(() => expect(mocks.install).toHaveBeenCalledOnce());
-  await waitFor(() => expect(screen.getByTestId("proton-install-requirements")).toBeDisabled());
+  await waitFor(() => expect(screen.queryByTestId("proton-install-requirements")).toBeNull());
+  expect(screen.getByText("All requirements installed")).toBeInTheDocument();
   expect(api.showErrorNotification).not.toHaveBeenCalled();
 });
 
@@ -234,7 +235,8 @@ it("refreshes recorded inventory when automatic setup reports ready", async () =
   await act(async () => {
     publishProtonSetupStatus({ phase: "ready", appId: "22380" });
   });
-  await waitFor(() => expect(screen.getByTestId("proton-install-requirements")).toBeDisabled());
+  await waitFor(() => expect(screen.queryByTestId("proton-install-requirements")).toBeNull());
+  expect(screen.getByText("All requirements installed")).toBeInTheDocument();
   expect(mocks.prefix.mock.calls.length).toBeGreaterThan(1);
 });
 
@@ -279,4 +281,48 @@ it("does not change Steam settings when launcher preflight fails", async () => {
   fireEvent.click(screen.getByTestId("proton-cache-isolation"));
   await waitFor(() => expect(api.showErrorNotification).toHaveBeenCalledOnce());
   expect(mocks.setOptions).not.toHaveBeenCalled();
+});
+
+it("keeps cache reset disabled when Steam's launch settings cannot be read", async () => {
+  mocks.getOptions.mockRejectedValue(new Error("Steam is not running"));
+  const { api } = view();
+  await ready();
+  expect(screen.getByTestId("proton-reset-cache")).toBeDisabled();
+  fireEvent.click(screen.getByTestId("proton-reset-cache"));
+  expect(api.showDialog).not.toHaveBeenCalled();
+  expect(mocks.clear).not.toHaveBeenCalled();
+  expect(mocks.reset).not.toHaveBeenCalled();
+});
+
+it("names each setting control by its visible label", async () => {
+  view();
+  await ready();
+  expect(screen.getByRole("checkbox", { name: "Install required components automatically" })).toBe(
+    screen.getByTestId("proton-automatic"),
+  );
+  expect(screen.getByRole("checkbox", { name: "Protect Steam's shader cache" })).toBe(
+    screen.getByTestId("proton-cache-isolation"),
+  );
+});
+
+it("keeps showing the last result while the same installation refreshes", async () => {
+  view();
+  await ready();
+  let finish!: () => void;
+  mocks.prefix.mockReturnValue(
+    new Promise((resolve) => {
+      finish = () => resolve({ components: [], winetricks: [] });
+    }),
+  );
+  fireEvent.click(screen.getByTestId("proton-refresh"));
+  await waitFor(() => expect(mocks.prefix.mock.calls.length).toBeGreaterThan(1));
+  expect(screen.getByText("vcrun2022")).toBeInTheDocument();
+  await act(async () => finish());
+});
+
+it("shows an empty state instead of the settings when no Proton game is selected", async () => {
+  mocks.entry.mockReturnValue(undefined);
+  view();
+  expect(await screen.findByText("No Proton game selected")).toBeInTheDocument();
+  expect(screen.queryByTestId("proton-automatic")).toBeNull();
 });

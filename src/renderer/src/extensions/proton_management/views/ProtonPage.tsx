@@ -3,18 +3,26 @@ import * as path from "path";
 
 import { unknownToError } from "@vortex/shared";
 import { ProcessCanceled } from "@vortex/shared/errors";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useDispatch, useSelector } from "react-redux";
 
-import ProgressBar from "@/controls/ProgressBar";
 import type { IExtensionApi } from "@/types/IExtensionContext";
 import type { IState } from "@/types/IState";
 import { Alert } from "@/ui/components/alert/Alert";
 import { Button } from "@/ui/components/button/Button";
+import { Description } from "@/ui/components/form/field/Description";
+import { Field } from "@/ui/components/form/field/Field";
+import { Label } from "@/ui/components/form/field/Label";
 import { Switch } from "@/ui/components/form/switch/Switch";
+import { NoResults } from "@/ui/components/no_results/NoResults";
 import { Picker } from "@/ui/components/picker/Picker";
 import { Pill } from "@/ui/components/pill/Pill";
+import { Toolbar } from "@/ui/components/toolbar/Toolbar";
+import type { IToolbarAction } from "@/ui/components/toolbar/ToolbarGroup";
+import { ToolbarGroup } from "@/ui/components/toolbar/ToolbarGroup";
+import { Tooltip } from "@/ui/components/tooltip/Tooltip";
+import { TooltipDelayGroup } from "@/ui/components/tooltip/TooltipDelayGroup";
 import { Typography } from "@/ui/components/typography/Typography";
 import {
   findLatestStableProtonName,
@@ -27,6 +35,7 @@ import { useSteamGamesRevision } from "@/util/linux/steamRevision";
 import Steam from "@/util/Steam";
 import { useRelativeTime } from "@/util/useRelativeTime";
 import { Page } from "@/views/components/Page/Page";
+import { PageContent } from "@/views/components/Page/PageContent";
 import { PageHeader } from "@/views/components/Page/PageHeader";
 import { PageScroll } from "@/views/components/Page/PageScroll";
 
@@ -109,6 +118,97 @@ const LastUpdated = ({ timestamp }: { timestamp?: number }) => {
   );
 };
 
+/** A bordered card with a heading and its actions, laid out like Health Check's issue sections. */
+const Section = ({
+  actions,
+  children,
+  description,
+  testId,
+  title,
+}: {
+  actions?: ReactNode;
+  children?: ReactNode;
+  description: string;
+  testId?: string;
+  title: string;
+}) => (
+  <section className="rounded-lg border border-stroke-weak p-4" data-testid={testId}>
+    <div className="flex items-start justify-between gap-x-4">
+      <Typography appearance="moderate" as="h3" className="font-semibold">
+        {title}
+      </Typography>
+
+      {!!actions && <div className="flex shrink-0 items-center gap-x-2">{actions}</div>}
+    </div>
+
+    <Typography appearance="subdued" brand="neutral-translucent" typographyType="body-sm">
+      {description}
+    </Typography>
+
+    {!!children && <div className="mt-4 space-y-2">{children}</div>}
+  </section>
+);
+
+const ROW_CLASSES = "flex items-center justify-between gap-x-4 rounded-sm bg-surface-mid px-4 py-3";
+
+/**
+ * A setting inside a section, on the raised surface Health Check uses for its rows. It is a
+ * `Field`, so its label and description name and describe the control, and clicking the label
+ * operates it.
+ */
+const SettingRow = ({
+  children,
+  description,
+  disabled,
+  label,
+}: {
+  children: ReactNode;
+  description?: string;
+  disabled?: boolean;
+  label: string;
+}) => (
+  <Field className={`${ROW_CLASSES} flex-row`} disabled={disabled}>
+    <div className="min-w-0 flex-1 space-y-0.5">
+      <Label>{label}</Label>
+
+      {!!description && <Description className="text-body-sm">{description}</Description>}
+    </div>
+
+    <div className="flex shrink-0 items-center gap-x-2">{children}</div>
+  </Field>
+);
+
+/** A read-only status inside a section; its pills wrap rather than squeeze the label. */
+const StatusRow = ({
+  children,
+  description,
+  label,
+  testId,
+}: {
+  children?: ReactNode;
+  description?: string;
+  label: string;
+  testId?: string;
+}) => (
+  <div className={ROW_CLASSES} data-testid={testId}>
+    <div className="min-w-48 flex-1 space-y-0.5">
+      <Typography appearance="moderate" typographyType="body-sm">
+        {label}
+      </Typography>
+
+      {!!description && (
+        <Typography appearance="subdued" brand="neutral-translucent" typographyType="body-sm">
+          {description}
+        </Typography>
+      )}
+    </div>
+
+    {!!children && (
+      <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">{children}</div>
+    )}
+  </div>
+);
+
 export const ProtonPage = ({ active, api }: IProtonPageProps) => {
   const { t } = useTranslation(["common"]);
   const dispatch = useDispatch();
@@ -117,6 +217,8 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
   const discovered = useSelector((state: IState) => state.settings.gameMode.discovered);
   const steamRevision = useSteamGamesRevision();
   const generation = useRef(0);
+  const loadedKey = useRef<string>();
+  const [missingSetup, setMissingSetup] = useState<"steam" | "game">();
   const [data, setData] = useState<IPageData>(EMPTY_DATA);
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<number>();
@@ -138,9 +240,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
       dispatch(setFeature(profile.id, "proton-page-feedback", helpful ? "helpful" : "not-helpful"));
       api.sendNotification({
         type: "success",
-        message: helpful
-          ? "Thanks for letting us know this page was helpful"
-          : "Thanks — your feedback will help us improve this page",
+        message: "Thanks for your feedback",
         displayMS: 4000,
       });
     },
@@ -151,12 +251,23 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
     const request = ++generation.current;
     setLoading(true);
     setPageError(undefined);
-    setData(EMPTY_DATA);
-    setCacheRedirectEnabled(undefined);
+    // Keep showing the last result while the same installation is re-read, so a refresh doesn't
+    // briefly claim that protection is off or nothing is installed. Another target starts blank.
+    const key = currentProtonTarget(api.getState())?.key;
+    if (key !== loadedKey.current) {
+      loadedKey.current = key;
+      setData(EMPTY_DATA);
+      setCacheRedirectEnabled(undefined);
+    }
     try {
       const steamPath = findLinuxSteamPath();
       const entry = activeProtonGame(api.getState());
-      if (steamPath === undefined || entry === undefined || profile === undefined) return;
+      setMissingSetup(steamPath === undefined ? "steam" : entry === undefined ? "game" : undefined);
+      if (steamPath === undefined || entry === undefined || profile === undefined) {
+        setData(EMPTY_DATA);
+        setCacheRedirectEnabled(undefined);
+        return;
+      }
       const compatDataPath = entry.compatDataPath;
       const [tools, inventory, required] = await Promise.all([
         listInstalledProton(steamPath),
@@ -236,14 +347,14 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
     setDependencyStatus(undefined);
   }, [profile?.id]);
 
-  const refreshSteam = async () => {
+  const refreshSteam = useCallback(async () => {
     try {
       await Steam.reloadGames();
       await refresh();
     } catch (err) {
       setPageError(unknownToError(err).message);
     }
-  };
+  }, [refresh]);
 
   useEffect(
     () =>
@@ -291,7 +402,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
       ...(selected !== "" && !data.tools.some((tool) => tool.value === selected)
         ? [
             {
-              label: t("Selected Proton is unavailable: {{path}}", { path: selected }),
+              label: t("Unavailable: {{name}}", { name: path.basename(selected) }),
               value: selected,
             },
           ]
@@ -350,14 +461,18 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
     setupStatus.appId === undefined || setupStatus.appId === data.appId ? setupStatus : undefined;
   const privateCacheMatchesSteam =
     cacheRedirectEnabled === true && data.privateShaderCache?.matchesSteam === true;
-  const cacheChangedPercent = useMemo(() => {
-    const cache = data.privateShaderCache;
-    if (cache === undefined) return 0;
-    const total = cache.copiedBytes + cache.changedBytes;
-    if (total > 0) return Math.round((cache.changedBytes / total) * 100);
-    const files = cache.copiedFiles + cache.changedFiles;
-    return files === 0 ? 0 : Math.round((cache.changedFiles / files) * 100);
-  }, [data.privateShaderCache]);
+  const toolbarActions = useMemo<IToolbarAction[]>(
+    () => [
+      {
+        label: t("Refresh"),
+        icon: "refresh",
+        isLoading: loading,
+        testId: "proton-refresh",
+        onClick: () => void refreshSteam(),
+      },
+    ],
+    [loading, refreshSteam, t],
+  );
 
   const satisfyDependencies = useCallback(async () => {
     if (data.appId === undefined || missing.length === 0) return;
@@ -540,6 +655,25 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
     [api, data.appId, data.steamShaderRoots, dispatch, profile, sameTarget, steamSettingsTarget],
   );
 
+  const setupInProgress =
+    visibleSetupStatus !== undefined &&
+    ["checking", "installing", "verifying"].includes(visibleSetupStatus.phase);
+  const privateCache = cacheRedirectEnabled === true ? data.privateShaderCache : undefined;
+  const selectedUnavailable =
+    selected !== "" && !data.tools.some((tool) => tool.value === selected);
+  const resetBlockedReason =
+    data.appId === undefined
+      ? undefined
+      : cacheRedirectEnabled === undefined
+        ? t("Start Steam so Vortex can read this game's launch settings")
+        : Object.keys(toolsRunning).length > 0
+          ? t("Exit the game and its tools first")
+          : privateCacheMatchesSteam
+            ? t("The private copy already matches Steam")
+            : undefined;
+  const hasAlerts =
+    setupInProgress || visibleSetupStatus?.phase === "error" || pageError !== undefined;
+
   return (
     <Page active={active} pageId="proton" scrollable={false}>
       <PageHeader
@@ -550,294 +684,317 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
       >
         <div className="flex shrink-0 items-center gap-x-2">
           <LastUpdated timestamp={lastUpdated} />
-          <Button
-            data-testid="proton-refresh"
-            appearance="subdued"
-            brand="neutral"
-            isLoading={loading}
-            leftIcon="refresh"
-            size="sm"
-            title={t("Refresh")}
-            onClick={() => void refreshSteam()}
-          />
+
+          <Toolbar>
+            <ToolbarGroup actions={toolbarActions} />
+          </Toolbar>
         </div>
       </PageHeader>
-      <PageScroll className="flex flex-col gap-6 p-6">
-        {data.appId === undefined && !loading && (
-          <Typography appearance="subdued">
-            {t(
-              "Select a Steam game using Proton and launch it in Steam once to initialise its prefix.",
-            )}
-          </Typography>
-        )}
-        {visibleSetupStatus !== undefined &&
-          ["checking", "installing", "verifying"].includes(visibleSetupStatus.phase) && (
-            <div className="space-y-2">
-              <Alert severity="info">{t(visibleSetupStatus.message ?? "Preparing Proton")}</Alert>
-              <ProgressBar max={100} min={0} now={visibleSetupStatus.progress ?? 0} />
-            </div>
+
+      {hasAlerts && (
+        <PageContent className="shrink-0">
+          {setupInProgress && (
+            <Alert data-testid="proton-setup-progress" severity="info">
+              {t(visibleSetupStatus.message ?? "Preparing Proton")}
+              {visibleSetupStatus.progress !== undefined &&
+                ` (${Math.round(visibleSetupStatus.progress)}%)`}
+            </Alert>
           )}
-        {visibleSetupStatus?.phase === "error" && (
-          <Alert
-            severity="danger"
-            role="alert"
-            data-testid="proton-setup-error"
-            action={
-              <Button
-                brand="neutral"
-                size="sm"
-                leftIcon="refresh"
-                disabled={loading}
-                onClick={() => void retrySetup()}
-              >
-                {t("Retry setup")}
-              </Button>
-            }
-          >
-            <strong>{t("Proton setup failed")}</strong> {visibleSetupStatus.message}
-          </Alert>
-        )}
-        {pageError !== undefined && visibleSetupStatus?.phase !== "error" && (
-          <Alert
-            severity="danger"
-            role="alert"
-            action={
-              <Button
-                brand="neutral"
-                leftIcon="refresh"
-                size="sm"
-                onClick={() => void refreshSteam()}
-              >
-                {t("Try again")}
-              </Button>
-            }
-          >
-            <strong>{t("Proton setup could not be checked")}</strong> {pageError}
-          </Alert>
-        )}
-        <section className="rounded-lg border border-stroke-weak bg-surface-low p-6">
-          <Typography as="h3" typographyType="heading-sm">
-            {t("Windows compatibility")}
-          </Typography>
-          <Typography appearance="subdued" className="mt-2">
-            {t(
-              "Choose one Proton version for both the Steam game and its mod tools. Vortex keeps them together so they use the same Windows environment.",
-            )}
-          </Typography>
-          <Picker
-            disabled={loading || data.appId === undefined}
-            button={{ className: "min-w-64 justify-between" }}
-            className="mt-4 w-fit"
-            options={options}
-            value={selected}
-            onChange={(value) => void changeVersion(value)}
-          />
-          <Typography appearance="subdued" className="mt-2" typographyType="body-sm">
-            {t("A specific version remains selected for this profile until you change it here.")}
-          </Typography>
-          <div className="mt-6 flex items-center justify-between gap-4 border-t border-stroke-weak pt-4">
-            <div>
-              <Typography typographyType="body-sm">
-                {t("Install required components automatically")}
-              </Typography>
-              <Typography appearance="subdued" typographyType="body-sm">
-                {t(
-                  "When installed mods need extra Windows software, Vortex detects and installs it before launch. This only adds components required by the active mods.",
-                )}
-              </Typography>
-            </div>
-            <Switch
-              data-testid="proton-automatic"
-              aria-label={t("Install required Windows components automatically")}
-              checked={automatic}
-              onChange={changeAutomatic}
-            />
-          </div>
-        </section>
-        <section className="rounded-lg border border-stroke-weak bg-surface-low p-6">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <Typography as="h3" typographyType="heading-sm">
-                {t("Mod requirements")}
-              </Typography>
-              <Typography appearance="subdued" className="mt-2">
-                {t(
-                  "Vortex checks installed mods for Windows runtime hints, such as Visual C++ and DirectX components.",
-                )}
-              </Typography>
-              <Typography appearance="subdued" className="mt-2" typographyType="body-sm">
-                {t(
-                  "Vortex manages Protontricks for you. It installs or updates the helper, applies the detected recipes, and checks Winetricks installation records afterward. Executable-byte hints are not proof that a mod requires a component.",
-                )}
-              </Typography>
-            </div>
-            <Button
-              data-testid="proton-install-requirements"
-              disabled={
-                loading ||
-                missing.length === 0 ||
-                data.appId === undefined ||
-                data.compatDataPath === undefined
+
+          {visibleSetupStatus?.phase === "error" && (
+            <Alert
+              action={
+                <Button
+                  brand="neutral"
+                  isLoading={loading}
+                  leftIcon="refresh"
+                  size="sm"
+                  onClick={() => void retrySetup()}
+                >
+                  {t("Retry setup")}
+                </Button>
               }
-              leftIcon="download"
-              onClick={satisfyDependencies}
+              data-testid="proton-setup-error"
+              role="alert"
+              severity="danger"
             >
-              {missing.length === 0
-                ? t("All requirements installed")
-                : t("Install requirements ({{count}})", { count: missing.length })}
-            </Button>
-          </div>
-          {dependencyProgress !== undefined && (
-            <div className="mt-4">
-              <Typography typographyType="body-sm">{t(dependencyStatus ?? "Working")}</Typography>
-              <ProgressBar max={100} min={0} now={dependencyProgress} />
-            </div>
+              <strong>{t("Proton setup failed")}</strong> {visibleSetupStatus.message}
+            </Alert>
           )}
-          {missing.length > 0 && (
-            <div className="mt-6">
-              <Typography appearance="subdued">{t("Still needed by your mods")}</Typography>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {missing.map((item) => (
-                  <Pill brand="warning" icon="warning" key={item}>
-                    {item}
-                  </Pill>
-                ))}
-              </div>
-            </div>
-          )}
-          <div className="mt-4 flex flex-wrap gap-2">
-            {data.installed.length > 0 ? (
-              data.installed.map((item) => (
-                <Pill brand="success" icon="check_circle" key={item}>
-                  {item}
-                </Pill>
-              ))
-            ) : (
-              <Typography appearance="subdued">
-                {t("No additional Windows components are recorded by Winetricks for this game.")}
-              </Typography>
-            )}
-          </div>
-        </section>
-        <section className="rounded-lg border border-stroke-weak bg-surface-low p-6">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <Typography as="h3" typographyType="heading-sm">
-                {t("Mod shader cache")}
-              </Typography>
-              <Typography appearance="subdued" className="mt-2">
-                {cacheRedirectEnabled
-                  ? t("Steam's cache is protected. Mod changes stay in a private copy.")
-                  : t("Protection is off. Mod changes may reach Steam's cache.")}
-              </Typography>
-            </div>
-            <Button
-              data-testid="proton-reset-cache"
-              disabled={
-                data.appId === undefined ||
-                Object.keys(toolsRunning).length > 0 ||
-                privateCacheMatchesSteam
+
+          {pageError !== undefined && visibleSetupStatus?.phase !== "error" && (
+            <Alert
+              action={
+                <Button
+                  brand="neutral"
+                  isLoading={loading}
+                  leftIcon="refresh"
+                  size="sm"
+                  onClick={() => void refreshSteam()}
+                >
+                  {t("Try again")}
+                </Button>
               }
-              leftIcon="delete_sweep"
-              onClick={clearShaderCache}
+              role="alert"
+              severity="danger"
             >
-              {privateCacheMatchesSteam ? t("Already matches Steam") : t("Reset cache")}
+              <strong>{t("Proton setup could not be checked")}</strong> {pageError}
+            </Alert>
+          )}
+        </PageContent>
+      )}
+
+      <PageScroll className="space-y-4 p-6">
+        {missingSetup !== undefined && !loading ? (
+          <NoResults
+            className="py-24"
+            icon="info"
+            message={
+              missingSetup === "steam"
+                ? t("Install Steam and sign in, then refresh this page.")
+                : t(
+                    "Select a Steam game that runs with Proton, and launch it from Steam once so its Windows prefix exists.",
+                  )
+            }
+            title={missingSetup === "steam" ? t("Steam not found") : t("No Proton game selected")}
+          >
+            <Button
+              brand="neutral"
+              leftIcon="refresh"
+              size="sm"
+              onClick={() => void refreshSteam()}
+            >
+              {t("Refresh")}
             </Button>
-          </div>
-          <div className="mt-4 flex items-center justify-between gap-4 border-t border-stroke-weak pt-4">
-            <div>
-              <Typography typographyType="body-sm">{t("Protect Steam's shader cache")}</Typography>
-              <Typography appearance="subdued" typographyType="body-sm">
-                {steamSettingsAvailable
-                  ? t("Recommended. Refreshes automatically when Steam's cache changes.")
-                  : t("Start Steam so Vortex can read and update this game's launch settings.")}
-              </Typography>
-            </div>
-            <Switch
-              data-testid="proton-cache-isolation"
-              aria-label={t("Protect Steam's shader cache for this game")}
-              checked={cacheRedirectEnabled === true}
-              disabled={!steamSettingsAvailable || cacheRedirectEnabled === undefined}
-              onChange={changeCacheRedirect}
-            />
-          </div>
-          {cacheRedirectEnabled && data.privateShaderCache !== undefined && (
-            <div className="mt-4 border-t border-stroke-weak pt-4">
-              <div>
-                <div className="flex h-4 overflow-hidden rounded-full bg-surface-mid">
-                  <div
-                    className="bg-neutral-subdued"
-                    style={{ width: `${100 - cacheChangedPercent}%` }}
-                  />
-                  <div className="bg-white" style={{ width: `${cacheChangedPercent}%` }} />
-                </div>
-                <div className="mt-3 flex flex-wrap gap-x-6 gap-y-2">
-                  <div className="flex items-center gap-2">
-                    <span className="h-3 w-3 rounded-sm bg-neutral-subdued" />
-                    <Typography typographyType="body-sm">
-                      {t("Steam copy · {{size}} · {{count}} files", {
-                        size: formatBytes(data.privateShaderCache.copiedBytes),
-                        count: data.privateShaderCache.copiedFiles,
-                      })}
-                    </Typography>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="h-3 w-3 rounded-sm border border-stroke-weak bg-white" />
-                    <Typography typographyType="body-sm">
-                      {t("Added/changed · {{size}} · {{count}} files", {
-                        size: formatBytes(data.privateShaderCache.changedBytes),
-                        count: data.privateShaderCache.changedFiles,
-                      })}
-                    </Typography>
-                  </div>
-                </div>
-              </div>
-              {!privateCacheMatchesSteam && (
-                <div className="mt-3 flex items-center justify-between gap-4">
-                  <Typography appearance="subdued" typographyType="body-sm">
-                    {data.privateShaderCache.missingFiles > 0
-                      ? t("{{count}} Steam files are missing from the copy.", {
-                          count: data.privateShaderCache.missingFiles,
-                        })
-                      : t("Reset removes only private changes.")}
-                  </Typography>
-                </div>
+          </NoResults>
+        ) : (
+          <>
+            <Section
+              description={t(
+                "Choose one Proton version for both the Steam game and its mod tools, so they share the same Windows environment.",
               )}
+              title={t("Windows compatibility")}
+            >
+              <SettingRow
+                description={
+                  selectedUnavailable
+                    ? t("{{path}} is no longer installed. Choose another version.", {
+                        path: selected,
+                      })
+                    : t(
+                        "A specific version stays selected for this profile until you change it here.",
+                      )
+                }
+                disabled={loading || data.appId === undefined}
+                label={t("Proton version")}
+              >
+                <Picker
+                  button={{ className: "min-w-64 justify-between" }}
+                  options={options}
+                  value={selected}
+                  onChange={(value) => void changeVersion(value)}
+                />
+              </SettingRow>
+
+              <SettingRow
+                description={t(
+                  "Before launch, Vortex installs the extra Windows software that your active mods need.",
+                )}
+                label={t("Install required components automatically")}
+              >
+                <Switch
+                  checked={automatic}
+                  data-testid="proton-automatic"
+                  onChange={changeAutomatic}
+                />
+              </SettingRow>
+            </Section>
+
+            <Section
+              actions={
+                missing.length > 0 && (
+                  <Button
+                    brand="neutral"
+                    data-testid="proton-install-requirements"
+                    disabled={
+                      loading || data.appId === undefined || data.compatDataPath === undefined
+                    }
+                    isLoading={dependencyProgress !== undefined}
+                    leftIcon="install_desktop"
+                    size="sm"
+                    onClick={satisfyDependencies}
+                  >
+                    {t("Install requirements ({{count}})", { count: missing.length })}
+                  </Button>
+                )
+              }
+              description={t(
+                "Vortex looks for Windows runtime hints, such as Visual C++ and DirectX, in your installed mods and installs them with Protontricks. A hint is not proof that a mod needs a component.",
+              )}
+              testId="proton-requirements"
+              title={t("Mod requirements")}
+            >
+              {dependencyProgress !== undefined && (
+                <StatusRow
+                  label={`${t(dependencyStatus ?? "Working")} (${Math.round(dependencyProgress)}%)`}
+                  testId="proton-dependency-progress"
+                />
+              )}
+
+              {missing.length > 0 && (
+                <StatusRow label={t("Still needed by your mods")}>
+                  {missing.map((item) => (
+                    <Pill brand="warning" icon="warning" key={item}>
+                      {item}
+                    </Pill>
+                  ))}
+                </StatusRow>
+              )}
+
+              <StatusRow
+                description={
+                  data.installed.length === 0
+                    ? t("Winetricks has no additional Windows components recorded for this game.")
+                    : undefined
+                }
+                label={
+                  data.appId === undefined
+                    ? t("Checking installed components")
+                    : data.required.length === 0
+                      ? t("No requirements detected")
+                      : missing.length === 0
+                        ? t("All requirements installed")
+                        : t("Installed components")
+                }
+              >
+                {data.installed.length > 0 &&
+                  data.installed.map((item) => (
+                    <Pill brand="success" icon="check_circle" key={item}>
+                      {item}
+                    </Pill>
+                  ))}
+              </StatusRow>
+            </Section>
+
+            <Section
+              actions={
+                <Tooltip
+                  content={resetBlockedReason ?? ""}
+                  disabled={resetBlockedReason === undefined}
+                  placement="bottom"
+                >
+                  <Button
+                    appearance="subdued"
+                    brand="neutral"
+                    data-testid="proton-reset-cache"
+                    disabled={data.appId === undefined || resetBlockedReason !== undefined}
+                    leftIcon="delete_sweep"
+                    size="sm"
+                    onClick={clearShaderCache}
+                  >
+                    {t("Reset cache")}
+                  </Button>
+                </Tooltip>
+              }
+              description={
+                cacheRedirectEnabled === undefined
+                  ? t("Vortex needs Steam's launch settings to tell where this game's cache is.")
+                  : cacheRedirectEnabled
+                    ? t("Steam's cache is protected. Mod changes stay in a private copy.")
+                    : t("Protection is off. Mod changes may reach Steam's cache.")
+              }
+              title={t("Mod shader cache")}
+            >
+              <SettingRow
+                description={
+                  steamSettingsAvailable
+                    ? t("Recommended. Refreshes automatically when Steam's cache changes.")
+                    : t("Start Steam so Vortex can read and update this game's launch settings.")
+                }
+                disabled={!steamSettingsAvailable || cacheRedirectEnabled === undefined}
+                label={t("Protect Steam's shader cache")}
+              >
+                <Switch
+                  checked={cacheRedirectEnabled === true}
+                  data-testid="proton-cache-isolation"
+                  onChange={changeCacheRedirect}
+                />
+              </SettingRow>
+
+              {privateCache !== undefined && (
+                <StatusRow
+                  description={
+                    privateCacheMatchesSteam
+                      ? undefined
+                      : privateCache.missingFiles > 0
+                        ? t("{{count}} Steam files are missing from the copy.", {
+                            count: privateCache.missingFiles,
+                          })
+                        : t("Reset removes only private changes.")
+                  }
+                  label={t("Private copy")}
+                  testId="proton-cache-usage"
+                >
+                  {privateCacheMatchesSteam && (
+                    <Pill brand="success" data-testid="proton-cache-matches" icon="check_circle">
+                      {t("Matches Steam")}
+                    </Pill>
+                  )}
+
+                  <Pill icon="content_copy">
+                    {t("From Steam: {{size}} · {{count}} files", {
+                      size: formatBytes(privateCache.copiedBytes),
+                      count: privateCache.copiedFiles,
+                    })}
+                  </Pill>
+
+                  <Pill brand={privateCache.changedFiles > 0 ? "info" : "neutral"} icon="edit">
+                    {t("Added or changed: {{size}} · {{count}} files", {
+                      size: formatBytes(privateCache.changedBytes),
+                      count: privateCache.changedFiles,
+                    })}
+                  </Pill>
+                </StatusRow>
+              )}
+            </Section>
+
+            <div className="flex items-center justify-between gap-x-4 rounded-lg border border-stroke-weak px-4 py-3">
+              <Typography appearance="moderate" typographyType="body-sm">
+                {pageFeedback === undefined
+                  ? t("Was this page helpful?")
+                  : t("Thanks for your feedback")}
+              </Typography>
+
+              <div className="flex shrink-0 items-center gap-x-2">
+                <TooltipDelayGroup>
+                  <Tooltip content={t("Helpful")} placement="bottom">
+                    <Button
+                      appearance="subdued"
+                      aria-label={t("Helpful")}
+                      brand="neutral"
+                      disabled={pageFeedback !== undefined}
+                      leftIcon="thumb_up"
+                      size="sm"
+                      onClick={() => givePageFeedback(true)}
+                    />
+                  </Tooltip>
+
+                  <Tooltip content={t("Not helpful")} placement="bottom">
+                    <Button
+                      appearance="subdued"
+                      aria-label={t("Not helpful")}
+                      brand="neutral"
+                      disabled={pageFeedback !== undefined}
+                      leftIcon="thumb_down"
+                      size="sm"
+                      onClick={() => givePageFeedback(false)}
+                    />
+                  </Tooltip>
+                </TooltipDelayGroup>
+              </div>
             </div>
-          )}
-        </section>
-        <section className="flex items-center justify-between gap-4 rounded-lg border border-stroke-weak bg-surface-low p-4">
-          <div>
-            <Typography typographyType="body-sm">
-              {pageFeedback === undefined
-                ? t("Was this page helpful?")
-                : t("Thanks for your feedback")}
-            </Typography>
-            <Typography appearance="subdued" typographyType="body-sm">
-              {t("Your feedback helps make Linux game and mod setup easier to understand.")}
-            </Typography>
-          </div>
-          <div className="flex shrink-0 items-center gap-x-2">
-            <Button
-              appearance="subdued"
-              brand="neutral"
-              disabled={pageFeedback !== undefined}
-              leftIcon="thumb_up"
-              size="sm"
-              title={t("Helpful")}
-              onClick={() => givePageFeedback(true)}
-            />
-            <Button
-              appearance="subdued"
-              brand="neutral"
-              disabled={pageFeedback !== undefined}
-              leftIcon="thumb_down"
-              size="sm"
-              title={t("Not helpful")}
-              onClick={() => givePageFeedback(false)}
-            />
-          </div>
-        </section>
+          </>
+        )}
       </PageScroll>
     </Page>
   );
