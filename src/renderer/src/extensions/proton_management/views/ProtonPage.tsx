@@ -25,10 +25,10 @@ import { Tooltip } from "@/ui/components/tooltip/Tooltip";
 import { TooltipDelayGroup } from "@/ui/components/tooltip/TooltipDelayGroup";
 import { Typography } from "@/ui/components/typography/Typography";
 import {
-  findLatestStableProtonName,
   inspectPrefix,
   listInstalledProton,
   protonConfigName,
+  RECOMMENDED_PROTON,
 } from "@/util/linux/proton";
 import { findLinuxSteamPath } from "@/util/linux/steamPaths";
 import { useSteamGamesRevision } from "@/util/linux/steamRevision";
@@ -397,8 +397,9 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
 
   const options = useMemo(
     () => [
-      { label: t("Latest stable"), value: "" },
-      ...data.tools,
+      { label: t("{{name}} (recommended)", { name: RECOMMENDED_PROTON.label }), value: "" },
+      // The recommended entry already stands for Steam's Experimental build.
+      ...data.tools.filter((tool) => tool.configName !== RECOMMENDED_PROTON.configName),
       ...(selected !== "" && !data.tools.some((tool) => tool.value === selected)
         ? [
             {
@@ -414,12 +415,17 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
   const changeVersion = useCallback(
     async (value: string) => {
       if (profile === undefined || data.appId === undefined) return;
-      const steamPath = findLinuxSteamPath();
-      if (steamPath === undefined) return;
-      const configName =
-        value === ""
-          ? await findLatestStableProtonName(steamPath)
-          : data.tools.find((tool) => tool.value === value)?.configName;
+      if (value === "") {
+        // The coordinator points Steam at the recommended Proton, installing it first if needed.
+        dispatch(setFeature(profile.id, "proton-version", ""));
+        api.sendNotification({
+          type: "success",
+          message: `Steam and Vortex will use ${RECOMMENDED_PROTON.label}`,
+          displayMS: 5000,
+        });
+        return;
+      }
+      const configName = data.tools.find((tool) => tool.value === value)?.configName;
       if (configName === undefined) {
         api.showErrorNotification(
           "Failed to change Proton version",
@@ -435,11 +441,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
         dispatch(setFeature(profile.id, "proton-version", value));
         api.sendNotification({
           type: "success",
-          message: `Steam and Vortex will use ${
-            value === ""
-              ? "the latest stable Proton"
-              : data.tools.find((tool) => tool.value === value)?.label
-          }`,
+          message: `Steam and Vortex will use ${data.tools.find((tool) => tool.value === value)?.label}`,
           displayMS: 5000,
         });
         await Steam.reloadGames();
@@ -694,7 +696,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
       {hasAlerts && (
         <PageContent className="shrink-0">
           {setupInProgress && (
-            <Alert data-testid="proton-setup-progress" severity="info">
+            <Alert className="border-b-0" data-testid="proton-setup-progress" severity="info">
               {t(visibleSetupStatus.message ?? "Preparing Proton")}
               {visibleSetupStatus.progress !== undefined &&
                 ` (${Math.round(visibleSetupStatus.progress)}%)`}
@@ -703,6 +705,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
 
           {visibleSetupStatus?.phase === "error" && (
             <Alert
+              className="border-b-0"
               action={
                 <Button
                   brand="neutral"
@@ -724,6 +727,7 @@ export const ProtonPage = ({ active, api }: IProtonPageProps) => {
 
           {pageError !== undefined && visibleSetupStatus?.phase !== "error" && (
             <Alert
+              className="border-b-0"
               action={
                 <Button
                   brand="neutral"

@@ -143,16 +143,21 @@ Steam game when the store snapshot identifies it as using Proton. Before the fir
 Steam scan, no matching entry is available. Launch the game in Steam once to initialise
 its prefix, then rescan games if necessary.
 
-The version picker selects one installed Proton version for Steam and Vortex. Latest
-stable follows the newest installed official stable tool; a specific choice stays with
-the profile. Latest stable never downgrades a prefix: when the game's prefix was built by
-a newer Proton (for example Experimental) than the latest stable release, Vortex uses an
-installed Proton that can drive the prefix as it is (the one Steam already uses, otherwise
-the one that built the prefix) and points Steam at it. This also repairs a game that an
-earlier build had already switched to the older release. With an explicitly selected older
-Proton, Vortex refuses to install Windows components into the newer prefix and explains
-how to continue; Proton downgrades a prefix only when the game itself launches, and an
-older Wine running against a newer prefix can hang instead of failing. GE-style versions
+The version picker selects one installed Proton version for Steam and Vortex. The default,
+**Proton Experimental (recommended)**, is Steam's own default for Windows games. When it
+is missing, Vortex asks Steam to install it (`steam://install/1493710`) and finishes
+setting up the game once the download completes; **Retry setup** continues it sooner. A
+specific choice stays with the profile. The default never downgrades a prefix: when a
+newer Proton built the game's prefix, Vortex uses an installed Proton that can drive it as
+it is (the one Steam already uses, otherwise the one that built the prefix) and points
+Steam at it, which also repairs a game an earlier build had moved to an older release.
+
+You can still pick an older Proton, as in Steam. Proton downgrades a prefix only when it
+starts a program, which Steam does at game launch, while Protontricks drives Wine directly
+and an older Wine against a newer prefix can hang. Before installing Windows components,
+Vortex therefore starts a no-op command with the selected Proton, letting Proton remove its
+newer files exactly as a game launch would; saves and settings in the prefix are kept. If
+the prefix is still newer afterwards, setup stops with an explanation. GE-style versions
 cannot be ordered and are not checked. To apply Steam compatibility and launch settings, start Steam with
 `-cef-enable-debugging` and keep it running. Vortex uses the local settings endpoint
 at port 8080; an unavailable service gives setup guidance. An unavailable selected runtime

@@ -69,14 +69,21 @@ function fixture(initial = target()) {
     target: vi.fn(() => current),
     detect: vi.fn(async () => [] as string[]),
     inspect: vi.fn(async () => inventory([])),
-    configured: vi.fn(async () => "proton_11"),
-    stable: vi.fn(async () => "proton_11"),
+    configured: vi.fn(async () => "proton_experimental"),
+    requestInstall: vi.fn(),
+    preparePrefix: vi.fn(async () => undefined),
     tools: vi.fn(
       async (): Promise<IInstalledProton[]> => [
         {
           id: "proton-11",
           name: "Proton 11.0",
           path: path.resolve("/steam/steamapps/common/Proton 11.0"),
+          source: "steam",
+        },
+        {
+          id: "experimental",
+          name: "Proton - Experimental",
+          path: path.resolve("/steam/steamapps/common/Proton - Experimental"),
           source: "steam",
         },
       ],
@@ -190,7 +197,7 @@ describe("Proton orchestration consumer contracts", () => {
 
   it("uses a stable error notification for repeated failures and removes it after recovery", async () => {
     const f = fixture();
-    f.ports.stable
+    f.ports.tools
       .mockRejectedValueOnce(new Error("missing runtime"))
       .mockRejectedValueOnce(new Error("missing runtime"));
     await f.coordinator.request();
@@ -260,7 +267,7 @@ describe("Proton orchestration consumer contracts", () => {
       steamPath: target().steamPath,
       gamePath: target().game.gamePath,
       compatDataPath: target().game.compatDataPath,
-      protonPath: path.resolve("/steam/steamapps/common/Proton 11.0"),
+      protonPath: path.resolve("/steam/steamapps/common/Proton - Experimental"),
     });
     expect(f.ports.install).toHaveBeenCalledWith(
       f.api,
@@ -276,9 +283,12 @@ describe("Proton orchestration consumer contracts", () => {
     const f = fixture();
     const waiting = deferred<string>();
     const entered = deferred<void>();
-    f.ports.stable.mockImplementationOnce(async () => {
+    const installedTools = await f.ports.tools();
+    f.ports.tools.mockClear();
+    f.ports.tools.mockImplementationOnce(async () => {
       entered.resolve();
-      return waiting.promise;
+      await waiting.promise;
+      return installedTools;
     });
     const background = f.coordinator.request();
     await entered.promise;
@@ -385,9 +395,12 @@ describe("Proton orchestration consumer contracts", () => {
     const f = fixture();
     const waiting = deferred<string>();
     const entered = deferred<void>();
-    f.ports.stable.mockImplementationOnce(async () => {
+    const installedTools = await f.ports.tools();
+    f.ports.tools.mockClear();
+    f.ports.tools.mockImplementationOnce(async () => {
       entered.resolve();
-      return waiting.promise;
+      await waiting.promise;
+      return installedTools;
     });
     f.ports.configured.mockResolvedValue("proton_10");
     const first = f.coordinator.request();
@@ -398,7 +411,7 @@ describe("Proton orchestration consumer contracts", () => {
     await Promise.all([first, second]);
     expect(f.ports.setCompatTool).toHaveBeenCalledExactlyOnceWith(
       "20",
-      "proton_11",
+      "proton_experimental",
       expect.objectContaining({
         steamPath: target("20").steamPath,
         gamePath: target("20").game.gamePath,
@@ -417,9 +430,12 @@ describe("Proton orchestration consumer contracts", () => {
     const f = fixture();
     const waiting = deferred<string>();
     const entered = deferred<void>();
-    f.ports.stable.mockImplementationOnce(async () => {
+    const installedTools = await f.ports.tools();
+    f.ports.tools.mockClear();
+    f.ports.tools.mockImplementationOnce(async () => {
       entered.resolve();
-      return waiting.promise;
+      await waiting.promise;
+      return installedTools;
     });
     const background = f.coordinator.request();
     await entered.promise;
@@ -539,7 +555,7 @@ describe("Proton orchestration consumer contracts", () => {
     await expect(
       f.coordinator.prepareLaunch(target("20").game, "/elsewhere/Tool.exe", { gameId: "game-10" }),
     ).resolves.toBeUndefined();
-    expect(f.ports.stable).not.toHaveBeenCalled();
+    expect(f.ports.tools).not.toHaveBeenCalled();
     expect(
       matchesActiveLaunch(target(), "/elsewhere/Tool.exe", { gameId: "game-10" }, target().game),
     ).toBe(true);
@@ -550,11 +566,11 @@ describe("Proton orchestration consumer contracts", () => {
     f.coordinator.observe();
     f.coordinator.observe();
     await f.coordinator.request();
-    expect(f.ports.stable).toHaveBeenCalledTimes(2);
+    expect(f.ports.tools).toHaveBeenCalledTimes(2);
     f.setTarget(target("10", { key: "profile-10-new-feature", isolate: false }));
     f.coordinator.observe();
     await f.coordinator.request();
-    expect(f.ports.stable).toHaveBeenCalledTimes(4);
+    expect(f.ports.tools).toHaveBeenCalledTimes(4);
   });
 });
 
@@ -577,7 +593,6 @@ describe("Proton prefix downgrade protection", () => {
   const downgradeFixture = (selected: string) => {
     const f = fixture(target("10", { selected }));
     f.ports.tools.mockResolvedValue(tools);
-    f.ports.stable.mockResolvedValue("proton_9");
     f.ports.configured.mockResolvedValue("proton_experimental");
     f.ports.detect.mockResolvedValue(["vcrun2022"]);
     f.ports.inspect
@@ -589,7 +604,7 @@ describe("Proton prefix downgrade protection", () => {
     return f;
   };
 
-  it("keeps a newer runtime instead of downgrading its prefix to the latest stable Proton", async () => {
+  it("keeps the recommended Experimental runtime that built the prefix", async () => {
     const f = downgradeFixture("");
     await f.prepare();
     expect(f.ports.setCompatTool).not.toHaveBeenCalled();
@@ -615,10 +630,60 @@ describe("Proton prefix downgrade protection", () => {
     expect(f.ports.install).toHaveBeenCalledOnce();
   });
 
-  it("refuses to install with an explicitly selected Proton older than the prefix", async () => {
+  it("lets an explicitly selected older Proton downgrade the prefix first, as Steam would", async () => {
+    const f = downgradeFixture(PROTON_9);
+    let prefixVersion = "10.0-100";
+    f.ports.read.mockImplementation(async (file: string) =>
+      path.basename(file) === "version" ? prefixVersion : (scripts[file] ?? prefixVersion),
+    );
+    f.ports.preparePrefix.mockImplementation(async () => {
+      prefixVersion = "9.0-203";
+    });
+    await f.prepare();
+    expect(f.ports.preparePrefix).toHaveBeenCalledOnce();
+    expect(f.ports.preparePrefix.mock.invocationCallOrder[0]).toBeLessThan(
+      f.ports.install.mock.invocationCallOrder[0],
+    );
+    expect(f.ports.resolveDependency).toHaveBeenCalledWith(
+      expect.objectContaining({ protonPath: PROTON_9 }),
+    );
+  });
+
+  it("refuses to install when the selected Proton could not downgrade the prefix", async () => {
     const f = downgradeFixture(PROTON_9);
     await expect(f.prepare()).rejects.toThrow("prefix was created by Proton 10");
+    expect(f.ports.preparePrefix).toHaveBeenCalledOnce();
     expect(f.ports.install).not.toHaveBeenCalled();
     expect(f.ports.write).not.toHaveBeenCalled();
+  });
+});
+
+describe("Recommended Proton", () => {
+  it("asks Steam once to install Proton Experimental when it is missing, then reports progress", async () => {
+    const f = fixture();
+    f.ports.tools.mockResolvedValue([
+      {
+        id: "proton-11",
+        name: "Proton 11.0",
+        path: path.resolve("/steam/steamapps/common/Proton 11.0"),
+        source: "steam",
+      },
+    ]);
+    await expect(f.prepare()).rejects.toThrow("Steam is installing Proton Experimental");
+    await expect(f.prepare()).rejects.toThrow("Steam is installing Proton Experimental");
+    expect(f.ports.requestInstall).toHaveBeenCalledExactlyOnceWith("1493710");
+    expect(f.ports.setCompatTool).not.toHaveBeenCalled();
+    expect(f.ports.install).not.toHaveBeenCalled();
+  });
+
+  it("points Steam at Proton Experimental by default instead of an older stable release", async () => {
+    const f = fixture();
+    f.ports.configured.mockResolvedValue("proton_11");
+    await f.prepare();
+    expect(f.ports.setCompatTool).toHaveBeenCalledWith(
+      "10",
+      "proton_experimental",
+      expect.objectContaining({ steamPath: path.resolve("/steam") }),
+    );
   });
 });

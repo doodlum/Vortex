@@ -32,6 +32,16 @@ export interface IInstalledProton {
   compatibilityName?: string;
 }
 
+/**
+ * The Proton Vortex uses unless a profile picks one: Steam's own default for Windows games,
+ * which Steam installs and updates as app 1493710.
+ */
+export const RECOMMENDED_PROTON = {
+  configName: "proton_experimental",
+  steamAppId: "1493710",
+  label: "Proton Experimental",
+} as const;
+
 /** Convert an installed Proton folder to the compatibility-tool key Steam stores for a game. */
 export function protonConfigName(tool: IInstalledProton): string | undefined {
   if (tool.source === "custom") return tool.compatibilityName;

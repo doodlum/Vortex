@@ -36,7 +36,11 @@ vi.mock("@/util/useRelativeTime", () => ({ useRelativeTime: () => "now" }));
 vi.mock("@/util/linux/proton", () => ({
   listInstalledProton: async () => [{ name: "Proton", path: "/Proton", source: "steam" }],
   protonConfigName: () => "proton_11",
-  findLatestStableProtonName: async () => "proton_11",
+  RECOMMENDED_PROTON: {
+    configName: "proton_experimental",
+    steamAppId: "1493710",
+    label: "Proton Experimental",
+  },
   inspectPrefix: mocks.prefix,
 }));
 vi.mock("../selection", () => ({ activeProtonGame: mocks.entry }));
