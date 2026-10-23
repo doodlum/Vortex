@@ -70,7 +70,11 @@ async function checkWrapper(wrapperPath: string, args: string[]): Promise<void> 
   try {
     await execFileAsync(wrapperPath, args, { timeout: 15_000 });
     if (process.env.IS_FLATPAK === "true") {
-      await execFileAsync("flatpak-spawn", ["--host", wrapperPath, ...args], { timeout: 15_000 });
+      // The packaged cwd (/app/main) exists only inside Flatpak, not on the Steam host.
+      await execFileAsync("flatpak-spawn", ["--host", wrapperPath, ...args], {
+        cwd: "/",
+        timeout: 15_000,
+      });
     }
   } catch (err) {
     throw new Error(

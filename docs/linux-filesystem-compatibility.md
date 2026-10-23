@@ -213,7 +213,9 @@ flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flath
 `~/.cache/vortex/shadercache/<appid>`. Vortex ships the Python launcher in its application
 bundle and provisions it under `~/.local/share/vortex/bin`; no manually supplied script is
 needed. Python 3.10 or newer is required in the launch environment and on the Steam host.
-The helper checks its configuration before Vortex enables protection. Steam launches use
+The helper checks its configuration before Vortex enables protection. Flatpak also checks
+execution on the Steam host from `/`, since its packaged `/app/main` directory is not
+available outside the sandbox. Steam launches use
 a managed launch-option wrapper; Vortex's direct Proton commands invoke the same helper.
 Existing custom launch options are preserved. A detected Windows default-primary loader
 is redirected only for Steam game launches; separately selected tools keep their executable.

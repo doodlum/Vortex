@@ -1,3 +1,4 @@
+import { spawnSync } from "child_process";
 import * as fs from "fs/promises";
 import { runInNewContext } from "node:vm";
 import * as os from "os";
@@ -16,6 +17,8 @@ import {
   ensureShaderCacheWrapper,
   ensureGameLaunchWrapper,
   configureShaderCache,
+  checkShaderCacheWrapper,
+  checkGameLaunchWrapper,
 } from "./steamShaderSettings";
 
 const SETTINGS_TARGET = { gamePath: os.tmpdir(), steamPath: os.tmpdir() };
@@ -350,6 +353,54 @@ describe("Steam shader-cache launch integration", () => {
     expect(cachedRequest).not.toHaveBeenCalled();
     expect(unregister).toHaveBeenCalledTimes(3);
   });
+  it.skipIf(process.platform === "win32")(
+    "checks Flatpak launchers from a host-visible working directory",
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "vortex-host-preflight-"));
+      const originalPath = process.env.PATH;
+      const originalFlatpak = process.env.IS_FLATPAK;
+      const originalReceipt = process.env.VORTEX_PREFLIGHT_RECEIPT;
+      try {
+        const portal = path.join(root, "flatpak-spawn");
+        const helper = path.join(root, "helper");
+        const receipt = path.join(root, "checked");
+        await fs.writeFile(
+          portal,
+          '#!/bin/sh\nif [ "$PWD" != / ]; then echo "host cannot resolve sandbox working directory" >&2; exit 23; fi\n[ "$1" = --host ] || exit 24\nshift\nexec "$@"\n',
+          { mode: 0o755 },
+        );
+        await fs.writeFile(
+          helper,
+          '#!/bin/sh\n[ "$1" = --check ] || exit 25\nprintf "%s\\n" "$PWD" >> "$VORTEX_PREFLIGHT_RECEIPT"\n',
+          { mode: 0o755 },
+        );
+        process.env.PATH = `${root}${path.delimiter}${originalPath ?? ""}`;
+        process.env.IS_FLATPAK = "true";
+        process.env.VORTEX_PREFLIGHT_RECEIPT = receipt;
+        // The portal's host view cannot enter the caller's sandbox-only directory.
+        const refused = spawnSync(portal, ["--host", helper, "--check", "22380"], {
+          cwd: root,
+          encoding: "utf8",
+        });
+        expect(refused.status).toBe(23);
+        expect(refused.stderr).toContain("host cannot resolve sandbox working directory");
+        await checkShaderCacheWrapper("22380", helper);
+        await checkGameLaunchWrapper(helper);
+        const checks = (await fs.readFile(receipt, "utf8")).trim().split("\n");
+        expect(checks).toHaveLength(4);
+        expect(checks.filter((cwd) => cwd === "/")).toHaveLength(2);
+      } finally {
+        if (originalPath === undefined) delete process.env.PATH;
+        else process.env.PATH = originalPath;
+        if (originalFlatpak === undefined) delete process.env.IS_FLATPAK;
+        else process.env.IS_FLATPAK = originalFlatpak;
+        if (originalReceipt === undefined) delete process.env.VORTEX_PREFLIGHT_RECEIPT;
+        else process.env.VORTEX_PREFLIGHT_RECEIPT = originalReceipt;
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("replaces hardlinked managed files without changing another file", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "vortex-launcher-files-"));
     try {
