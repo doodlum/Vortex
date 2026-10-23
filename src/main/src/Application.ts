@@ -34,6 +34,7 @@ import { validateFiles } from "./fileValidation";
 import { getVortexPath, setVortexPath } from "./getVortexPath";
 import { shutdownHashWorker } from "./hash/host";
 import { betterIpcMain } from "./ipc";
+import { handleShutdownSignals } from "./linuxShutdownSignals";
 import { log, setupLogging, changeLogPath, flushLogFile } from "./logging";
 import MainWindow from "./MainWindow";
 import { ReloadBudget } from "./reloadBudget";
@@ -208,6 +209,7 @@ class Application {
 
   private setupAppEvents(args: IParameters): void {
     app.on("before-quit", () => markQuitting());
+    if (process.platform === "linux") handleShutdownSignals();
 
     app.on("window-all-closed", () => {
       log("info", "Vortex closing");

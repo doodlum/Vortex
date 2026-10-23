@@ -49,6 +49,16 @@ Windows instance start its elevated helper and lets either platform send an
 existing crash report. Ordinary secondary launches send their original arguments
 with the lock request and exit before Crashpad, telemetry and UI initialization.
 
+## Quitting on a signal
+
+A desktop logout or shutdown, `systemctl` and `kill` ask Linux applications to quit with
+SIGTERM; a closed terminal sends SIGHUP and Ctrl+C sends SIGINT. Electron's own handling of
+these ends the app without Vortex's shutdown sequence. On Linux, Vortex instead closes its
+windows, exactly as closing the main window does, so the normal shutdown finishes pending
+state writes, DuckDB and the log before quitting. Further signals during that shutdown are
+ignored. `src/main/src/linuxShutdownSignals.test.ts` covers the handler; the actual proof is
+a packaged app that logs `clean application end` after `kill -TERM <pid>`.
+
 ## Verification
 
 From `src/main`, run this on Windows and Linux:
@@ -204,3 +214,4 @@ inert D-Bus service cannot substitute for that runtime evidence.
 - `src/main/src/linuxIntegrationFiles.ts` — shared owned wrappers and filesystem helpers
 - `src/main/src/linuxAutoStart.ts` — startup ownership, installation routing and readback
 - `src/main/src/linuxBackgroundPortal.ts` — direct Background portal transport and cancellation
+- `src/main/src/linuxShutdownSignals.ts` — clean shutdown on SIGTERM, SIGHUP and SIGINT
