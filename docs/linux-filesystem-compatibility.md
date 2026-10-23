@@ -217,6 +217,13 @@ The helper checks its configuration before Vortex enables protection. Flatpak al
 execution on the Steam host from `/`, since its packaged `/app/main` directory is not
 available outside the sandbox. Steam launches use
 a managed launch-option wrapper; Vortex's direct Proton commands invoke the same helper.
+From Vortex Flatpak, direct Proton commands execute on the host with the selected game's
+environment and working directory, so the game can connect to the host Steam client.
+The local Flatpak portal process starts from the host root; sandbox-only environment variables are
+not forwarded. Arguments and environment values retain literal quotes without invoking a shell.
+Spawn callbacks identify the portal proxy; its exit status reports host signals as 128 plus
+the signal number. This route has been exercised with Steam installed through Snap;
+a Steam client inside its own Flatpak still needs separate runtime validation.
 Existing custom launch options are preserved. A detected Windows default-primary loader
 is redirected only for Steam game launches; separately selected tools keep their executable.
 Steam settings reads and writes require the connected client's root library and game

@@ -595,18 +595,32 @@ class Steam implements IGameStore {
       existingEnv: options.env,
     });
 
-    preparation?.assertCurrent();
-    return api.runExecutable(
-      preparation?.shaderWrapper ?? executable,
+    const launchExecutable = preparation?.shaderWrapper ?? executable;
+    const launchArgs =
       preparation?.shaderWrapper === undefined
         ? protonArgs
-        : [preparation.appId, executable, ...protonArgs],
-      {
-        ...options,
-        env: protonEnv,
-        shell: false,
-      },
-    );
+        : [preparation.appId, executable, ...protonArgs];
+    preparation?.assertCurrent();
+    if (process.platform === "linux" && process.env.IS_FLATPAK === "true") {
+      // Proton must share the Steam client's host process namespace. Forward only
+      // the selected launch environment; Flatpak's own PATH and /app paths are local.
+      return api.runExecutable(
+        "flatpak-spawn",
+        [
+          "--host",
+          "--directory=" + (options.cwd || path.dirname(launchExecutable)),
+          ...Object.entries(protonEnv).map(([key, value]) => "--env=" + key + "=" + value),
+          launchExecutable,
+          ...launchArgs,
+        ],
+        { ...options, cwd: "/", env: protonEnv, shell: false },
+      );
+    }
+    return api.runExecutable(launchExecutable, launchArgs, {
+      ...options,
+      env: protonEnv,
+      shell: false,
+    });
   }
 }
 

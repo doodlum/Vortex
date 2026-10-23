@@ -407,6 +407,115 @@ describe("Steam Proton launches", () => {
     expect(assertCurrent).toHaveBeenCalledOnce();
   });
 
+  for (const protectedCache of [false, true]) {
+    it("launches Flatpak Proton on the host with cache protection " + protectedCache, async () => {
+      const original = process;
+      vi.stubGlobal("process", { ...original, platform: "linux" });
+      vi.stubEnv("IS_FLATPAK", "true");
+      vi.stubEnv("VORTEX_SANDBOX_ONLY", "must not reach host flags");
+      try {
+        const assertCurrent = vi.fn();
+        preparation.run.mockResolvedValue({
+          protonPath: "/chosen-proton",
+          appId: "42",
+          shaderWrapper: protectedCache ? "/host/bin/cache-run" : undefined,
+          assertCurrent,
+        });
+        proton.info.mockResolvedValue({
+          usesProton: true,
+          protonPath: "/stale",
+          compatDataPath: "/prefix",
+        });
+        const { api, runExecutable } = makeApi(gamePath);
+        const onSpawned = vi.fn(),
+          onExit = vi.fn();
+        await new Steam().runToolWithProton(
+          api,
+          '/outside/quoted "tool".exe',
+          ['a "quote"', "$(literal)", "--host"],
+          {
+            cwd: "/games/working directory",
+            env: { CUSTOM: 'literal "value"', EMPTY: "" },
+            onSpawned,
+            onExit,
+            detach: false,
+          },
+          entry,
+        );
+        const [command, args, options] = runExecutable.mock.calls[0];
+        expect(command).toBe("flatpak-spawn");
+        expect(args).toEqual([
+          "--host",
+          "--directory=/games/working directory",
+          '--env=CUSTOM=literal "value"',
+          "--env=EMPTY=",
+          "--env=HOME=/steam-home",
+          "--env=SteamAppId=42",
+          "--env=SteamGameId=42",
+          "--env=STEAM_COMPAT_DATA_PATH=/prefix",
+          "--env=STEAM_COMPAT_CLIENT_INSTALL_PATH=" + BASE_FOLDER,
+          "--env=WINEPREFIX=" + path.join("/prefix", "pfx"),
+          ...(protectedCache ? ["/host/bin/cache-run", "42"] : []),
+          path.join("/chosen-proton", "proton"),
+          "run",
+          '/outside/quoted "tool".exe',
+          'a "quote"',
+          "$(literal)",
+          "--host",
+        ]);
+        expect(options).toEqual(
+          expect.objectContaining({ cwd: "/", shell: false, onSpawned, onExit, detach: false }),
+        );
+        expect(args.join(" ")).not.toContain("VORTEX_SANDBOX_ONLY");
+        expect(assertCurrent).toHaveBeenCalledOnce();
+      } finally {
+        vi.unstubAllEnvs();
+        vi.unstubAllGlobals();
+      }
+    });
+  }
+
+  it("uses the original launcher directory when Flatpak callers omit cwd", async () => {
+    const original = process;
+    vi.stubGlobal("process", { ...original, platform: "linux" });
+    vi.stubEnv("IS_FLATPAK", "true");
+    try {
+      proton.info.mockResolvedValue({
+        usesProton: true,
+        protonPath: "/runtime/proton10",
+        compatDataPath: "/prefix",
+      });
+      const { api, runExecutable } = makeApi(gamePath);
+      await new Steam().runToolWithProton(api, "/outside/tool.exe", [], {}, entry);
+      expect(runExecutable.mock.calls[0][1][1]).toBe(
+        "--directory=" + path.dirname(path.join("/runtime/proton10", "proton")),
+      );
+      expect(runExecutable.mock.calls[0][2].cwd).toBe("/");
+    } finally {
+      vi.unstubAllEnvs();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not host-wrap Windows commands even with the Flatpak marker", async () => {
+    const original = process;
+    vi.stubGlobal("process", { ...original, platform: "win32" });
+    vi.stubEnv("IS_FLATPAK", "true");
+    try {
+      proton.info.mockResolvedValue({
+        usesProton: true,
+        protonPath: "/runtime/proton10",
+        compatDataPath: "/prefix",
+      });
+      const { api, runExecutable } = makeApi(gamePath);
+      await new Steam().runToolWithProton(api, "/outside/tool.exe", [], {}, entry);
+      expect(runExecutable.mock.calls[0][0]).toBe(path.join("/runtime/proton10", "proton"));
+    } finally {
+      vi.unstubAllEnvs();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("does not launch if preparation becomes stale before dispatch", async () => {
     preparation.run.mockResolvedValue({
       protonPath: "/prepared-proton",

@@ -134,6 +134,50 @@ test("an outside tool can explicitly supply a working directory inside its game"
   );
   expect(launch.spawn).not.toHaveBeenCalled();
 });
+test("Flatpak host dispatch preserves literal quotes in arguments and environment flags", async () => {
+  const { api } = harness();
+  const onSpawned = vi.fn(),
+    onExit = vi.fn();
+  const args = [
+    "--host",
+    "--directory=/games/space path",
+    '--env=CUSTOM=literal "value"',
+    '/host/quoted "tool"',
+    'a "quote"',
+    "$(literal)",
+  ];
+  await api.runExecutable("flatpak-spawn", args, {
+    cwd: "/",
+    shell: false,
+    detach: false,
+    onSpawned,
+    onExit,
+  });
+  expect(launch.spawn.mock.calls[0].slice(0, 2)).toEqual(["flatpak-spawn", args]);
+  expect(launch.spawn.mock.calls[0][2]).toEqual(
+    expect.objectContaining({ cwd: "/", shell: false, detached: false }),
+  );
+  expect(onSpawned).toHaveBeenCalledWith(314);
+  expect(onExit).toHaveBeenCalledWith(0, null);
+  expect(launch.store).not.toHaveBeenCalled();
+});
+
+test("host dependency commands preserve their JSON environment and Python command", async () => {
+  const { api } = harness();
+  const args = [
+    "--host",
+    "flatpak",
+    "run",
+    '--env=VORTEX_DEPENDENCY_TARGET={"gamePath":"/games/space path","appid":"42"}',
+    "com.github.Matoking.protontricks",
+    "-c",
+    "python3 -c 'print(\"literal value\")'",
+    "42",
+  ];
+  await api.runExecutable("flatpak-spawn", args, { cwd: "/", shell: false });
+  expect(launch.spawn.mock.calls[0].slice(0, 2)).toEqual(["flatpak-spawn", args]);
+});
+
 test("registered Linux interpreter remains authoritative", async () => {
   const { api, internals } = harness();
   internals.mInterpreters[".exe"] = (input) => ({

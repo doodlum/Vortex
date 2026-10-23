@@ -2442,7 +2442,12 @@ class ExtensionManager {
 
                 const child = childProcess.spawn(
                   runExe,
-                  options.shell ? args : args.map((arg) => arg.replace(/"/g, "")),
+                  options.shell ||
+                    (process.platform === "linux" &&
+                      executable === "flatpak-spawn" &&
+                      args[0] === "--host")
+                    ? args
+                    : args.map((arg) => arg.replace(/"/g, "")),
                   spawnOptions,
                 );
                 if (truthy(child["exitCode"])) {
