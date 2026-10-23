@@ -200,9 +200,11 @@ that copy identical to the one on `linux`. Each run merges upstream `master` int
 `linux`, builds the unsigned Windows installer, the DEB, RPM, Arch, AppImage and
 tar.gz packages, and Snap and Flatpak in separate jobs that are allowed to fail and
 upload their retained packaging logs when they do, then publishes the packages as a
-pre-release and keeps the newest seven. Every build of a run carries one version,
-`<package.json version>-nightly.<UTC date>.<run number>`, which is the app version,
-the release tag (with a leading `v`) and the start of each published file name.
+pre-release and keeps the newest seven. Every build of a run carries one app version,
+`<package.json version>-nightly.<UTC date>.<run number>`; packaging and extension
+compatibility ranges need it to be semver. The release tag and published file names
+use the shorter `nightly-<UTC date>.<run number>`, for example
+`vortex-nightly-20261023.14-amd64.deb`.
 A separate job installs the DEB on Ubuntu 24.04 and 26.04 and Debian 13, the RPM on
 Fedora and openSUSE Tumbleweed and the Arch package on Arch Linux, in containers. It
 checks dependency resolution, the root-owned 4755 `chrome-sandbox`, shared-library
