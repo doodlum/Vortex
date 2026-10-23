@@ -8,8 +8,9 @@ name: Linux Port Nightly
 # (contents and workflows write) to push those too; without it each build job re-applies the
 # same upstream merge, so the nightly still builds current upstream.
 #
-# Every build carries one nightly version, <package.json version>-nightly.<date>.<run>, as
-# its app version, release tag (with a leading v) and published file names.
+# Every build carries one nightly version, <package.json version>-nightly.<date>.<run>, as its
+# app version, which packaging and extension compatibility ranges need to be semver. The release
+# tag and published file names use the shorter nightly-<date>.<run>.
 
 on:
   schedule:
@@ -31,6 +32,7 @@ jobs:
       sha: ${{ steps.merge.outputs.sha }}
       upstream: ${{ steps.merge.outputs.upstream }}
       version: ${{ steps.merge.outputs.version }}
+      name: ${{ steps.merge.outputs.name }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -53,7 +55,9 @@ jobs:
             echo "::warning::Could not push the upstream merge to linux; building it unpushed."
             sha=$base
           fi
-          version="$(node -p 'require("./package.json").version')-nightly.$(date -u +%Y%m%d).${{ github.run_number }}"
+          build="$(date -u +%Y%m%d).${{ github.run_number }}"
+          version="$(node -p 'require("./package.json").version')-nightly.$build"
+          echo "name=nightly-$build" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "upstream=$upstream" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -313,13 +317,14 @@ jobs:
           sha=${{ needs.sync.outputs.sha }}
           upstream=${{ needs.sync.outputs.upstream }}
           version=${{ needs.sync.outputs.version }}
+          name=${{ needs.sync.outputs.name }}
           mkdir release
-          # Name every package after the nightly version, keeping its platform suffix.
+          # Name every package after the nightly, keeping its platform suffix.
           publish() {
             found=$(find assets -type f -name "$1")
             [ -z "$found" ] && return
             [ "$(printf '%s\n' "$found" | wc -l)" -eq 1 ] || { echo "::error::Several $1 files"; exit 1; }
-            cp "$found" "release/vortex-$version-$2"
+            cp "$found" "release/vortex-$name-$2"
           }
           publish '*.exe' windows-x64.exe
           publish '*.deb' amd64.deb
@@ -330,9 +335,9 @@ jobs:
           publish '*.snap' amd64.snap
           publish '*.flatpak' x86_64.flatpak
           cd release && sha256sum * | tee SHA256SUMS && cd ..
-          gh release create "v$version" release/* --repo "$GITHUB_REPOSITORY" --target "$sha" \
-            --prerelease --title "Linux port nightly $version" \
-            --notes "Unsigned development build of the linux branch at $sha merged with upstream master at $upstream. Not an official Nexus Mods release."
+          gh release create "$name" release/* --repo "$GITHUB_REPOSITORY" --target "$sha" \
+            --prerelease --title "Linux port $name" \
+            --notes "Unsigned development build of the linux branch at $sha merged with upstream master at $upstream. App version $version. Not an official Nexus Mods release."
 
       - name: Keep the newest seven nightlies
         run: |
