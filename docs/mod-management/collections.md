@@ -79,6 +79,30 @@ When modifying phase logic:
 
 All under `src/renderer/src/extensions/mod_management/`.
 
+## Dependency error messages
+
+`InstallContext.ts` routes failed-install outcomes and `reportError` through
+`NotificationAggregator.ts` while its source's dependency aggregation is active.
+Keep message templates untranslated and pass their `replace` dictionaries with
+them: the notification view and the **More** dialog interpolate these values.
+For example, two failures with `{{id}} failed to install` display as
+`ModA, ModB failed to install (2 dependencies)`.
+
+Grouping still uses type, template text and error-stack frames, rather than
+substituted names. A shared replacement value stays intact; differing values
+are deduplicated in encounter order, listed up to five, then followed by the
+remaining count. Keys supplied by only some members are retained. Existing
+English list/count wording, first-member reporting/actions and error-frame
+handling are unchanged. Batches over 500 use the existing summary circuit
+breaker instead of individual substitution dictionaries.
+
+Regression tests `InstallContext.aggregation.test.ts` exercise the real context,
+aggregator, notification dispatch, translation hook and **More** dialog data;
+`NotificationAggregator.test.ts` covers grouping and substitution boundaries.
+This does not cover every dependency-error producer:
+`InstallManager.showDependencyError` has a separate aggregated path that does
+not forward replacements.
+
 ## See also
 
 - [EXTERNAL-CHANGES.md](EXTERNAL-CHANGES.md) - The External Changes dialog, which
