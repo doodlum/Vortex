@@ -5,6 +5,7 @@ import type { IExtensionApi, LaunchRunner } from "../../types/IExtensionContext"
 import getVortexPath from "../../util/getVortexPath";
 import { log } from "../../util/log";
 import { activeGameId } from "../../util/selectors";
+import { rescanOverwrites } from "../../util/vfsFsView";
 import { getGame } from "../gamemode_management/util/getGame";
 import { getCurrentActivator } from "../mod_management/util/deploymentMethods";
 import { loadAether, type IAetherFile, type IAetherRoot, type IAetherSession } from "./aether";
@@ -235,6 +236,8 @@ async function startInSession(
     live.get(gameId)?.delete(entry);
     session.close();
     fs.rm(stateDir, { recursive: true, force: true }, () => undefined);
+    // What the program wrote or deleted is in the write folders now: Vortex sees it too.
+    rescanOverwrites();
   };
   try {
     session.start();

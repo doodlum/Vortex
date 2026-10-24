@@ -4,7 +4,17 @@ import * as path from "node:path";
 
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
-import { install, onVirtualChange, realStat, setVirtualFiles, virtualSource } from "./vfsFsView";
+import {
+  clearDeletions,
+  install,
+  onVirtualChange,
+  overwriteEntriesUnder,
+  realStat,
+  rescanOverwrites,
+  setOverwrite,
+  setVirtualFiles,
+  virtualSource,
+} from "./vfsFsView";
 
 // A copy of `fs` to wrap, so the real module (shared by every test in this worker) is untouched.
 const fs = {
@@ -222,5 +232,98 @@ describe("the deployed view of fs", () => {
     expect(fs.existsSync(path.join(game, "Data", "mod.esp"))).toBe(false);
     expect(fs.readdirSync(game)).toEqual(["Game.exe"]);
     expect(() => fs.readdirSync(path.join(game, "Data"))).toThrow(/ENOENT/);
+  });
+});
+
+describe("what programs wrote inside a root", () => {
+  const overwrite = path.join(root, "staging", "__vortex_vfs_overwrite", "game");
+  const write = (rel: string, text: string) => {
+    realFsModule.mkdirSync(path.dirname(path.join(overwrite, rel)), { recursive: true });
+    realFsModule.writeFileSync(path.join(overwrite, rel), text);
+  };
+  beforeEach(() => {
+    realFsModule.rmSync(overwrite, { recursive: true, force: true });
+    // A tool's change to a mod's plugin, a file it made, and the game's own exe it deleted.
+    write(path.join("Data", "mod.esp"), "edited by a tool");
+    write(path.join("Data", "Output", "made.nif"), "generated");
+    write(".wh.Game.exe", "");
+    write(path.join("Data", ".cu.half-copied"), "in flight");
+    setOverwrite(game, overwrite);
+  });
+  afterAll(() => setOverwrite(game, undefined));
+
+  it("is shown on top of the deployment, deletions included", () => {
+    expect(fs.readFileSync(path.join(game, "Data", "mod.esp"), "utf8")).toBe("edited by a tool");
+    expect(fs.readFileSync(path.join(game, "Data", "Output", "made.nif"), "utf8")).toBe(
+      "generated",
+    );
+    expect(fs.readdirSync(path.join(game, "Data")).sort()).toEqual([
+      "Output",
+      "mod.esp",
+      "textures",
+    ]);
+    // The exe a program deleted is gone from the view, never from the game folder.
+    expect(fs.existsSync(path.join(game, "Game.exe"))).toBe(false);
+    expect(fs.readdirSync(game)).toEqual(["Data"]);
+    expect(() => fs.unlinkSync(path.join(game, "Game.exe"))).toThrow(/ENOENT/);
+    fs.rmSync(path.join(game, "Game.exe"), { force: true });
+    expect(realFsModule.readFileSync(path.join(game, "Game.exe"), "utf8")).toBe("real exe");
+    expect(
+      overwriteEntriesUnder(game)
+        .map((e) => [path.relative(game, e.deployed).toLowerCase(), e.file !== undefined])
+        .sort(),
+    ).toEqual(
+      [
+        ["data\\mod.esp".replace(/\\/g, path.sep), true],
+        [path.join("data", "output", "made.nif"), true],
+        ["game.exe", false],
+      ].sort(),
+    );
+  });
+
+  it("imports a change into its mod by moving the written file over the staged one", () => {
+    const deployed = path.join(game, "Data", "mod.esp");
+    const staged = path.join(staging, "mod.esp");
+    try {
+      // What the External Changes dialog's import does: remove the staged file, move the
+      // deployed one over it.
+      realFsModule.rmSync(staged);
+      fs.renameSync(deployed, staged);
+      expect(realFsModule.readFileSync(staged, "utf8")).toBe("edited by a tool");
+      expect(realFsModule.existsSync(path.join(overwrite, "Data", "mod.esp"))).toBe(false);
+      expect(fs.readFileSync(deployed, "utf8")).toBe("edited by a tool");
+    } finally {
+      realFsModule.writeFileSync(staged, "mod plugin");
+    }
+  });
+
+  it("reverts a change by deleting the written file, which shows the mod's own again", () => {
+    const deployed = path.join(game, "Data", "mod.esp");
+    fs.rmSync(deployed, { force: true });
+    expect(realFsModule.existsSync(path.join(overwrite, "Data", "mod.esp"))).toBe(false);
+    expect(fs.readFileSync(deployed, "utf8")).toBe("mod plugin");
+    expect(realFsModule.readFileSync(path.join(staging, "mod.esp"), "utf8")).toBe("mod plugin");
+  });
+
+  it("moves a written file within the write folder while it stays inside the root", () => {
+    fs.renameSync(
+      path.join(game, "Data", "Output", "made.nif"),
+      path.join(game, "Data", "Meshes", "made.nif"),
+    );
+    expect(realFsModule.existsSync(path.join(overwrite, "Data", "Meshes", "made.nif"))).toBe(true);
+    expect(fs.readFileSync(path.join(game, "Data", "Meshes", "made.nif"), "utf8")).toBe(
+      "generated",
+    );
+    expect(fs.existsSync(path.join(game, "Data", "Output", "made.nif"))).toBe(false);
+  });
+
+  it("restores a deleted file when it is deployed again, and rereads the folder on request", () => {
+    clearDeletions([path.join(game, "Game.exe")]);
+    expect(realFsModule.existsSync(path.join(overwrite, ".wh.Game.exe"))).toBe(false);
+    expect(fs.readFileSync(path.join(game, "Game.exe"), "utf8")).toBe("real exe");
+    write("late.txt", "written while running");
+    expect(fs.existsSync(path.join(game, "late.txt"))).toBe(false);
+    rescanOverwrites();
+    expect(fs.readFileSync(path.join(game, "late.txt"), "utf8")).toBe("written while running");
   });
 });

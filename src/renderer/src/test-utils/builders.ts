@@ -280,10 +280,11 @@ export function makeRealDeploymentMethod(
     registerDeploymentMethod: (registered: IDeploymentMethod) => {
       method = registered;
     },
-    // a method's extension may also take over launches, offer an API and run startup work;
-    // deployment tests do none of these
+    // a method's extension may also take over launches, offer an API or actions and run
+    // startup work; deployment tests do none of these
     registerLaunchRunner: () => undefined,
     registerAPI: () => undefined,
+    registerAction: () => undefined,
     once: () => undefined,
   };
   init(context as IExtensionContextEx);

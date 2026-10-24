@@ -6,6 +6,7 @@ import { installPathForGame } from "../../util/selectors";
 import {
   forgetVirtualFiles,
   onVirtualChange,
+  setOverwrite,
   setVirtualFiles,
   virtualDeployments,
 } from "../../util/vfsFsView";
@@ -14,7 +15,7 @@ import type { IDeployedFile } from "../mod_management/types/IDeploymentMethod";
 import { getManifest, readVirtualManifestSync } from "../mod_management/util/activationStore";
 import { getCurrentActivator } from "../mod_management/util/deploymentMethods";
 import type { IAetherFile } from "./aether";
-import { isInside, stagingSource } from "./roots";
+import { isInside, OVERWRITE_FOLDER, overwriteName, stagingSource } from "./roots";
 import { VFS_DEPLOYMENT_ID } from "./VirtualDeployment";
 
 const caseInsensitive = process.platform === "win32";
@@ -42,13 +43,20 @@ export function showDeployment(
   stagingPath: string,
   files: IDeployedFile[],
 ): void {
+  const root = rootOf(state, gameId, targetPath);
   setVirtualFiles(
     ownerOf(gameId, targetPath),
-    [rootOf(state, gameId, targetPath)],
+    [root],
     files.map((file) => ({
       deployed: path.join(targetPath, file.target ?? "", file.relPath),
       source: stagingSource(stagingPath, file),
     })),
+  );
+  // What programs wrote inside the root, on top, as the session shows it.
+  const gamePath = state.settings.gameMode.discovered[gameId]?.path ?? root;
+  setOverwrite(
+    root,
+    path.join(stagingPath, OVERWRITE_FOLDER, overwriteName(gamePath, root, caseInsensitive)),
   );
 }
 
@@ -116,6 +124,7 @@ export function showGameFromManifests(api: IExtensionApi, gameId: string): Promi
     }
     if (!virtual) {
       forgetVirtualFiles(ownerOf(gameId, targetPath));
+      setOverwrite(rootOf(state, gameId, targetPath), undefined);
       continue;
     }
     const manifest = readVirtualManifestSync(stagingPath, modType, state.app.instanceId);

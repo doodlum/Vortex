@@ -54,6 +54,16 @@ for games that declare `compatible.nulldeployment`).
 
 ### 2. The write layer ("Overwrite")
 
+Implemented as follows. The file view shows the write folder on top of the deployment, as the
+session does: a written file replaces what is below it, and a `.wh.` deletion marker hides it.
+A written file is a real file, so renaming or deleting it acts on the file in the write folder
+(deleting a change to a mod's file shows the mod's own file again). The folders are read again
+when a session ends. `externalChanges` reports a written file over a mod's as `refchange` and a
+deletion as `deleted`, so the External Changes dialog imports or reverts them; a deploy clears
+deletion markers over what it deploys. The Mods page's "Generated files" action shows what
+programs wrote, opens the folder, makes an enabled, deployed mod of the files they made in the
+mod folder, or discards everything.
+
 Files a game or tool creates or changes inside a virtual root land in a per-game write folder,
 `<staging>/__vortex_vfs_overwrite/<root>`, never in the game install (the `__vortex` prefix keeps
 the staging scan from taking it for a mod). Vortex shows it as a special mod

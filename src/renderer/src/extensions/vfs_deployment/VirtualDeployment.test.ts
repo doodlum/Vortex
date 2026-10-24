@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { expect } from "vitest";
 
 import { test } from "../../test-utils/deploymentTest";
+import { setOverwrite } from "../../util/vfsFsView";
 
 const FILES = {
   "SkyUI_SE.esp": "esp data",
@@ -105,4 +106,33 @@ test("finalize without prepare is refused and does not wedge the next deployment
   await h.method.cancel(h.gameDir, h.gameDir, h.stagingDir);
   // A cancelled deployment releases its turn.
   expect(await h.deploy()).toHaveLength(1);
+});
+
+test("what programs changed of the deployed files is reported as external changes", async ({
+  makeDeployment,
+}) => {
+  const h = makeDeployment({ files: FILES, method: "vfs" });
+  const deployed = await h.deploy();
+  const overwrite = path.join(h.stagingDir, "__vortex_vfs_overwrite", "game");
+  // A tool rewrote the plugin, deleted the ini, and made a file of its own.
+  nodeFs.mkdirSync(path.join(overwrite, "SKSE", "Plugins"), { recursive: true });
+  nodeFs.writeFileSync(path.join(overwrite, "SkyUI_SE.esp"), "edited");
+  nodeFs.writeFileSync(path.join(overwrite, "SKSE", "Plugins", ".wh.po3_Tweaks.ini"), "");
+  nodeFs.writeFileSync(path.join(overwrite, "made.log"), "new");
+  setOverwrite(h.gameDir, overwrite);
+  try {
+    const changes = await h.method.externalChanges("game", h.stagingDir, h.gameDir, deployed);
+    const byPath = Object.fromEntries(
+      changes.map((change) => [change.filePath.split(path.sep).join("/"), change]),
+    );
+    expect(Object.keys(byPath).sort()).toEqual(["SKSE/Plugins/po3_Tweaks.ini", "SkyUI_SE.esp"]);
+    expect(byPath["SkyUI_SE.esp"]).toMatchObject({ changeType: "refchange", source: "SomeMod" });
+    expect(byPath["SkyUI_SE.esp"].destTime).toBeInstanceOf(Date);
+    expect(byPath["SKSE/Plugins/po3_Tweaks.ini"]).toMatchObject({
+      changeType: "deleted",
+      source: "SomeMod",
+    });
+  } finally {
+    setOverwrite(h.gameDir, undefined);
+  }
 });

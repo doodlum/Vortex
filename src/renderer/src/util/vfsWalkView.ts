@@ -18,7 +18,7 @@ import * as path from "path";
 import Bluebird from "bluebird";
 import type { IEntry, IWalkOptions } from "turbowalk";
 
-import { realFs, virtualEntriesUnder, virtualSource } from "./vfsFsView";
+import { isHidden, realFs, virtualEntriesUnder, virtualSource } from "./vfsFsView";
 
 declare const __non_webpack_require__: NodeJS.Require | undefined;
 
@@ -71,6 +71,10 @@ export function viewWalk(walk: Walk): Walk {
     const realProgress = (entries: IEntry[]) => {
       const kept = entries.filter((entry) => {
         const key = fold(entry.filePath);
+        if (isHidden(entry.filePath)) {
+          // Deleted by a program inside the root: gone, as it is for the game.
+          return false;
+        }
         if (entry.isDirectory) {
           seenDirs.add(key);
           return true;

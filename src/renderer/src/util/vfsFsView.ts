@@ -33,7 +33,14 @@ interface IDirEntry {
 }
 
 interface IIndex {
+  /** Folded deployed path -> the real file that serves it (a staged file or an overwrite file). */
   files: Map<string, string>;
+  /** The staged files of the deployment alone, under any overwrite file that hides one. */
+  mods: Map<string, string>;
+  /** Paths served by a file in a root's write folder: a real file, not a link to staging. */
+  real: Set<string>;
+  /** Paths a program deleted inside a root (its write folder's `.wh.` markers). */
+  hidden: Set<string>;
   /** Folded directory -> its virtual children (files and directories), by folded name. */
   dirs: Map<string, Map<string, IDirEntry>>;
   /** A real directory to report for a directory only mods provide. */
@@ -47,38 +54,266 @@ const fold = (input: string) =>
   caseInsensitive ? path.resolve(input).toLowerCase() : path.resolve(input);
 const foldName = (name: string) => (caseInsensitive ? name.toLowerCase() : name);
 
+const emptyIndex = (): IIndex => ({
+  files: new Map(),
+  mods: new Map(),
+  real: new Set(),
+  hidden: new Set(),
+  dirs: new Map(),
+  anchor: new Map(),
+  roots: new Map(),
+});
+
 const indexes = new Map<string, { roots: string[]; files: IVirtualFile[] }>();
-let index: IIndex = { files: new Map(), dirs: new Map(), anchor: new Map(), roots: new Map() };
+let index: IIndex = emptyIndex();
+
+/** Programs' writes inside a root, as aether-vfs keeps them: the root's write folder. */
+interface IOverwrite {
+  root: string;
+  dir: string;
+  /** Folded deployed path -> the file in `dir` that holds it. */
+  files: Map<string, string>;
+  /** Folded deployed paths a `.wh.` marker in `dir` hides. */
+  hidden: Set<string>;
+}
+
+/** By folded root. */
+const overwrites = new Map<string, IOverwrite>();
+
+/** aether-vfs's markers (vfs-provider): a deleted name, and a copy-up in flight. */
+const WHITEOUT_PREFIX = ".wh.";
+const COPY_UP_PREFIX = ".cu.";
+/** A folder name no game folder has, for the path a deleted file reads as. */
+const HIDDEN_FOLDER = "__vortex_vfs_deleted__";
+
+/** List `dir` in the given index (and every ancestor up to `root`), as the parent of `file`. */
+function listUnder(target: IIndex, root: string, file: string) {
+  let child = path.resolve(file);
+  let isDir = false;
+  for (;;) {
+    const parent = path.dirname(child);
+    const key = fold(parent);
+    const children = target.dirs.get(key) ?? new Map<string, IDirEntry>();
+    children.set(foldName(path.basename(child)), { name: path.basename(child), isDir });
+    target.dirs.set(key, children);
+    target.anchor.set(key, root);
+    if (key === fold(root) || parent === child) {
+      break;
+    }
+    child = parent;
+    isDir = true;
+  }
+}
 
 function rebuild() {
-  const next: IIndex = { files: new Map(), dirs: new Map(), anchor: new Map(), roots: new Map() };
+  const next = emptyIndex();
   for (const { roots, files } of indexes.values()) {
     if (files.length === 0) continue;
     for (const root of roots) {
       next.roots.set(fold(root), path.resolve(root));
     }
     for (const file of files) {
-      next.files.set(fold(file.deployed), file.source);
+      const key = fold(file.deployed);
+      next.files.set(key, file.source);
+      next.mods.set(key, file.source);
       // Every ancestor up to the root that holds it lists the child below it.
-      const root = roots.find((candidate) => isUnder(fold(candidate), fold(file.deployed)));
-      let child = path.resolve(file.deployed);
-      let isDir = false;
-      while (root !== undefined) {
-        const parent = path.dirname(child);
-        const key = fold(parent);
-        const children = next.dirs.get(key) ?? new Map<string, IDirEntry>();
-        children.set(foldName(path.basename(child)), { name: path.basename(child), isDir });
-        next.dirs.set(key, children);
-        next.anchor.set(key, root);
-        if (key === fold(root) || parent === child) {
-          break;
-        }
-        child = parent;
-        isDir = true;
+      const root = roots.find((candidate) => isUnder(fold(candidate), key));
+      if (root !== undefined) {
+        listUnder(next, root, file.deployed);
       }
     }
   }
+  // The write folder is the top layer, as in the session: a deletion hides what is below, a
+  // written file replaces it.
+  for (const overwrite of overwrites.values()) {
+    next.roots.set(fold(overwrite.root), path.resolve(overwrite.root));
+    for (const key of overwrite.hidden) {
+      next.files.delete(key);
+      next.hidden.add(key);
+      const parent = path.dirname(key);
+      const children = next.dirs.get(parent) ?? new Map<string, IDirEntry>();
+      children.delete(path.basename(key));
+      // Listed even when empty, so the real listing is filtered there.
+      next.dirs.set(parent, children);
+      next.anchor.set(parent, overwrite.root);
+    }
+    for (const [key, file] of overwrite.files) {
+      next.files.set(key, file);
+      next.real.add(key);
+      next.hidden.delete(key);
+      listUnder(
+        next,
+        overwrite.root,
+        path.join(overwrite.root, path.relative(overwrite.dir, file)),
+      );
+    }
+  }
   index = next;
+}
+
+/**
+ * Read a root's write folder: the files programs wrote there, and the `.wh.` markers of what
+ * they deleted. A copy-up still in flight is not a file yet.
+ */
+function scanOverwrite(overwrite: IOverwrite) {
+  overwrite.files.clear();
+  overwrite.hidden.clear();
+  const readdirSync = (realFs.readdirSync ?? fsModule.readdirSync) as typeof fsModule.readdirSync;
+  const visit = (dir: string) => {
+    let entries: fsType.Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const real = path.join(dir, entry.name);
+      const deployed = path.join(overwrite.root, path.relative(overwrite.dir, real));
+      if (entry.isDirectory()) {
+        visit(real);
+      } else if (entry.name.startsWith(WHITEOUT_PREFIX)) {
+        overwrite.hidden.add(
+          fold(path.join(path.dirname(deployed), entry.name.slice(WHITEOUT_PREFIX.length))),
+        );
+      } else if (!entry.name.startsWith(COPY_UP_PREFIX)) {
+        overwrite.files.set(fold(deployed), real);
+      }
+    }
+  };
+  visit(overwrite.dir);
+}
+
+/**
+ * Show what programs wrote inside `root` (its write folder `dir`) on top of the deployment, or
+ * stop showing it (`dir` undefined). The folder is read now; `rescanOverwrites` reads it again
+ * once programs that wrote into it have ended.
+ */
+export function setOverwrite(root: string, dir: string | undefined): void {
+  const key = fold(root);
+  if (dir === undefined) {
+    if (overwrites.delete(key)) rebuild();
+    return;
+  }
+  const overwrite: IOverwrite = {
+    root: path.resolve(root),
+    dir: path.resolve(dir),
+    files: new Map(),
+    hidden: new Set(),
+  };
+  scanOverwrite(overwrite);
+  overwrites.set(key, overwrite);
+  rebuild();
+}
+
+/** Read every root's write folder again (after a program that may have written there ended). */
+export function rescanOverwrites(): void {
+  for (const overwrite of overwrites.values()) {
+    scanOverwrite(overwrite);
+  }
+  rebuild();
+}
+
+export interface IOverwriteEntry {
+  /** Where programs see it. */
+  deployed: string;
+  /** The file in the write folder; undefined for a deletion. */
+  file?: string;
+}
+
+/** What programs wrote or deleted at `dirPath` and below, from the last read of the folders. */
+export function overwriteEntriesUnder(dirPath: string): IOverwriteEntry[] {
+  const top = fold(dirPath);
+  const out: IOverwriteEntry[] = [];
+  for (const overwrite of overwrites.values()) {
+    for (const [key, file] of overwrite.files) {
+      if (isUnder(top, key)) {
+        out.push({ deployed: path.join(overwrite.root, path.relative(overwrite.dir, file)), file });
+      }
+    }
+    for (const key of overwrite.hidden) {
+      if (isUnder(top, key)) out.push({ deployed: key });
+    }
+  }
+  return out;
+}
+
+/**
+ * A deploy restores what it deploys: a program's deletion of one of these files (its `.wh.`
+ * marker) is cleared, as redeploying recreated a deleted link. What the user chose to delete
+ * for good is no longer deployed, so its marker stays.
+ */
+export function clearDeletions(deployed: string[]): void {
+  const keys = new Set(deployed.map(fold));
+  const unlinkSync = (realFs.unlinkSync ?? fsModule.unlinkSync) as typeof fsModule.unlinkSync;
+  let any = false;
+  for (const overwrite of overwrites.values()) {
+    for (const key of Array.from(overwrite.hidden)) {
+      if (!keys.has(key)) continue;
+      const relative = path.relative(fold(overwrite.root), key);
+      try {
+        unlinkSync(
+          path.join(
+            overwrite.dir,
+            path.dirname(relative),
+            WHITEOUT_PREFIX + path.basename(relative),
+          ),
+        );
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      }
+      overwrite.hidden.delete(key);
+      any = true;
+    }
+  }
+  if (any) rebuild();
+}
+
+/** Whether the deployment itself (a mod, not a program's write) has a file at `filePath`. */
+export function isModFile(filePath: string): boolean {
+  return index.mods.has(fold(filePath));
+}
+
+/** Whether a program deleted `filePath` inside a root. */
+export function isHidden(filePath: string): boolean {
+  return index.hidden.has(fold(filePath));
+}
+
+function overwriteAt(filePath: string): IOverwrite | undefined {
+  const key = fold(filePath);
+  for (const [rootKey, overwrite] of overwrites) {
+    if (isUnder(rootKey, key)) return overwrite;
+  }
+  return undefined;
+}
+
+/**
+ * A written file left the view (moved or deleted): what it covered shows again, as the session
+ * shows it once the write folder no longer has it. Updated in place, not rebuilt: a tool's
+ * outputs can be moved into a mod hundreds at a time.
+ */
+function forgetWritten(key: string) {
+  for (const overwrite of overwrites.values()) {
+    overwrite.files.delete(key);
+  }
+  index.real.delete(key);
+  const mod = index.mods.get(key);
+  if (mod !== undefined) {
+    index.files.set(key, mod);
+  } else {
+    index.files.delete(key);
+    index.dirs.get(path.dirname(key))?.delete(path.basename(key));
+  }
+}
+
+/** A written file arrived at `deployed` (moved within a root): listed in place. */
+function noteWritten(overwrite: IOverwrite, deployed: string, file: string) {
+  const key = fold(deployed);
+  overwrite.files.set(key, file);
+  overwrite.hidden.delete(key);
+  index.hidden.delete(key);
+  index.files.set(key, file);
+  index.real.add(key);
+  listUnder(index, overwrite.root, deployed);
 }
 
 function isUnder(parentFolded: string, childFolded: string) {
@@ -141,6 +376,10 @@ export function virtualDeployments(
 function moveVirtual(from: string, to: string, fs: typeof fsType): boolean {
   const fromKey = fold(from);
   const toKey = fold(to);
+  if (index.real.has(fromKey)) {
+    moveWritten(fromKey, to);
+    return true;
+  }
   for (const [owner, entry] of indexes) {
     const at = entry.files.findIndex((file) => fold(file.deployed) === fromKey);
     if (at < 0) continue;
@@ -165,9 +404,62 @@ function moveVirtual(from: string, to: string, fs: typeof fsType): boolean {
   return false;
 }
 
+/**
+ * A file a program wrote is a real file, as it was in the game folder: renamed, it moves on
+ * disk, within the write folder while it stays inside the root (where the session sees it
+ * too) and out of it otherwise (into a mod's folder, say).
+ */
+function moveWritten(fromKey: string, to: string) {
+  const file = index.files.get(fromKey);
+  if (file === undefined) return;
+  const target = overwriteAt(to);
+  const destination =
+    target !== undefined ? path.join(target.dir, path.relative(target.root, to)) : to;
+  const mkdirSync = (realFs.mkdirSync ?? fsModule.mkdirSync) as typeof fsModule.mkdirSync;
+  const renameSync = (realFs.renameSync ?? fsModule.renameSync) as typeof fsModule.renameSync;
+  if (target !== undefined) {
+    mkdirSync(path.dirname(destination), { recursive: true });
+  }
+  renameSync(file, destination);
+  forgetWritten(fromKey);
+  if (target !== undefined) {
+    noteWritten(target, to, destination);
+  }
+}
+
+/**
+ * Files programs wrote at `target` or below it are deleted from their write folder, which
+ * shows what they covered again (a mod's own file, say: what reverting a game's change to it
+ * means). Returns whether there were any.
+ */
+function removeWritten(target: string): boolean {
+  const key = fold(target);
+  const unlinkSync = (realFs.unlinkSync ?? fsModule.unlinkSync) as typeof fsModule.unlinkSync;
+  let any = false;
+  for (const written of Array.from(index.real)) {
+    if (!isUnder(key, written)) continue;
+    const file = index.files.get(written);
+    if (file !== undefined) {
+      try {
+        unlinkSync(file);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      }
+    }
+    forgetWritten(written);
+    any = true;
+  }
+  return any;
+}
+
 /** Deployed files at `target` or below it leave the view, as deleted hard links did. */
 function removeVirtual(target: string): boolean {
   const key = fold(target);
+  // A file a program wrote over a mod's goes first, and alone: the mod's own file shows again.
+  if (index.real.has(key)) {
+    return removeWritten(target);
+  }
+  removeWritten(target);
   const touched: string[] = [];
   for (const [owner, entry] of indexes) {
     const files = entry.files.filter((file) => !isUnder(key, fold(file.deployed)));
@@ -177,7 +469,7 @@ function removeVirtual(target: string): boolean {
     }
   }
   if (touched.length > 0) changed(touched);
-  return touched.length > 0;
+  return true;
 }
 
 /** A staged file or folder was renamed: what it serves follows it, as a hard link did. */
@@ -273,6 +565,11 @@ function redirect(input: unknown): { target: unknown; dirAnchor?: string } {
   if (typeof input !== "string") {
     return { target: input };
   }
+  if (index.hidden.has(fold(input))) {
+    // Deleted by a program: answered as a path that does not exist (the folder it would be
+    // in is never created), so every read fails as a missing file does.
+    return { target: path.join(path.dirname(input), HIDDEN_FOLDER, path.basename(input)) };
+  }
   const source = virtualSource(input);
   if (source !== undefined) {
     return { target: source };
@@ -308,7 +605,10 @@ function mergeListing(
 ): Array<string | fsType.Dirent> {
   const out = new Map<string, string | fsType.Dirent>();
   for (const entry of real ?? []) {
-    out.set(foldName(typeof entry === "string" ? entry : entry.name), entry);
+    const name = typeof entry === "string" ? entry : entry.name;
+    if (!index.hidden.has(fold(path.join(dirPath, name)))) {
+      out.set(foldName(name), entry);
+    }
   }
   for (const [key, entry] of virtual) {
     if (withFileTypes) {
@@ -586,7 +886,25 @@ function wrapDeletes(
     // A deployed file over a game original hides it, as the link that replaced it did: only
     // the deployed file goes. A folder is deleted on disk as well, real files included.
     const alsoReal = (target: string) => !isVirtualFile(target) && realExists(fs, target);
+    // A file a program deleted is gone, as it was in the game folder; the game's original
+    // under the deletion stays untouched. `rm` with `force` succeeds on a missing file.
+    const gone = (target: unknown, rest: unknown[]): NodeJS.ErrnoException | null | undefined => {
+      if (typeof target !== "string" || !isHidden(target)) return undefined;
+      const options = rest[0];
+      if (name === "rm" && typeof options === "object" && (options as { force?: boolean })?.force) {
+        return null;
+      }
+      return Object.assign(new Error(`ENOENT: no such file or directory, ${name} '${target}'`), {
+        code: "ENOENT",
+        errno: -4058,
+        syscall: name,
+        path: target,
+      });
+    };
     sync[`${name}Sync`] = function (this: unknown, target: unknown, ...rest: unknown[]) {
+      const missing = gone(target, rest);
+      if (missing) throw missing;
+      if (missing === null) return undefined;
       if (!applies(target)) return syncFn.call(this, target, ...rest);
       const real = alsoReal(target);
       removeVirtual(target);
@@ -594,14 +912,23 @@ function wrapDeletes(
       return undefined;
     };
     sync[name] = function (this: unknown, target: unknown, ...rest: unknown[]) {
-      if (!applies(target)) return callbackFn.call(this, target, ...rest);
       const callback = rest[rest.length - 1];
+      const missing = gone(target, rest);
+      if (missing !== undefined) {
+        return settle(callback, () => {
+          if (missing) throw missing;
+        });
+      }
+      if (!applies(target)) return callbackFn.call(this, target, ...rest);
       const real = alsoReal(target);
       removeVirtual(target);
       if (real) return callbackFn.call(this, target, ...rest);
       return settle(callback, () => undefined);
     };
     promises[name] = async function (this: unknown, target: unknown, ...rest: unknown[]) {
+      const missing = gone(target, rest);
+      if (missing) throw missing;
+      if (missing === null) return undefined;
       if (!applies(target)) return promiseFn.call(this, target, ...rest);
       const real = alsoReal(target);
       removeVirtual(target);
