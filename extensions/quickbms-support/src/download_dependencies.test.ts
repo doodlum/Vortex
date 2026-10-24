@@ -65,7 +65,16 @@ function fixture(platform = "linux") {
     extracted,
     dist,
     output: path.join(dist, platform === "linux" ? pins.linux.executable : pins.win32.executable),
-    run: () => prepareQuickBms({ platform, arch: "x64", dist, pins, fetcher, extract }),
+    run: () =>
+      prepareQuickBms({
+        platform,
+        arch: "x64",
+        dist,
+        pins,
+        fetcher,
+        extract,
+        retry: { retryDelayMs: 0 },
+      }),
   };
 }
 
@@ -148,11 +157,30 @@ describe("pinned QuickBMS build assets", () => {
     );
     expect(f.fetcher).toHaveBeenCalledOnce();
   });
-  it("rejects changed archive bytes before invoking the extractor", async () => {
+  it("rejects changed archive bytes before invoking the extractor, after trying again", async () => {
     const f = fixture();
     f.pins.linux.archiveSha256 = "0".repeat(64);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
     await expect(f.run()).rejects.toThrow("archive checksum");
+    expect(f.fetcher).toHaveBeenCalledTimes(3);
     expect(f.extract).not.toHaveBeenCalled();
+  });
+  it("downloads again after bytes cut short", async () => {
+    const f = fixture();
+    const good = await f.fetcher();
+    f.fetcher
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        body: (async function* () {
+          yield f.archive.subarray(0, 5);
+        })(),
+      })
+      .mockResolvedValueOnce(good);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await f.run();
+    expect(await fs.readFile(f.output)).toEqual(f.executable);
+    expect(f.fetcher).toHaveBeenCalledTimes(3);
   });
   it("retains an existing invalid cache when downloaded executable verification fails", async () => {
     const f = fixture();

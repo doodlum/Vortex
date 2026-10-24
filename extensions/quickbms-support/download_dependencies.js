@@ -38,17 +38,32 @@ async function downloadBytes(url, fetcher) {
   return Buffer.concat(chunks);
 }
 
-// The mirror is one host that sometimes times out (a CI build failed on it): failed
-// connections, timeouts, 429 and 5xx are tried again. Anything else is final.
+class ChecksumMismatch extends Error {
+  constructor() {
+    super("QuickBMS archive checksum mismatch");
+  }
+}
+
+// The mirror is one host that sometimes times out or cuts a download short (CI builds failed on
+// both): failed connections, timeouts, 429, 5xx and bytes that do not match the pin are tried
+// again. Anything else is final, and so is a mismatch on the last attempt.
 const retryable = (error) =>
   error instanceof DownloadRefused
     ? error.status === 429 || error.status >= 500
-    : ["TypeError", "TimeoutError", "AbortError"].includes(error?.name);
+    : error instanceof ChecksumMismatch ||
+      ["TypeError", "TimeoutError", "AbortError"].includes(error?.name);
 
-async function downloadWithRetry(url, fetcher, { attempts = 3, retryDelayMs = 5000 } = {}) {
+async function downloadWithRetry(
+  url,
+  fetcher,
+  expectedSha256,
+  { attempts = 3, retryDelayMs = 5000 } = {},
+) {
   for (let attempt = 1; ; attempt++) {
     try {
-      return await downloadBytes(url, fetcher);
+      const bytes = await downloadBytes(url, fetcher);
+      if (hash(bytes) !== expectedSha256) throw new ChecksumMismatch();
+      return bytes;
     } catch (error) {
       if (attempt >= attempts || !retryable(error)) throw error;
       console.warn(`QuickBMS download attempt ${attempt} failed, trying again:`, error.message);
@@ -92,9 +107,7 @@ async function prepareQuickBms({
   if (!(await verifiedFile(output, asset.executableSha256))) {
     const stage = await fs.mkdtemp(path.join(os.tmpdir(), "vortex-quickbms-"));
     try {
-      const bytes = await downloadWithRetry(asset.url, fetcher, retry);
-      if (hash(bytes) !== asset.archiveSha256)
-        throw new Error("QuickBMS archive checksum mismatch");
+      const bytes = await downloadWithRetry(asset.url, fetcher, asset.archiveSha256, retry);
       const archive = path.join(stage, "archive.zip");
       const extracted = path.join(stage, "extracted");
       await fs.writeFile(archive, bytes);
