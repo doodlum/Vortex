@@ -1,0 +1,30 @@
+name: Virtual File System Nightly
+
+# Fork-only: keeps the `aether-vfs` branch (virtual deployment through aether-vfs, based on the
+# Linux port) merged with `linux` and publishes unsigned Windows and Linux builds of it as a
+# GitHub pre-release (fork-nightly.yml does the work). Runs after the Linux port nightly has
+# merged upstream into `linux`. Scheduled and manual runs use the copy of this file on the
+# fork's default branch.
+
+on:
+  schedule:
+    - cron: "30 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: aether-vfs-nightly
+  cancel-in-progress: false
+
+jobs:
+  nightly:
+    uses: ./.github/workflows/fork-nightly.yml
+    secrets: inherit
+    with:
+      branch: aether-vfs
+      follow-url: https://github.com/${{ github.repository }}.git
+      follow-ref: linux
+      prefix: vfs-nightly
+      title: Virtual file system

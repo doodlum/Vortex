@@ -196,7 +196,11 @@ excludes E2E and cannot replace the per-format checks above.
 
 `.github/workflows/linux-port-nightly.yml` runs only outside `Nexus-Mods/Vortex`.
 Schedules and manual dispatch use the copy on the fork's default branch, so keep
-that copy identical to the one on `linux`. Each run merges upstream `master` into
+that copy identical to the one on `linux`. Both it and `aether-vfs-nightly.yml` call
+`fork-nightly.yml` with the branch to build and the branch it follows: `linux`
+follows upstream `master`, and `aether-vfs` (virtual deployment) follows `linux`,
+two and a half hours later, publishing `vfs-nightly-<UTC date>.<run number>`
+releases. Each run merges upstream `master` into
 `linux`, builds the unsigned Windows installer, the DEB, RPM, Arch, AppImage and
 tar.gz packages, and Snap and Flatpak in separate jobs that are allowed to fail and
 upload their retained packaging logs when they do, then publishes the packages as a

@@ -1,0 +1,361 @@
+name: Fork Nightly
+
+# Fork-only, called by linux-port-nightly.yml and aether-vfs-nightly.yml: keeps a branch merged
+# with the branch it follows (`linux` follows upstream master, `aether-vfs` follows `linux`) and
+# publishes unsigned Windows and Linux builds of it as a GitHub pre-release.
+#
+# GITHUB_TOKEN cannot push merges that change workflow files. Set a LINUX_SYNC_TOKEN secret
+# (contents and workflows write) to push those too; without it each build job re-applies the
+# same merge, so the nightly still builds the current followed branch.
+#
+# Every build carries one nightly version, <package.json version>-<prefix>.<date>.<run>, as its
+# app version, which packaging and extension compatibility ranges need to be semver. The release
+# tag and published file names use the shorter <prefix>-<date>.<run>.
+
+on:
+  workflow_call:
+    inputs:
+      branch:
+        description: The fork branch to build.
+        type: string
+        required: true
+      follow-url:
+        description: The repository of the branch it follows.
+        type: string
+        required: true
+      follow-ref:
+        description: The branch it follows.
+        type: string
+        required: true
+      prefix:
+        description: Release tag and version prefix (nightly, vfs-nightly).
+        type: string
+        required: true
+      title:
+        description: Release title, before the tag.
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.repository != 'Nexus-Mods/Vortex'
+    runs-on: ubuntu-22.04
+    outputs:
+      sha: ${{ steps.merge.outputs.sha }}
+      upstream: ${{ steps.merge.outputs.upstream }}
+      version: ${{ steps.merge.outputs.version }}
+      name: ${{ steps.merge.outputs.name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.branch }}
+          fetch-depth: 0
+          token: ${{ secrets.LINUX_SYNC_TOKEN || github.token }}
+
+      - name: Merge the followed branch
+        id: merge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch "${{ inputs.follow-url }}" "${{ inputs.follow-ref }}"
+          upstream=$(git rev-parse FETCH_HEAD)
+          base=$(git rev-parse HEAD)
+          git merge --no-edit FETCH_HEAD
+          if git push origin HEAD:${{ inputs.branch }}; then
+            sha=$(git rev-parse HEAD)
+          else
+            echo "::warning::Could not push the merge to ${{ inputs.branch }}; building it unpushed."
+            sha=$base
+          fi
+          build="$(date -u +%Y%m%d).${{ github.run_number }}"
+          version="$(node -p 'require("./package.json").version')-${{ inputs.prefix }}.$build"
+          echo "name=${{ inputs.prefix }}-$build" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "upstream=$upstream" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Nightly version: $version"
+
+  windows:
+    needs: sync
+    runs-on: windows-latest
+    env:
+      NO_PARALLEL: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.sync.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Apply the merge
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch "${{ inputs.follow-url }}" ${{ needs.sync.outputs.upstream }}
+          git merge --no-edit FETCH_HEAD
+          git submodule update --init --recursive
+
+      - name: Package Vortex (unsigned)
+        id: package
+        uses: ./.github/actions/package
+        with:
+          version: ${{ needs.sync.outputs.version }}
+          use-codesigning: "false"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: ./dist/vortex-setup-*.exe
+          if-no-files-found: error
+          retention-days: 2
+
+  linux:
+    needs: sync
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.sync.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Apply the merge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch "${{ inputs.follow-url }}" ${{ needs.sync.outputs.upstream }}
+          git merge --no-edit FETCH_HEAD
+          git submodule update --init --recursive
+
+      - name: Install packaging prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev ruby rpm libarchive-tools xz-utils fakeroot
+
+      - uses: ./.github/actions/setup-pnpm
+
+      - name: Set the nightly version
+        run: pnpm -F "@vortex/main" -F "@nexusmods/vortex-api" version ${{ needs.sync.outputs.version }} --no-git-tag-version --no-git-checks --allow-same-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Package Vortex (unsigned)
+        run: |
+          pnpm package:nosign
+          node scripts/verify-packaged-asar.mjs --asar dist/linux-unpacked/resources/app.asar
+          pnpm package:linux --formats deb,rpm,pacman,AppImage,tar.gz
+
+      - name: Upload packaging logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-logs
+          path: |
+            dist/linux-packages/*/result.json
+            dist/linux-packages/**/*.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Collect packages
+        run: |
+          mkdir -p out
+          find dist/linux-packages -mindepth 3 -maxdepth 3 -type f \
+            \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.xz' -o -name '*.AppImage' -o -name '*.tar.gz' \) \
+            -exec cp {} out/ \;
+          ls -la out
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux
+          path: out/*
+          if-no-files-found: error
+          retention-days: 2
+
+  linux-sandboxed:
+    needs: sync
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - format: snap
+            os: ubuntu-22.04
+          - format: flatpak
+            os: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.sync.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Apply the merge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch "${{ inputs.follow-url }}" ${{ needs.sync.outputs.upstream }}
+          git merge --no-edit FETCH_HEAD
+          git submodule update --init --recursive
+
+      - name: Install packaging prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev
+          if [ "${{ matrix.format }}" = flatpak ]; then
+            sudo apt-get install -y flatpak flatpak-builder appstream
+            flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+            flatpak install --user -y --noninteractive flathub org.freedesktop.Sdk//25.08 org.electronjs.Electron2.BaseApp//25.08
+          fi
+
+      - uses: ./.github/actions/setup-pnpm
+
+      - name: Set the nightly version
+        run: pnpm -F "@vortex/main" -F "@nexusmods/vortex-api" version ${{ needs.sync.outputs.version }} --no-git-tag-version --no-git-checks --allow-same-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Package ${{ matrix.format }} (unsigned)
+        run: |
+          pnpm package:nosign
+          pnpm package:linux --formats ${{ matrix.format }}
+
+      - name: Upload packaging logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-${{ matrix.format }}-logs
+          path: |
+            dist/linux-packages/*/result.json
+            dist/linux-packages/**/*.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Collect packages
+        run: |
+          mkdir -p out
+          find dist/linux-packages -mindepth 3 -maxdepth 3 -type f \( -name '*.snap' -o -name '*.flatpak' \) -exec cp {} out/ \;
+          ls -la out
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-${{ matrix.format }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 2
+
+  # Installs each native package on current distributions: dependency resolution, the
+  # root-owned 4755 sandbox helper, shared-library resolution, the desktop entry and removal.
+  # It does not launch the GUI.
+  distro-install:
+    needs: [sync, linux]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ubuntu:24.04
+            kind: deb
+          - image: ubuntu:26.04
+            kind: deb
+          - image: debian:13
+            kind: deb
+          - image: fedora:latest
+            kind: rpm
+          - image: opensuse/tumbleweed
+            kind: zypper
+          - image: archlinux:latest
+            kind: pacman
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.image }}
+    continue-on-error: true
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: linux
+          path: packages
+
+      - name: Install
+        shell: sh
+        run: |
+          set -eux
+          case "${{ matrix.kind }}" in
+            deb) apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y ./packages/*.deb ;;
+            rpm) dnf install -y findutils ./packages/*.rpm ;;
+            zypper) zypper --non-interactive install --allow-unsigned-rpm findutils ./packages/*.rpm ;;
+            pacman) pacman -Syu --noconfirm && pacman -U --noconfirm ./packages/*.pkg.tar.xz ;;
+          esac
+
+      - name: Check the installed application
+        shell: bash
+        run: |
+          set -euo pipefail
+          sandbox=$(find / -xdev -type f -name chrome-sandbox -path '*Vortex*' 2>/dev/null | head -1)
+          [ -n "$sandbox" ] || { echo "::error::No installed chrome-sandbox"; exit 1; }
+          root=$(dirname "$sandbox")
+          echo "Installed at $root"
+          [ "$(stat -c '%U %a' "$sandbox")" = "root 4755" ] || { echo "::error::chrome-sandbox is $(stat -c '%U %a' "$sandbox")"; exit 1; }
+          missing=$(find "$root" -type f \( -name vortex -o -name '*.node' -o -name '*.so' -o -name '*.so.*' \) \
+            -not -path '*musl*' -print0 |
+            xargs -0 -I{} sh -c 'ldd "{}" 2>/dev/null | grep "not found" | sed "s#^#{}: #"' | sort -u)
+          [ -z "$missing" ] || { echo "::error::Unresolved libraries"; echo "$missing"; exit 1; }
+          ls /usr/share/applications | grep -i vortex
+
+      - name: Remove
+        shell: sh
+        run: |
+          set -eux
+          case "${{ matrix.kind }}" in
+            deb) apt-get remove -y vortex ;;
+            rpm) dnf remove -y vortex ;;
+            zypper) zypper --non-interactive remove vortex ;;
+            pacman) pacman -R --noconfirm vortex ;;
+          esac
+          ! find / -xdev -type f -name chrome-sandbox -path '*Vortex*' 2>/dev/null | grep -q .
+
+  release:
+    needs: [sync, windows, linux, linux-sandboxed, distro-install]
+    if: ${{ !cancelled() && needs.windows.result == 'success' && needs.linux.result == 'success' }}
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Publish nightly pre-release
+        run: |
+          sha=${{ needs.sync.outputs.sha }}
+          upstream=${{ needs.sync.outputs.upstream }}
+          version=${{ needs.sync.outputs.version }}
+          name=${{ needs.sync.outputs.name }}
+          mkdir release
+          # Name every package after the nightly, keeping its platform suffix.
+          publish() {
+            found=$(find assets -type f -name "$1")
+            [ -z "$found" ] && return
+            [ "$(printf '%s\n' "$found" | wc -l)" -eq 1 ] || { echo "::error::Several $1 files"; exit 1; }
+            cp "$found" "release/vortex-$name-$2"
+          }
+          publish '*.exe' windows-x64.exe
+          publish '*.deb' amd64.deb
+          publish '*.rpm' x86_64.rpm
+          publish '*.pkg.tar.xz' x86_64.pkg.tar.xz
+          publish '*.AppImage' x86_64.AppImage
+          publish '*.tar.gz' linux-x64.tar.gz
+          publish '*.snap' amd64.snap
+          publish '*.flatpak' x86_64.flatpak
+          cd release && sha256sum * | tee SHA256SUMS && cd ..
+          gh release create "$name" release/* --repo "$GITHUB_REPOSITORY" --target "$sha" \
+            --prerelease --title "${{ inputs.title }} $name" \
+            --notes "Unsigned development build of the ${{ inputs.branch }} branch at $sha merged with ${{ inputs.follow-ref }} at $upstream. App version $version. Not an official Nexus Mods release."
+
+      - name: Keep the newest seven of these nightlies
+        run: |
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | startswith("${{ inputs.prefix }}-"))] | sort_by(.createdAt) | reverse | .[7:] | .[].tagName' |
+          while read -r tag; do gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag; done
