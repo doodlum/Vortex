@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -9,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 const fakes = vi.hoisted(() => ({
   root: "",
   roots: [] as Array<{ location: string; files: unknown[] }>,
+  addon: "fake-addon.cjs",
 }));
 
 const FAKE_ADDON = `
@@ -30,9 +32,9 @@ exports.Session = class {
 };
 `;
 
-vi.mock("../../util/getVortexPath", () => ({ default: () => fakes.root }));
+vi.mock("../../util/getVortexPath", () => ({ default: () => path.join(fakes.root, "profile") }));
 vi.mock("./aether", () => ({
-  loadAether: () => ({ dir: fakes.root, addon: path.join(fakes.root, "fake-addon.cjs") }),
+  loadAether: () => ({ dir: fakes.root, addon: path.join(fakes.root, fakes.addon) }),
 }));
 vi.mock("./roots", () => ({
   deploymentForGame: () => Promise.resolve({ deployments: [] }),
@@ -46,15 +48,33 @@ const platform = process.platform;
 beforeAll(() => {
   Object.defineProperty(process, "platform", { value: "linux" });
   fakes.root = fs.mkdtempSync(path.join(os.tmpdir(), "vfs-mounts-"));
+  process.env.VORTEX_VFS_MOUNTS_DIR = path.join(fakes.root, "vfs-mounts");
   fs.writeFileSync(path.join(fakes.root, "fake-addon.cjs"), FAKE_ADDON);
+  fs.writeFileSync(path.join(fakes.root, "other-addon.cjs"), FAKE_ADDON);
 });
 afterAll(async () => {
-  await Promise.all(["x", "y"].map((gameId) => unmountGame(gameId)));
+  await Promise.all(["x", "y"].map((gameId) => unmountGame(api, gameId)));
+  delete process.env.VORTEX_VFS_MOUNTS_DIR;
   Object.defineProperty(process, "platform", { value: platform });
   fs.rmSync(fakes.root, { recursive: true, force: true });
 });
 
-const helperDir = (gameId: string) => path.join(fakes.root, "vfs-mounts", gameId);
+const discovered: Record<string, { path: string }> = {
+  x: { path: "/games/x" },
+  y: { path: "/games/y" },
+  z: { path: "/games/z" },
+};
+const api = {
+  getState: () => ({ settings: { gameMode: { discovered } } }),
+  showErrorNotification: (...args: unknown[]) => errors.push(args),
+} as unknown as IExtensionApi;
+const errors: unknown[] = [];
+const helperDir = (gameId: string) =>
+  path.join(
+    fakes.root,
+    "vfs-mounts",
+    `${gameId}-${createHash("sha256").update(path.resolve(discovered[gameId].path)).digest("hex").slice(0, 16)}`,
+  );
 const calls = (gameId: string) =>
   fs
     .readFileSync(path.join(helperDir(gameId), "state", "calls.txt"), "utf8")
@@ -72,15 +92,10 @@ const alive = (pid: number) => {
 };
 
 describe("the Linux mounts", () => {
-  const errors: unknown[] = [];
-  const api = {
-    showErrorNotification: (...args: unknown[]) => errors.push(args),
-  } as unknown as IExtensionApi;
-
   it("mounts through a helper that follows changes and ends on unmount", async () => {
     fakes.roots = [{ location: "/games/x", files: [] }];
     await mountGame(api, "x");
-    expect(isMounted("x")).toBe(true);
+    expect(isMounted(api, "x")).toBe(true);
     expect(calls("x")).toEqual(["new /games/x", "start"]);
     const pid = helperPid("x");
 
@@ -95,28 +110,46 @@ describe("the Linux mounts", () => {
     await mountGame(api, "x");
     expect(calls("x").slice(3)).toEqual(["close", "new /games/x2", "start"]);
 
-    await unmountGame("x");
-    expect(isMounted("x")).toBe(false);
+    await unmountGame(api, "x");
+    expect(isMounted(api, "x")).toBe(false);
     expect(calls("x").at(-1)).toBe("close");
     expect(alive(pid)).toBe(false);
     expect(fs.existsSync(path.join(helperDir("x"), "status.json"))).toBe(false);
   }, 30000);
 
+  it("replaces a helper another Vortex install started, whose addon stays loaded", async () => {
+    fakes.roots = [{ location: "/games/x", files: [] }];
+    await mountGame(api, "x");
+    const pid = helperPid("x");
+    fakes.addon = "other-addon.cjs";
+    await mountGame(api, "x");
+    expect(helperPid("x")).not.toBe(pid);
+    expect(alive(pid)).toBe(false);
+    expect(isMounted(api, "x")).toBe(true);
+    fakes.addon = "fake-addon.cjs";
+    await unmountGame(api, "x");
+  }, 30000);
+
   it("reports a mount that fails", async () => {
     fakes.roots = [{ location: "/games/broken", files: [] }];
     await mountGame(api, "y");
-    expect(isMounted("y")).toBe(false);
+    expect(isMounted(api, "y")).toBe(false);
     expect(errors).toHaveLength(1);
-    await unmountGame("y");
+    await unmountGame(api, "y");
   }, 30000);
 
-  it("takes a status nobody keeps fresh for a dead helper", () => {
+  it("counts only this profile's live mount", () => {
     fs.mkdirSync(helperDir("z"), { recursive: true });
     const status = path.join(helperDir("z"), "status.json");
+    const spec = path.join(helperDir("z"), "spec.json");
     fs.writeFileSync(status, JSON.stringify({ pid: 1, generation: 1, mounted: true }));
-    expect(isMounted("z")).toBe(true);
+    fs.writeFileSync(spec, JSON.stringify({ owner: path.join(fakes.root, "other profile") }));
+    expect(isMounted(api, "z")).toBe(false);
+    fs.writeFileSync(spec, JSON.stringify({ owner: path.join(fakes.root, "profile") }));
+    expect(isMounted(api, "z")).toBe(true);
+    // A status nobody keeps fresh is a dead helper's.
     const old = new Date(Date.now() - 60000);
     fs.utimesSync(status, old, old);
-    expect(isMounted("z")).toBe(false);
+    expect(isMounted(api, "z")).toBe(false);
   });
 });

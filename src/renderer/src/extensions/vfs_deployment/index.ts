@@ -85,13 +85,13 @@ function init(context: IExtensionContextEx): boolean {
       const gameOf = (profileId: string): string | undefined =>
         api.getState().persistent.profiles[profileId]?.gameId;
       const mount = (gameId: string | undefined) => {
-        if (gameId !== undefined && isVirtualGame(api, gameId) && !isMounted(gameId)) {
+        if (gameId !== undefined && isVirtualGame(api, gameId) && !isMounted(api, gameId)) {
           void mountGame(api, gameId);
         }
       };
       api.onAsync("will-deploy", async (profileId: string) => {
         const gameId = gameOf(profileId);
-        if (gameId !== undefined) await unmountGame(gameId);
+        if (gameId !== undefined) await unmountGame(api, gameId);
       });
       api.onAsync("did-deploy", async (profileId: string) => {
         const gameId = gameOf(profileId);
@@ -99,7 +99,7 @@ function init(context: IExtensionContextEx): boolean {
       });
       api.onAsync("will-purge", async (profileId: string) => {
         const gameId = gameOf(profileId);
-        if (gameId !== undefined) await unmountGame(gameId);
+        if (gameId !== undefined) await unmountGame(api, gameId);
       });
       mount(activeGameId(api.getState()));
       api.events.on("gamemode-activated", mount);

@@ -7,7 +7,7 @@
  *   `generation`). The helper mounts it, and follows every change: the same root locations are
  *   updated in place (`setRoot`), others remount. Removing the file unmounts and ends the
  *   helper.
- * - `<dir>/status.json`: written by the helper, `{ pid, generation, mounted, error? }`, for
+ * - `<dir>/status.json`: written by the helper, `{ pid, generation, mounted, addon, error? }`, for
  *   Vortex to wait on. The helper touches it every two seconds and removes it when it ends.
  *
  * The source is written next to the spec when Vortex starts a helper, so nothing extra has to
@@ -23,6 +23,7 @@ const statusFile = path.join(dir, "status.json");
 let session;
 let served;
 let ending;
+let loadedAddon;
 
 function writeStatus(status) {
   const temp = statusFile + "." + process.pid;
@@ -68,7 +69,9 @@ function apply() {
       spec.roots.forEach((root, id) => session.setRoot(id, root));
     } else {
       close();
-      const { Session } = require(spec.addon);
+      // A native addon cannot be unloaded: the first one loaded stays.
+      loadedAddon = loadedAddon ?? spec.addon;
+      const { Session } = require(loadedAddon);
       session = new Session({ stateDir: spec.stateDir, artifactsDir: spec.artifactsDir, roots: spec.roots });
       session.start();
     }
@@ -79,7 +82,7 @@ function apply() {
     served = spec;
     result = { mounted: false, error: String(err && err.message || err) };
   }
-  writeStatus({ generation: spec.generation, ...result });
+  writeStatus({ generation: spec.generation, addon: loadedAddon, ...result });
 }
 
 for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {

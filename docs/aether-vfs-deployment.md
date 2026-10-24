@@ -130,8 +130,12 @@ Every program Vortex starts for a game runs through one session per game (`@aeth
 Implemented in `vfs_deployment/mounts.ts` on aether-vfs's `vfs-fuse`. Each virtually deployed
 game's roots are mounted at their locations (unprivileged, through `fusermount3`) by a mount
 helper (`mountHelper.ts`): Vortex's own Electron run as Node, detached, so the mount outlives
-Vortex as links did and Steam's own Play button keeps seeing the mods. Vortex and the helper
-talk through files in `<userData>/vfs-mounts/<game>`: Vortex writes `spec.json` (the session to
+Vortex as links did and Steam's own Play button keeps seeing the mods. There is one helper per
+game folder for the user, in `~/.local/state/vortex/vfs-mounts/<game>-<folder hash>`, whichever
+Vortex profile or package deployed last (a folder has one mount, as it had one set of links); a
+starting Vortex takes over a folder another profile mounted, and replaces a helper that loaded
+another install's addon. Vortex and the helper talk through files there: Vortex writes
+`spec.json` (the session to
 serve); the helper mounts it, swaps a new deployment of the same folders in place, remounts
 other folders, reports `status.json` (touched every two seconds, so a dead helper's status goes
 stale) and logs to `helper.log`. Removing the spec unmounts and ends the helper. A deploy

@@ -1,5 +1,7 @@
 import { spawn, spawnSync } from "child_process";
+import { createHash } from "crypto";
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 
 import type { IExtensionApi } from "../../types/IExtensionContext";
@@ -16,7 +18,8 @@ import { deploymentForGame, gameRoots } from "./roots";
  * roots' write folders, as on Windows.
  *
  * A mount helper owns each game's mount (mountHelper.ts), so the mods stay visible after
- * Vortex closes, as they did with links. A deploy unmounts first, so that the deployment reads
+ * Vortex closes, as they did with links. There is one helper per game folder for the user:
+ * whichever Vortex deploys last takes the mount over. A deploy unmounts first, so that the deployment reads
  * the game's own files (merging from originals, say), and mounts the new deployment when it is
  * done; a purge unmounts.
  */
@@ -38,12 +41,28 @@ interface IHelperStatus {
   pid: number;
   generation: number;
   mounted: boolean;
+  /** The addon the helper loaded: another Vortex install's cannot be swapped in. */
+  addon?: string;
   error?: string;
 }
 
-const mountsDir = () => path.join(getVortexPath("userData"), "vfs-mounts");
-const helperDir = (gameId: string) => path.join(mountsDir(), gameId);
-const statusFile = (gameId: string) => path.join(helperDir(gameId), "status.json");
+/**
+ * Per user, not per Vortex profile or package: a game folder has one mount, whichever Vortex
+ * deployed it last, as it had one set of links. `VORTEX_VFS_MOUNTS_DIR` overrides it (tests).
+ */
+const mountsDir = () =>
+  process.env.VORTEX_VFS_MOUNTS_DIR ??
+  path.join(os.userInfo().homedir, ".local", "state", "vortex", "vfs-mounts");
+
+/** The helper folder of `gameId`'s mount at its discovered location. */
+function helperDir(api: IExtensionApi, gameId: string): string | undefined {
+  const gamePath = api.getState().settings.gameMode.discovered[gameId]?.path;
+  if (gamePath === undefined) {
+    return undefined;
+  }
+  const key = createHash("sha256").update(path.resolve(gamePath)).digest("hex").slice(0, 16);
+  return path.join(mountsDir(), `${gameId}-${key}`);
+}
 
 /** How long a helper may go without touching its status before it counts as gone. */
 const HEARTBEAT_LIMIT_MS = 6000;
@@ -53,9 +72,12 @@ const HEARTBEAT_LIMIT_MS = 6000;
  * it ends; a status left by a helper that died goes stale. (A Flatpak helper runs in its own
  * sandbox, whose process ids mean nothing here.)
  */
-function liveStatus(gameId: string): IHelperStatus | undefined {
+function liveStatus(dir: string | undefined): IHelperStatus | undefined {
+  if (dir === undefined) {
+    return undefined;
+  }
   try {
-    const file = statusFile(gameId);
+    const file = path.join(dir, "status.json");
     if (Date.now() - fs.statSync(file).mtimeMs > HEARTBEAT_LIMIT_MS) {
       return undefined;
     }
@@ -67,9 +89,20 @@ function liveStatus(gameId: string): IHelperStatus | undefined {
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Whether `gameId`'s helper is up and serving its mount. */
-export function isMounted(gameId: string): boolean {
-  return liveStatus(gameId)?.mounted === true;
+/** This Vortex profile, which a spec names: another profile's mount is not this one's. */
+const owner = () => getVortexPath("userData");
+
+/** Whether `gameId`'s helper is up and serving this profile's deployment. */
+export function isMounted(api: IExtensionApi, gameId: string): boolean {
+  const dir = helperDir(api, gameId);
+  if (liveStatus(dir)?.mounted !== true) {
+    return false;
+  }
+  try {
+    return JSON.parse(fs.readFileSync(path.join(dir!, "spec.json"), "utf8")).owner === owner();
+  } catch {
+    return false;
+  }
 }
 
 /** Start a helper for `dir`, detached, so that it outlives Vortex. */
@@ -105,6 +138,23 @@ function startHelper(dir: string): void {
   }
 }
 
+/** Remove `dir`'s spec, which unmounts, and wait for its helper to end. */
+async function stopHelper(gameId: string, dir: string): Promise<void> {
+  const running = liveStatus(dir) !== undefined;
+  fs.rmSync(path.join(dir, "spec.json"), { force: true });
+  if (!running) {
+    return;
+  }
+  for (let waited = 0; liveStatus(dir) !== undefined; waited += 100) {
+    if (waited >= 15000) {
+      log("error", "the mount helper did not unmount", { gameId });
+      return;
+    }
+    await delay(100);
+  }
+  log("info", "unmounted the virtual file system", { gameId });
+}
+
 /** Mount `gameId`'s deployment as its manifests describe it, or update the mount it has. */
 export async function mountGame(api: IExtensionApi, gameId: string): Promise<void> {
   if (!mountsApply()) {
@@ -113,14 +163,28 @@ export async function mountGame(api: IExtensionApi, gameId: string): Promise<voi
   const mine = bump(gameId);
   const aether = loadAether();
   const game = await deploymentForGame(api, gameId);
-  if (aether === undefined || game === undefined || generations.get(gameId) !== mine) {
+  const dir = helperDir(api, gameId);
+  if (
+    aether === undefined ||
+    game === undefined ||
+    dir === undefined ||
+    generations.get(gameId) !== mine
+  ) {
     return;
   }
-  const dir = helperDir(gameId);
+  const running = liveStatus(dir);
+  if (running?.addon !== undefined && running.addon !== aether.addon) {
+    // Mounted by another Vortex install; its addon stays loaded in its helper.
+    await stopHelper(gameId, dir);
+    if (generations.get(gameId) !== mine) {
+      return;
+    }
+  }
   fs.mkdirSync(dir, { recursive: true });
   useHostFusermount();
   const generation = Date.now() * 1000 + mine;
   const spec = {
+    owner: owner(),
     addon: aether.addon,
     stateDir: path.join(dir, "state"),
     artifactsDir: aether.dir,
@@ -130,11 +194,11 @@ export async function mountGame(api: IExtensionApi, gameId: string): Promise<voi
   const specFile = path.join(dir, "spec.json");
   fs.writeFileSync(`${specFile}.tmp`, JSON.stringify(spec));
   fs.renameSync(`${specFile}.tmp`, specFile);
-  if (liveStatus(gameId) === undefined) {
+  if (liveStatus(dir) === undefined) {
     startHelper(dir);
   }
   for (let waited = 0; waited < 15000; waited += 100) {
-    const status = liveStatus(gameId);
+    const status = liveStatus(dir);
     if (status?.generation === generation) {
       if (status.mounted) {
         log("info", "mounted the virtual file system", { gameId, pid: status.pid });
@@ -156,21 +220,12 @@ export async function mountGame(api: IExtensionApi, gameId: string): Promise<voi
  * Unmount `gameId`'s deployment (lazily, if a program still holds files there), and wait for
  * its helper to end: a deploy that follows must see the game's own files.
  */
-export async function unmountGame(gameId: string): Promise<void> {
+export async function unmountGame(api: IExtensionApi, gameId: string): Promise<void> {
   bump(gameId);
-  const running = liveStatus(gameId) !== undefined;
-  fs.rmSync(path.join(helperDir(gameId), "spec.json"), { force: true });
-  if (!running) {
-    return;
+  const dir = helperDir(api, gameId);
+  if (dir !== undefined) {
+    await stopHelper(gameId, dir);
   }
-  for (let waited = 0; liveStatus(gameId) !== undefined; waited += 100) {
-    if (waited >= 15000) {
-      log("error", "the mount helper did not unmount", { gameId });
-      return;
-    }
-    await delay(100);
-  }
-  log("info", "unmounted the virtual file system", { gameId });
 }
 /** Whether this machine can mount: `/dev/fuse` and `fusermount3` (package fuse3). */
 export function canMount(): boolean {
