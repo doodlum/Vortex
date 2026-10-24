@@ -11,6 +11,7 @@ import {
   overwriteEntriesUnder,
   realStat,
   rescanOverwrites,
+  setAside,
   setOverwrite,
   setVirtualFiles,
   virtualSource,
@@ -257,6 +258,25 @@ describe("what programs wrote inside a root", () => {
     setOverwrite(game, overwrite);
   });
   afterAll(() => setOverwrite(game, undefined));
+
+  it("steps aside for a purge of real files, write layer included, and comes back", () => {
+    // A link an older Vortex deployed where the view shows the mod's file.
+    const linked = path.join(game, "Data", "mod.esp");
+    realFsModule.mkdirSync(path.dirname(linked), { recursive: true });
+    realFsModule.writeFileSync(linked, "left by links");
+    const restore = setAside("game");
+    expect(fs.readFileSync(linked, "utf8")).toBe("left by links");
+    expect(fs.existsSync(path.join(game, "Game.exe"))).toBe(true);
+    expect(fs.existsSync(path.join(game, "Data", "textures", "x.dds"))).toBe(false);
+    fs.unlinkSync(linked);
+    expect(realFsModule.existsSync(linked)).toBe(false);
+    restore();
+    restore();
+    expect(fs.readFileSync(linked, "utf8")).toBe("edited by a tool");
+    expect(fs.existsSync(path.join(game, "Game.exe"))).toBe(false);
+    expect(fs.existsSync(path.join(game, "Data", "textures", "x.dds"))).toBe(true);
+    realFsModule.rmSync(path.join(game, "Data"), { recursive: true, force: true });
+  });
 
   it("is shown on top of the deployment, deletions included", () => {
     expect(fs.readFileSync(path.join(game, "Data", "mod.esp"), "utf8")).toBe("edited by a tool");

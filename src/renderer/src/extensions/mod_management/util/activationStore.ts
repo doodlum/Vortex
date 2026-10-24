@@ -496,11 +496,14 @@ export async function ownDeployedFiles(
  * @param api api
  * @param modType the mod type for which to retrieve the manifest, default mod type if undefined
  * @param gameId the game for which to retrieve the manifest, defaults to the current game.
+ * @param virtual whether to read a virtual method's manifest (in staging) or a linking one's
+ *   (in the target); defaults to the kind of the game's current method.
  */
 export function getManifest(
   api: IExtensionApi,
   modType?: string,
   gameId?: string,
+  virtual?: boolean,
 ): Promise<IDeploymentManifest> {
   const state: IState = api.store.getState();
   const instanceId = state.app.instanceId;
@@ -526,11 +529,15 @@ export function getManifest(
       return Promise.resolve(emptyManifest(instanceId));
     }
 
-    const virtual = getCurrentActivator(state, gameId, true)?.virtual === true;
     return getManifestImpl(
       api,
       instanceId,
-      manifestPaths(deployPath, stagingPath, modType, virtual),
+      manifestPaths(
+        deployPath,
+        stagingPath,
+        modType,
+        virtual ?? getCurrentActivator(state, gameId, true)?.virtual === true,
+      ),
     );
   } catch (err) {
     return Promise.reject(err);

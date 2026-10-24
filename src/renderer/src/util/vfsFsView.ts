@@ -107,9 +107,18 @@ function listUnder(target: IIndex, root: string, file: string) {
   }
 }
 
+/** The owner prefixes set aside (`setAside`), by token. */
+const asides = new Map<symbol, string>();
+const isAside = (owner: string) => [...asides.values()].some((prefix) => owner.startsWith(prefix));
+
 function rebuild() {
   const next = emptyIndex();
-  for (const { roots, files } of indexes.values()) {
+  const asideRoots = new Set<string>();
+  for (const [owner, { roots, files }] of indexes) {
+    if (isAside(owner)) {
+      roots.forEach((root) => asideRoots.add(fold(root)));
+      continue;
+    }
     if (files.length === 0) continue;
     for (const root of roots) {
       next.roots.set(fold(root), path.resolve(root));
@@ -128,6 +137,7 @@ function rebuild() {
   // The write folder is the top layer, as in the session: a deletion hides what is below, a
   // written file replaces it.
   for (const overwrite of overwrites.values()) {
+    if (asideRoots.has(fold(overwrite.root))) continue;
     next.roots.set(fold(overwrite.root), path.resolve(overwrite.root));
     for (const key of overwrite.hidden) {
       next.files.delete(key);
@@ -373,6 +383,26 @@ export function forgetVirtualFiles(owner: string): void {
   if (indexes.delete(owner)) {
     changed([owner]);
   }
+}
+
+/** The owners of a game's virtual deployments start with this. */
+export const gameOwnerPrefix = (gameId: string) => `${gameId}|`;
+
+/**
+ * Show the real disk where the owners starting with `prefix` deploy, write layer included,
+ * until the returned function is called; their files stay known. A link purge in a game the
+ * view shows has to act on the real files, not on the view's.
+ */
+export function setAside(prefix: string): () => void {
+  const token = Symbol(prefix);
+  const owners = () => [...indexes.keys()].filter((owner) => owner.startsWith(prefix));
+  asides.set(token, prefix);
+  changed(owners());
+  return () => {
+    if (asides.delete(token)) {
+      changed(owners());
+    }
+  };
 }
 
 /** The owners whose key starts with `prefix`, with their roots and files. */

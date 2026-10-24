@@ -30,6 +30,7 @@ import { downloadPathForGame } from "../../util/selectors";
 import { knownGames } from "../../util/selectors";
 import { getSafe } from "../../util/storeHelper";
 import { batchDispatch, makeQueue, truthy } from "../../util/util";
+import { gameOwnerPrefix, setAside } from "../../util/vfsFsView";
 import { emitModRemoved } from "../analytics/mixpanel/modChangeAnalytics";
 import type { IDownload } from "../download_management/types/IDownload";
 import getDownloadGames from "../download_management/util/getDownloadGames";
@@ -178,13 +179,17 @@ async function purgeOldMethod(
   try {
     await Promise.all(
       Object.keys(modPaths).map((modType) =>
-        getManifest(api, modType, gameId).then((manifest) => {
+        getManifest(api, modType, gameId, oldActivator.virtual === true).then((manifest) => {
           manifests[modType] = manifest;
           deployments[modType] = manifest.files;
         }),
       ),
     );
     await api.emitAndAwait("will-purge", profile.id, deployments);
+    // A link purge acts on the real files: a virtual deployment of the game (shown when an older
+    // Vortex left links behind) steps aside meanwhile.
+    const restoreView =
+      oldActivator.virtual === true ? undefined : setAside(gameOwnerPrefix(gameId));
     await oldActivator.prePurge(instPath);
     try {
       // sequential: purge order matters per mod type
@@ -225,6 +230,7 @@ async function purgeOldMethod(
         ),
       );
     } finally {
+      restoreView?.();
       await oldActivator.postPurge();
     }
   } catch (err) {
@@ -241,6 +247,48 @@ async function purgeOldMethod(
       allowReport: ["ENOENT", "ENOTFOUND"].indexOf(getErrorCode(err)) !== -1,
     });
   }
+}
+
+/**
+ * A game on a virtual method whose folder still holds a link deployment of this install: an
+ * older Vortex, started in between, deployed with links again (it does not know the virtual
+ * method and uses its default). That deployment is purged with the method that made it, as on
+ * the first move to the virtual method, and the game deploys again.
+ */
+async function purgeLinksLeftBehind(
+  api: IExtensionApi,
+  activators: IDeploymentMethod[],
+  profile: IProfile,
+  gameId: string,
+  instPath: string,
+  modPaths: { [typeId: string]: string },
+) {
+  const instanceId = api.getState().app.instanceId;
+  const manifests = await Promise.all(
+    Object.keys(modPaths).map((modType) => getManifest(api, modType, gameId, false)),
+  );
+  const methodId = manifests.find(
+    (manifest) => manifest.files.length > 0 && manifest.instance === instanceId,
+  )?.deploymentMethod;
+  const method = activators.find((iter) => iter.id === methodId && iter.virtual !== true);
+  if (method === undefined) {
+    return;
+  }
+  log("info", "purging links an older Vortex deployed", { gameId, method: method.id });
+  await purgeOldMethod(api, method, profile, gameId, instPath, modPaths);
+  api.store.dispatch(setDeploymentNecessary(gameId, true));
+  api.sendNotification({
+    type: "info",
+    id: METHOD_UPGRADED_NOTIFICATION_ID,
+    title: "Deployment method upgraded",
+    message:
+      "{{game}} now uses {{method}}. Vortex removed the files it had placed in the " +
+      "game folder and will deploy your mods again.",
+    replace: {
+      game: getGame(gameId)?.name ?? gameId,
+      method: getCurrentActivator(api.getState(), gameId, true)?.name,
+    },
+  });
 }
 
 export async function updateDeploymentMethod(api: IExtensionApi, profile: IProfile) {
@@ -497,6 +545,21 @@ export function onGameModeActivated(
       message: activatorToUse.name,
       displayMS: 5000,
     });
+  }
+
+  if (!changeActivator && activatorToUse?.virtual === true) {
+    const oldInit = initProm;
+    initProm = () =>
+      oldInit().then(() =>
+        purgeLinksLeftBehind(
+          api,
+          activators,
+          profile,
+          gameId,
+          instPath,
+          game.getModPaths(gameDiscovery.path),
+        ),
+      );
   }
 
   const knownMods: { [modId: string]: IMod } = getSafe(state, ["persistent", "mods", gameId], {});

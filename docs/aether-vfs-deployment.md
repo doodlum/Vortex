@@ -184,7 +184,22 @@ The fork's `aether-vfs-nightly.yml` keeps this branch merged with `linux` and pu
 
 ## Migration
 
-A core migration runs once, when this version first starts:
+Implemented through the existing method checks on game activation (`onGameModeActivated`): the
+virtual method `supersedes` the link methods, so a game on one of them, where the virtual
+method is supported, has its link deployment purged with that method (originals restored from
+`.vortex_backup`, the game folder's manifest removed), switches to `aether_vfs`, is marked for
+deployment and gets a "Deployment method upgraded" notice. Downgrading is safe: an older Vortex
+does not know `aether_vfs`, finds a clean game folder and deploys with its default link method,
+leaving the setting as it was. When this version starts again, a virtual game whose folder holds
+a link deployment of this install has it purged the same way (`purgeLinksLeftBehind`); the file
+view steps aside meanwhile (`setAside`), so the purge acts on the real links and not on the
+view's files. Verified on Windows with the sandbox game (given a real x64 `game.exe`, which the
+virtual method requires): released Vortex 2.8.0 deployed a mod over a game file with hard links
+in a profile it created; this branch purged them, restored the file, switched and deployed
+virtually; 2.8.0 then deployed with hard links again; this branch purged those on its next start
+and deployed virtually, once. Tests: `mod_management/eventHandlers.vfsMigration.test.ts`.
+
+The original plan follows. A core migration runs once, when this version first starts:
 
 1. For each game with a link-based method, or with a link manifest in its game or staging folder,
    mark the game for migration (`settings.mods.vfsMigration[gameId] = "pending"`).

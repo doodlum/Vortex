@@ -5,6 +5,7 @@ import type { IState } from "../../types/IState";
 import { installPathForGame } from "../../util/selectors";
 import {
   forgetVirtualFiles,
+  gameOwnerPrefix,
   onVirtualChange,
   setOverwrite,
   setVirtualFiles,
@@ -22,7 +23,7 @@ const caseInsensitive = process.platform === "win32";
 const foldPath = (input: string) =>
   caseInsensitive ? path.resolve(input).toLowerCase() : path.resolve(input);
 /** One owner per mod type: two types can share a target (dinput and enb: the game folder). */
-const ownerOf = (gameId: string, modType: string) => `${gameId}|${modType}`;
+const ownerOf = (gameId: string, modType: string) => gameOwnerPrefix(gameId) + modType;
 const gameOf = (owner: string) => owner.slice(0, owner.indexOf("|"));
 /** Each owner's target, for a purge, which names the target and not the type. */
 const targets = new Map<string, string>();
