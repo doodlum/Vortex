@@ -46,8 +46,11 @@ export interface IAetherLaunchOptions {
 }
 
 export interface IAetherSession {
+  /** Serve the roots. On Linux this mounts each root at its location (FUSE). */
   start(): void;
   roots(): Array<{ id: number; location: string; files: number }>;
+  /** The ids of the roots mounted at their locations (Linux); empty on Windows. */
+  mounted(): number[];
   /** Replace a root's content, also while its program runs (the location must stay). */
   setRoot(id: number, root: IAetherRoot): void;
   launch(opts: IAetherLaunchOptions): Promise<IAetherLaunch>;

@@ -4,6 +4,7 @@ import type { IExtensionContext } from "../../types/IExtensionContext";
 import { activeGameId } from "../../util/selectors";
 import { clearDeletions } from "../../util/vfsFsView";
 import type { IDeploymentMethod } from "../mod_management/types/IDeploymentMethod";
+import { isMounted, mountGame, mountsApply, unmountAll, unmountGame } from "./mounts";
 import { isVirtualGame, showOverwriteDialog } from "./overwrite";
 import { cleanStaleSessions, launchesDirectly, makeLaunchRunner } from "./runner";
 import { vfsSupport } from "./support";
@@ -66,6 +67,34 @@ function init(context: IExtensionContextEx): boolean {
     };
     show(activeGameId(api.getState()));
     api.events.on("gamemode-activated", show);
+
+    if (mountsApply()) {
+      // Linux: the game's folders are mounted while Vortex runs (mounts.ts).
+      const gameOf = (profileId: string): string | undefined =>
+        api.getState().persistent.profiles[profileId]?.gameId;
+      const mount = (gameId: string | undefined) => {
+        if (gameId !== undefined && isVirtualGame(api, gameId) && !isMounted(gameId)) {
+          void mountGame(api, gameId);
+        }
+      };
+      api.onAsync("will-deploy", (profileId: string) => {
+        const gameId = gameOf(profileId);
+        if (gameId !== undefined) unmountGame(gameId);
+        return Promise.resolve();
+      });
+      api.onAsync("did-deploy", async (profileId: string) => {
+        const gameId = gameOf(profileId);
+        if (gameId !== undefined && isVirtualGame(api, gameId)) await mountGame(api, gameId);
+      });
+      api.onAsync("will-purge", (profileId: string) => {
+        const gameId = gameOf(profileId);
+        if (gameId !== undefined) unmountGame(gameId);
+        return Promise.resolve();
+      });
+      mount(activeGameId(api.getState()));
+      api.events.on("gamemode-activated", mount);
+      window.addEventListener("beforeunload", () => unmountAll());
+    }
   });
   return true;
 }

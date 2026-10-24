@@ -127,6 +127,16 @@ Every program Vortex starts for a game runs through one session per game (`@aeth
 
 ### 4. Linux: a FUSE mount
 
+Implemented in `vfs_deployment/mounts.ts` on aether-vfs's `vfs-fuse`. While Vortex runs, each
+virtually deployed game's roots are mounted at their locations (unprivileged, through
+`fusermount3`); a deploy unmounts first, so the deployment reads the game's own files, and
+mounts the result; a purge unmounts. Vortex's support check needs `/dev/fuse` and `fusermount3`
+(package `fuse3`). Not yet: a Flatpak Vortex (mounting from the sandbox), keeping the mount
+after Vortex exits (a helper process would own it), and checks of Steam installed as a Snap,
+whose mount namespace must see mounts made outside it.
+
+The original plan follows.
+
 On Linux the view is a FUSE filesystem served by the same provider graph (a new aether-vfs crate,
 `vfs-fuse`), mounted over each root for as long as the game is managed:
 
@@ -139,6 +149,10 @@ On Linux the view is a FUSE filesystem served by the same provider graph (a new 
   start.
 
 ### 5. 32-bit games
+
+Implemented: a 32-bit game gets the 32-bit shim and injector from `assets/aether-vfs/x86`, and
+Vortex's support check accepts it when they are installed. Verified with aether-vfs's 32-bit
+fixture launched from a 64-bit session; no real 32-bit game has been launched yet. The plan:
 
 aether-vfs gains an x86 build: `vfs-ntlayout` with 32-bit layouts, the shim and its hooks, and
 `vfs-injector32.exe`. A 64-bit Vortex launches a 32-bit game through the 32-bit injector; the ring

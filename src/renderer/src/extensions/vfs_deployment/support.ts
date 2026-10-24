@@ -4,7 +4,8 @@ import * as path from "path";
 import type { IState } from "../../types/IState";
 import { getGame } from "../gamemode_management/util/getGame";
 import type { IUnavailableReason } from "../mod_management/types/IDeploymentMethod";
-import { aetherLoadError } from "./aether";
+import { aetherLoadError, loadAether } from "./aether";
+import { canMount } from "./mounts";
 
 export type ImageArch = "x64" | "x86" | "other";
 
@@ -72,8 +73,45 @@ export function gameExecutable(state: IState, gameId: string): string | undefine
   }
 }
 
+/**
+ * Linux mounts the game's folders (FUSE), so any game works, native or under Proton; the
+ * machine needs FUSE, and a Flatpak Vortex cannot mount from its sandbox yet.
+ */
+function linuxSupport(state: IState, gameId: string): IUnavailableReason | undefined {
+  if (process.env.IS_FLATPAK === "true") {
+    return {
+      description: (t) =>
+        t("The virtual file system cannot mount game folders from the Flatpak sandbox yet."),
+    };
+  }
+  const loadError = aetherLoadError();
+  if (loadError !== undefined) {
+    return {
+      description: (t) =>
+        t("The virtual file system could not be loaded: {{error}}", {
+          replace: { error: loadError },
+        }),
+      solution: (t) => t("Reinstall Vortex to restore its virtual file system files."),
+    };
+  }
+  if (!canMount()) {
+    return {
+      description: (t) =>
+        t("FUSE, which the virtual file system mounts game folders with, is missing."),
+      solution: (t) => t("Install your distribution's fuse3 package, then restart Vortex."),
+    };
+  }
+  if (state.settings.gameMode.discovered[gameId]?.path === undefined) {
+    return { description: (t) => t("The game has not been found yet.") };
+  }
+  return undefined;
+}
+
 /** Whether the virtual file system can serve `gameId`; `undefined` when it can. */
 export function vfsSupport(state: IState, gameId: string): IUnavailableReason | undefined {
+  if (process.platform === "linux") {
+    return linuxSupport(state, gameId);
+  }
   if (process.platform !== "win32") {
     return {
       description: (t) => t("The virtual file system is not available on this platform yet."),
@@ -109,8 +147,15 @@ export function vfsSupport(state: IState, gameId: string): IUnavailableReason | 
     return undefined;
   }
   if (arch === "x86") {
+    // A 32-bit game gets the 32-bit shim (and its injector) from the `x86` folder beside the
+    // 64-bit one (aether-vfs's X86_ARTIFACTS_DIR).
+    const dir = loadAether()?.dir;
+    if (dir !== undefined && fs.existsSync(path.join(dir, "x86", "vfs_shim_dll.dll"))) {
+      return undefined;
+    }
     return {
-      description: (t) => t("The virtual file system does not support 32-bit games yet."),
+      description: (t) => t("The virtual file system's 32-bit files are missing."),
+      solution: (t) => t("Reinstall Vortex to restore its virtual file system files."),
     };
   }
   return {

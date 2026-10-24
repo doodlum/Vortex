@@ -2,12 +2,22 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { afterAll, describe, expect, it } from "vitest";
-
-import { imageArch } from "./support";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vortex-vfs-arch-"));
 afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+const aetherDir = path.join(dir, "aether");
+
+vi.mock("./aether", () => ({
+  aetherLoadError: () => undefined,
+  loadAether: () => ({ dir: aetherDir }),
+}));
+vi.mock("../gamemode_management/util/getGame", () => ({
+  getGame: () => ({ executable: () => "x86.exe" }),
+}));
+
+import type { IState } from "../../types/IState";
+import { imageArch, vfsSupport } from "./support";
 
 /** A minimal PE image: the DOS header pointing at a PE signature and machine field. */
 function writeImage(name: string, machine: number): string {
@@ -42,5 +52,21 @@ describe("imageArch", () => {
     writeImage("changes.exe", 0x8664);
     fs.utimesSync(file, later, later);
     expect(imageArch(file)).toBe("x64");
+  });
+});
+
+describe.runIf(process.platform === "win32")("a 32-bit game", () => {
+  const state = {
+    settings: { gameMode: { discovered: { old: { path: dir } } } },
+  } as unknown as IState;
+
+  it("is served once the 32-bit shim is installed", () => {
+    writeImage("x86.exe", 0x14c);
+    expect(vfsSupport(state, "old")?.description((s: string) => s)).toBe(
+      "The virtual file system's 32-bit files are missing.",
+    );
+    fs.mkdirSync(path.join(aetherDir, "x86"), { recursive: true });
+    fs.writeFileSync(path.join(aetherDir, "x86", "vfs_shim_dll.dll"), "");
+    expect(vfsSupport(state, "old")).toBeUndefined();
   });
 });
