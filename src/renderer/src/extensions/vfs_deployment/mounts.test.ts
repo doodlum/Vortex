@@ -44,7 +44,7 @@ vi.mock("./roots", () => ({
 }));
 
 import type { IExtensionApi } from "../../types/IExtensionContext";
-import { isMounted, mountGame, unmountGame } from "./mounts";
+import { flatpakHostPath, hostFusermountScript, isMounted, mountGame, unmountGame } from "./mounts";
 
 const platform = process.platform;
 beforeAll(() => {
@@ -164,5 +164,38 @@ describe("the Linux mounts", () => {
     const old = new Date(Date.now() - 60000);
     fs.utimesSync(status, old, old);
     expect(isMounted(api, "z")).toBe(false);
+  });
+});
+
+describe("a Flatpak's host FUSE helper", () => {
+  const info = [
+    "[Application]",
+    "name=com.nexusmods.vortex",
+    "",
+    "[Instance]",
+    "app-path=/home/u/.local/share/flatpak/app/com.nexusmods.vortex/x86_64/stable/0123abcd/files",
+    "",
+  ].join("\n");
+
+  it("finds an app file on the host through the branch's active commit", () => {
+    expect(
+      flatpakHostPath(
+        info,
+        "/app/main/resources/app.asar.unpacked/assets/aether-vfs/fusermount-relay",
+      ),
+    ).toBe(
+      "/home/u/.local/share/flatpak/app/com.nexusmods.vortex/x86_64/stable/active/files/main/resources/app.asar.unpacked/assets/aether-vfs/fusermount-relay",
+    );
+    expect(flatpakHostPath(info, "/usr/bin/sh")).toBeUndefined();
+    expect(flatpakHostPath("[Application]\n", "/app/x")).toBeUndefined();
+  });
+
+  it("mounts through the relay on the host, and unmounts with fusermount3", () => {
+    const script = hostFusermountScript("/home/u/it's here/fusermount-relay");
+    expect(script).toContain(
+      `--forward-fd="$_FUSE_COMMFD" --env=_FUSE_COMMFD="$_FUSE_COMMFD" '/home/u/it'\\''s here/fusermount-relay' "$@"`,
+    );
+    expect(script).toContain('exec flatpak-spawn --host fusermount3 "$@"');
+    expect(hostFusermountScript(undefined)).toContain('"$_FUSE_COMMFD" fusermount3 "$@"');
   });
 });

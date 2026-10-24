@@ -146,15 +146,29 @@ whose native addon cannot be swapped. While a folder is mounted, an autostart en
 the mods are there after a restart, as links were; unmounting removes it. Removing the spec unmounts and ends the helper. A deploy
 unmounts first and waits for the helper to end, so the deployment reads the game's own files,
 then mounts the result; a purge unmounts. Vortex's support check needs `/dev/fuse` and
-`fusermount3` (package `fuse3`). A Flatpak Vortex mounts through the host's `fusermount3` (a
-wrapper forwarding the FUSE socket with `flatpak-spawn --host`) and starts its helper with
-`flatpak-spawn`, in a new sandbox of the app that does not end with Vortex.
+`fusermount3` (package `fuse3`). Ubuntu's AppArmor profile for `fusermount3` only mounts under
+`$HOME`, `/mnt`, `/media`, `/tmp` and `/run/user`, whatever the package: a game elsewhere needs
+a local rule (`/etc/apparmor.d/local/fusermount3`).
 
-Verified on Ubuntu with the `vfs-nightly-20261024.2` tar.gz and a copy of Stardew Valley (a
-Proton game), before the helper: the method was chosen by itself, a deploy unmounted and mounted
-again, the mod read through the mount from a shell and from inside Steam's Snap
-(`snap run --shell steam`, so Steam installed as a Snap sees the mounts) and the game folder was
-unchanged. `mounts.test.ts` runs the real helper with a fake addon.
+A Flatpak Vortex has no `/dev/fuse`: aether-vfs then mounts through `$FUSERMOUNT_PATH`, a
+wrapper that runs aether-vfs's `fusermount-relay` on the host (`flatpak-spawn --host`, at the
+host path of the app's files that `/.flatpak-info` gives). The relay gives the host's
+`fusermount3` a socket of its own and passes the FUSE device back over the socket the sandbox
+forwarded: Ubuntu's profile refuses a socket from inside bubblewrap (`file_inherit`, peer
+`bwrap`), so forwarding the sandbox's socket straight to `fusermount3` fails there. The
+helper is started with `flatpak-spawn`, in a new sandbox of the app that does not end with
+Vortex, and its login entry runs `flatpak run --command=...`. Verified in the installed
+Flatpak on Ubuntu 26.04 with the relay and binding built from aether-vfs's
+`vortex-integration`.
+
+Verified on Ubuntu 26.04 with the `vfs-nightly-20261024.7` tar.gz and the real Stardew Valley
+install (a Windows game under Steam's Proton, Steam installed as a Snap): the method was chosen
+by itself; a deploy served a mod's replaced title texture through the mount; Vortex exited and
+the mount stayed; ending the helper as a logout does unmounted, and running the login entry's
+command mounted again; Steam's own launch (`steam://rungameid`, Vortex closed) started the game,
+whose mount namespace (`/proc/<pid>/root`) served the mod's texture; a purge unmounted and
+removed the login entry, and the game folder was unchanged. `mounts.test.ts` runs the real
+helper with a fake addon.
 
 The original plan follows.
 
@@ -182,10 +196,10 @@ is fixed-width, so the same director serves both (asserted at compile time on bo
 ## Packaging
 
 `src/main/copy-assets.mjs` installs aether-vfs into `assets/aether-vfs` (unpacked from the
-asar): the Node binding and the shim, downloaded from a pinned release of doodlum/aether-vfs
+asar): the Node binding and the shim (Windows) or the relay (Linux), downloaded from a pinned release of doodlum/aether-vfs
 (`vortex-<sha>`, published by its `vortex-artifacts` workflow for every push to a `vortex-*`
 branch) and checked against pinned SHA-256 sums. To move to a newer aether-vfs, pin that
-release's tag and the sums from its `SHA256SUMS-*.txt`. `VORTEX_AETHER_VFS_DIR` makes a
+release's tag and the sums from its `SHA256SUMS-*.txt`; a program's `mode` makes it executable. `VORTEX_AETHER_VFS_DIR` makes a
 development build load a local aether-vfs build instead.
 
 The fork's `aether-vfs-nightly.yml` keeps this branch merged with `linux` and publishes

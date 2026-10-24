@@ -319,30 +319,63 @@ function hostCanMount(): boolean {
 }
 
 /**
- * A Flatpak Vortex mounts through the host's `fusermount3`: the sandbox has none and cannot
- * mount. aether-vfs runs `$FUSERMOUNT_PATH`, which forwards the socket the FUSE device comes
- * back on (`_FUSE_COMMFD`) to the host helper. The mount is then made on the host, where the
- * games and Steam run; Vortex itself sees the deployment through its file view.
+ * Where a file of a Flatpak app (`/app/...`) is on the host: under the app's files, which
+ * `/.flatpak-info` names (`app-path`, the installed commit). The branch's `active` link is used
+ * instead of the commit, so that the path survives an update of the app.
  */
+export function flatpakHostPath(flatpakInfo: string, inside: string): string | undefined {
+  const appPath = /^app-path=(.+)$/m.exec(flatpakInfo)?.[1]?.trim();
+  if (appPath === undefined || !inside.startsWith("/app/")) {
+    return undefined;
+  }
+  const files = path.posix.join(path.posix.dirname(path.posix.dirname(appPath)), "active", "files");
+  return path.posix.join(files, path.posix.relative("/app", inside));
+}
+
+/** A word for sh, whatever it holds. */
+const shellWord = (word: string) => `'${word.replace(/'/g, `'\\''`)}'`;
+
+/**
+ * The `$FUSERMOUNT_PATH` of a Flatpak Vortex. The sandbox has no `/dev/fuse` and cannot mount:
+ * the host's `fusermount3` mounts, sending the FUSE device back over the socket aether-vfs
+ * forwards (`_FUSE_COMMFD`). Ubuntu's AppArmor profile for `fusermount3` refuses a socket from
+ * inside the sandbox, so aether-vfs's `fusermount-relay` runs on the host (a static program in
+ * the app's files), gives `fusermount3` a socket of its own and passes the device on. Unmounting
+ * needs no socket.
+ */
+export function hostFusermountScript(relay: string | undefined): string {
+  const mount = relay === undefined ? "fusermount3" : shellWord(relay);
+  return [
+    "#!/bin/sh",
+    'if [ -n "$_FUSE_COMMFD" ]; then',
+    `  exec flatpak-spawn --host --forward-fd="$_FUSE_COMMFD" --env=_FUSE_COMMFD="$_FUSE_COMMFD" ${mount} "$@"`,
+    "fi",
+    'exec flatpak-spawn --host fusermount3 "$@"',
+    "",
+  ].join("\n");
+}
+
+/** Point aether-vfs at the host's FUSE helper (above), in a Flatpak. */
 function useHostFusermount(): void {
   if (!isFlatpak() || process.env.FUSERMOUNT_PATH !== undefined) {
     return;
   }
+  let relay: string | undefined;
+  const inside = loadAether()?.dir;
+  if (inside !== undefined && fs.existsSync(path.join(inside, "fusermount-relay"))) {
+    try {
+      relay = flatpakHostPath(
+        fs.readFileSync("/.flatpak-info", "utf8"),
+        path.join(inside, "fusermount-relay"),
+      );
+    } catch {
+      relay = undefined;
+    }
+  }
   // Beside the helpers, which a Flatpak helper sandbox shares (its /tmp is its own).
   const wrapper = path.join(mountsDir(), "host-fusermount3");
   fs.mkdirSync(path.dirname(wrapper), { recursive: true });
-  fs.writeFileSync(
-    wrapper,
-    [
-      "#!/bin/sh",
-      'if [ -n "$_FUSE_COMMFD" ]; then',
-      '  exec flatpak-spawn --host --forward-fd="$_FUSE_COMMFD" --env=_FUSE_COMMFD="$_FUSE_COMMFD" fusermount3 "$@"',
-      "fi",
-      'exec flatpak-spawn --host fusermount3 "$@"',
-      "",
-    ].join("\n"),
-    { mode: 0o755 },
-  );
+  fs.writeFileSync(wrapper, hostFusermountScript(relay), { mode: 0o755 });
   fs.chmodSync(wrapper, 0o755);
   process.env.FUSERMOUNT_PATH = wrapper;
 }

@@ -2,7 +2,7 @@
 
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join, basename, dirname } from "node:path";
 
@@ -26,35 +26,42 @@ const digest = (data) => createHash("sha256").update(data).digest("hex");
 // aether-vfs, the virtual file system deployment runs on (extensions/vfs_deployment): its Node
 // binding and the shim it injects, as published by doodlum/aether-vfs's vortex-artifacts
 // workflow, one release per commit. Each file is pinned by its SHA-256 and installed under the
-// name the extension loads. `VORTEX_AETHER_VFS_DIR` points a development build at a local one.
+// name the extension loads (and `mode`, for a program). `VORTEX_AETHER_VFS_DIR` points a
+// development build at a local one.
 const AETHER_VFS = {
   url: "https://github.com/doodlum/aether-vfs/releases/download",
-  tag: "vortex-7859a4d0e8e8",
+  tag: "vortex-7e6bf12d1e23",
   files: {
     "win32-x64": {
       "aether_vfs_node-win32-x64.node": {
         name: "aether_vfs_node.node",
-        sha256: "9537200fcdf21f1698eef896530a95600724def066f40709c75280fe8d9c9062",
+        sha256: "1f46c1b87d619095422e2f77613f26aada7d4b7f66b454a6c19accf8e330d5cd",
       },
       "vfs_shim_dll-win32-x64.dll": {
         name: "vfs_shim_dll.dll",
-        sha256: "0df75dff18752b0eab353a5009ad13123e0e5b688267a03e327cfa2b1ac35eb2",
+        sha256: "fc1d3025d5b05cb9e39287badbb6c90021927aee81f6ab2a3187f3f71643fda6",
       },
       // 32-bit games get the 32-bit shim, and its injector, from the x86 folder.
       "vfs_shim_dll-win32-ia32.dll": {
         name: "x86/vfs_shim_dll.dll",
-        sha256: "d35553f15ea2fba4e12bc38343a6bdbfc7c9ee3e7d171bba95193a8684f193f8",
+        sha256: "2c5018571db75eb7ab9d8091a10ec0b62fc6878ea7f9038506ceedf09d7ebdc7",
       },
       "vfs-injector-win32-ia32.exe": {
         name: "x86/vfs-injector.exe",
-        sha256: "ef7c299cf900146ec024a90c06a465b79e47e2c6716c927adb16125435fc9550",
+        sha256: "4c4f56b0bfd518f777949e135c04c96bd7b5b856f37b075160d8fea2432e1d06",
       },
     },
-    // Linux mounts game folders (FUSE): the binding alone, no shim.
+    // Linux mounts game folders (FUSE): the binding, no shim, and the relay a Flatpak mounts
+    // through on the host (vfs_deployment/mounts.ts).
     "linux-x64": {
       "aether_vfs_node-linux-x64.node": {
         name: "aether_vfs_node.node",
-        sha256: "d9f220e64d7d4419671187e8ca21741a640ec28335eba0912a283c0c00b765ed",
+        sha256: "9daa1afc6432b3573de0994a8652a1d012dadc59496826712cf3480e51889cbd",
+      },
+      "fusermount-relay-linux-x64": {
+        name: "fusermount-relay",
+        sha256: "6ffe01b9d95130d78480f0d1b1b16e21c0465e1e6a0a3174b20a5f07d00b87aa",
+        mode: 0o755,
       },
     },
   },
@@ -115,7 +122,7 @@ if (process.platform === "linux" && process.arch === "x64") {
     console.log(`no aether-vfs build for ${process.platform}-${process.arch}`);
   } else {
     await mkdir(destination, { recursive: true });
-    for (const [asset, { name, sha256 }] of Object.entries(files)) {
+    for (const [asset, { name, sha256, mode }] of Object.entries(files)) {
       const cached = join(WORKSPACE, "node_modules/.cache/aether-vfs", AETHER_VFS.tag, asset);
       if (!existsSync(cached) || digest(await readFile(cached)) !== sha256) {
         const response = await fetch(`${AETHER_VFS.url}/${AETHER_VFS.tag}/${asset}`);
@@ -126,6 +133,7 @@ if (process.platform === "linux" && process.arch === "x64") {
         await writeFile(cached, data);
       }
       await copy(cached, join(destination, name));
+      if (mode !== undefined) await chmod(join(destination, name), mode);
     }
   }
 }
