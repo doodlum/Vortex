@@ -30,25 +30,25 @@ const digest = (data) => createHash("sha256").update(data).digest("hex");
 // development build at a local one.
 const AETHER_VFS = {
   url: "https://github.com/doodlum/aether-vfs/releases/download",
-  tag: "vortex-7e6bf12d1e23",
+  tag: "vortex-88d3ffe2a5cd",
   files: {
     "win32-x64": {
       "aether_vfs_node-win32-x64.node": {
         name: "aether_vfs_node.node",
-        sha256: "1f46c1b87d619095422e2f77613f26aada7d4b7f66b454a6c19accf8e330d5cd",
+        sha256: "aeb6a5fa3c8d1e48e91ae6e75e989d8305396aa70086f1660b602d095b0b695e",
       },
       "vfs_shim_dll-win32-x64.dll": {
         name: "vfs_shim_dll.dll",
-        sha256: "fc1d3025d5b05cb9e39287badbb6c90021927aee81f6ab2a3187f3f71643fda6",
+        sha256: "8a6292b6fd31a48c78bfd17b0197b2d0dc32647041f307f792a8decd2a00d330",
       },
       // 32-bit games get the 32-bit shim, and its injector, from the x86 folder.
       "vfs_shim_dll-win32-ia32.dll": {
         name: "x86/vfs_shim_dll.dll",
-        sha256: "2c5018571db75eb7ab9d8091a10ec0b62fc6878ea7f9038506ceedf09d7ebdc7",
+        sha256: "8bce2cfc47b055f67ef988e0dd57bb7faba90f242de5753423b3c29e60c382fd",
       },
       "vfs-injector-win32-ia32.exe": {
         name: "x86/vfs-injector.exe",
-        sha256: "4c4f56b0bfd518f777949e135c04c96bd7b5b856f37b075160d8fea2432e1d06",
+        sha256: "0dec274ad8e51ba42ba5d4e709677e88b21320d003129ca25641e0e81dd65bb0",
       },
     },
     // Linux mounts game folders (FUSE): the binding, no shim, and the relay a Flatpak mounts
@@ -56,11 +56,11 @@ const AETHER_VFS = {
     "linux-x64": {
       "aether_vfs_node-linux-x64.node": {
         name: "aether_vfs_node.node",
-        sha256: "9daa1afc6432b3573de0994a8652a1d012dadc59496826712cf3480e51889cbd",
+        sha256: "a0b57365e2124da5f38693044a6eb41c165ca02a8de991648a3a18c37950f365",
       },
       "fusermount-relay-linux-x64": {
         name: "fusermount-relay",
-        sha256: "6ffe01b9d95130d78480f0d1b1b16e21c0465e1e6a0a3174b20a5f07d00b87aa",
+        sha256: "7e09c8881c7a2d0349c7995a136935f2b4153b16b98a56a37ccd55a40c6994fb",
         mode: 0o755,
       },
     },

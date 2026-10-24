@@ -120,10 +120,16 @@ Every program Vortex starts for a game runs through one session per game (`@aeth
   start becomes "hide" for a virtually deployed game (its session lives in Vortex). FNIS and
   the Witcher 3 script merger name their game, so they run in its session wherever they are.
   7 Days to Die's custom user data folder, which Steam's launcher passes, is passed on the
-  command line of a direct start.
-- Known gaps: a launcher-specific option a direct start drops (Halo MCC's Steam "no EAC"
-  choice); Epic games that insist on starting through the Epic launcher; "Open folder" actions
-  open the real folder, which does not show the mods.
+  command line of a direct start. A Steam launch option a game's launcher asks for
+  (`parameters: ["option2"]`) is honoured too: its program and arguments come from Steam's
+  cache, `appcache/appinfo.vdf` (`util/steamAppInfo.ts`), so Halo MCC starts
+  `mcc-win64-shipping.exe -no-eac` in the session instead of the EAC launcher.
+- Known gaps, each outside what per-launch injection can reach:
+    - Epic games that insist on starting through the Epic launcher are started by it, not by
+      Vortex, so they never enter the session.
+    - "Open folder" opens the real folder, which does not show the mods. Explorer windows are
+      created by an existing Explorer or a DCOM server, not by a process Vortex starts; even
+      `explorer.exe /separate` started in the session hands the window to that server.
 
 ### 4. Linux: a FUSE mount
 
@@ -195,7 +201,9 @@ On Linux the view is a FUSE filesystem served by the same provider graph (a new 
 
 Implemented: a 32-bit game gets the 32-bit shim and injector from `assets/aether-vfs/x86`, and
 Vortex's support check accepts it when they are installed. Verified with aether-vfs's 32-bit
-fixture launched from a 64-bit session; no real 32-bit game has been launched yet. The plan:
+fixture launched from a 64-bit session, and with the real 32-bit `SysWOW64\cmd.exe`, `xcopy` and
+`robocopy` reading and copying a served mod file by name and by wildcard. No real 32-bit game
+has been launched yet. The plan:
 
 aether-vfs gains an x86 build: `vfs-ntlayout` with 32-bit layouts, the shim and its hooks, and
 `vfs-injector32.exe`. A 64-bit Vortex launches a 32-bit game through the 32-bit injector; the ring

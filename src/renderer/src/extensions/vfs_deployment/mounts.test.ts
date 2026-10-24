@@ -126,8 +126,9 @@ describe("the Linux mounts", () => {
     expect(isMounted(api, "x")).toBe(false);
     expect(fs.existsSync(entry)).toBe(false);
     expect(calls("x").at(-1)).toBe("close");
-    expect(alive(pid)).toBe(false);
     expect(fs.existsSync(path.join(helperDir("x"), "status.json"))).toBe(false);
+    // The helper removes its status as its last act; the process ends a moment later.
+    await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 5000 });
   }, 30000);
 
   it("replaces a helper another Vortex version started, whose addon stays loaded", async () => {
@@ -137,7 +138,7 @@ describe("the Linux mounts", () => {
     fakes.version = "1.1.0";
     await mountGame(api, "x");
     expect(helperPid("x")).not.toBe(pid);
-    expect(alive(pid)).toBe(false);
+    await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 5000 });
     expect(isMounted(api, "x")).toBe(true);
     fakes.version = "1.0.0";
     await unmountGame(api, "x");
