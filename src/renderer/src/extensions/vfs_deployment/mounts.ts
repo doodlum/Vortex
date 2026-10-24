@@ -1,3 +1,4 @@
+import { spawnSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -50,6 +51,7 @@ export async function mountGame(api: IExtensionApi, gameId: string): Promise<voi
   }
   const stateDir = path.join(getVortexPath("temp"), "vfs-mounts", `${gameId}-${process.pid}`);
   try {
+    useHostFusermount();
     const session = aether.createSession(stateDir, gameRoots(game));
     session.start();
     mounts.set(gameId, session);
@@ -94,10 +96,56 @@ export function unmountAll(): void {
 
 /** Whether this machine can mount: `/dev/fuse` and `fusermount3` (package fuse3). */
 export function canMount(): boolean {
+  if (isFlatpak()) {
+    return hostCanMount();
+  }
   if (!fs.existsSync("/dev/fuse")) {
     return false;
   }
   return (process.env.PATH ?? "")
     .split(path.delimiter)
     .some((dir) => dir !== "" && fs.existsSync(path.join(dir, "fusermount3")));
+}
+
+const isFlatpak = () => process.env.IS_FLATPAK === "true";
+
+let hostMount: boolean | undefined;
+
+/** Flatpak: whether the host has FUSE, asked once (the sandbox has neither). */
+function hostCanMount(): boolean {
+  hostMount ??=
+    spawnSync(
+      "flatpak-spawn",
+      ["--host", "sh", "-c", "test -e /dev/fuse && command -v fusermount3"],
+      { timeout: 10000 },
+    ).status === 0;
+  return hostMount;
+}
+
+/**
+ * A Flatpak Vortex mounts through the host's `fusermount3`: the sandbox has none and cannot
+ * mount. aether-vfs runs `$FUSERMOUNT_PATH`, which forwards the socket the FUSE device comes
+ * back on (`_FUSE_COMMFD`) to the host helper. The mount is then made on the host, where the
+ * games and Steam run; Vortex itself sees the deployment through its file view.
+ */
+function useHostFusermount(): void {
+  if (!isFlatpak() || process.env.FUSERMOUNT_PATH !== undefined) {
+    return;
+  }
+  const wrapper = path.join(getVortexPath("temp"), "vfs-host-fusermount3");
+  fs.mkdirSync(path.dirname(wrapper), { recursive: true });
+  fs.writeFileSync(
+    wrapper,
+    [
+      "#!/bin/sh",
+      'if [ -n "$_FUSE_COMMFD" ]; then',
+      '  exec flatpak-spawn --host --forward-fd="$_FUSE_COMMFD" --env=_FUSE_COMMFD="$_FUSE_COMMFD" fusermount3 "$@"',
+      "fi",
+      'exec flatpak-spawn --host fusermount3 "$@"',
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  fs.chmodSync(wrapper, 0o755);
+  process.env.FUSERMOUNT_PATH = wrapper;
 }

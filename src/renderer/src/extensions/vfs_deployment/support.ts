@@ -75,15 +75,9 @@ export function gameExecutable(state: IState, gameId: string): string | undefine
 
 /**
  * Linux mounts the game's folders (FUSE), so any game works, native or under Proton; the
- * machine needs FUSE, and a Flatpak Vortex cannot mount from its sandbox yet.
+ * machine needs FUSE (a Flatpak Vortex uses the host's, mounts.ts).
  */
 function linuxSupport(state: IState, gameId: string): IUnavailableReason | undefined {
-  if (process.env.IS_FLATPAK === "true") {
-    return {
-      description: (t) =>
-        t("The virtual file system cannot mount game folders from the Flatpak sandbox yet."),
-    };
-  }
   const loadError = aetherLoadError();
   if (loadError !== undefined) {
     return {
