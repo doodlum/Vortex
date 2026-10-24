@@ -34,6 +34,12 @@ const formats: { [version: number]: ManifestFormat } = {
   1: format_1,
 };
 
+/** Where a virtual method keeps a mod type's manifest: in staging, never in the target. */
+export function virtualManifestPath(stagingPath: string, modType: string): string {
+  const typeTag = modType !== undefined && modType.length > 0 ? modType + "." : "";
+  return path.join(stagingPath, `vortex.vfs.deployment.${typeTag}json`);
+}
+
 /**
  * A mod type's manifest in the deployment target and its two backups in the staging folder.
  *
@@ -51,7 +57,7 @@ function manifestPaths(
   const typeTag = modType !== undefined && modType.length > 0 ? modType + "." : "";
   if (virtual) {
     return {
-      manifestPath: path.join(stagingPath, `vortex.vfs.deployment.${typeTag}json`),
+      manifestPath: virtualManifestPath(stagingPath, modType),
       backupPath: path.join(stagingPath, `vortex.vfs.deployment.${typeTag}backup.json`),
       binaryBackupPath: path.join(stagingPath, `vortex.vfs.deployment.${typeTag}msgpack`),
     };
