@@ -120,6 +120,34 @@ describe("pinned QuickBMS build assets", () => {
     expect(f.extract).not.toHaveBeenCalled();
     await expect(fs.stat(f.output)).rejects.toMatchObject({ code: "ENOENT" });
   });
+  it("tries a failed connection or a server error again", async () => {
+    const f = fixture();
+    const good = await f.fetcher();
+    f.fetcher
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce({ ok: false, status: 503, body: null })
+      .mockResolvedValueOnce(good);
+    const retry = { attempts: 3, retryDelayMs: 0 };
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await prepareQuickBms({ platform: "linux", arch: "x64", ...f, retry });
+    expect(await fs.readFile(f.output)).toEqual(f.executable);
+    expect(f.fetcher).toHaveBeenCalledTimes(4);
+  });
+  it("gives up after the last attempt and on a refusal", async () => {
+    const f = fixture();
+    const retry = { attempts: 2, retryDelayMs: 0 };
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    f.fetcher.mockRejectedValue(new TypeError("fetch failed"));
+    await expect(prepareQuickBms({ platform: "linux", arch: "x64", ...f, retry })).rejects.toThrow(
+      "fetch failed",
+    );
+    expect(f.fetcher).toHaveBeenCalledTimes(2);
+    f.fetcher.mockReset().mockResolvedValue({ ok: false, status: 404, body: null });
+    await expect(prepareQuickBms({ platform: "linux", arch: "x64", ...f, retry })).rejects.toThrow(
+      "download failed (404)",
+    );
+    expect(f.fetcher).toHaveBeenCalledOnce();
+  });
   it("rejects changed archive bytes before invoking the extractor", async () => {
     const f = fixture();
     f.pins.linux.archiveSha256 = "0".repeat(64);
