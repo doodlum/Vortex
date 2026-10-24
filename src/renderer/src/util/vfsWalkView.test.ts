@@ -105,6 +105,14 @@ describe("turbowalk's view of a virtual deployment", () => {
     ]);
   });
 
+  it("lists the deployment to a discovery walk too, so a tool a mod provides is found", async () => {
+    // Discovery asks for directory terminators and looks for tools' files (SMAPI's
+    // StardewModdingAPI.exe, xNVSE's nvse_loader.exe), which mods deploy.
+    const entries = await listed(game, { terminators: true });
+    expect(entries.get(path.join("Data", "mod.esp"))?.isDirectory).toBe(false);
+    expect(entries.has("Game.exe")).toBe(true);
+  });
+
   it("walks the real disk alone once the deployment is purged", async () => {
     setVirtualFiles("game", [game], []);
     expect([...(await listed(game)).keys()].sort()).toEqual(

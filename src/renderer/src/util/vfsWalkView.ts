@@ -8,8 +8,10 @@
  * `turbowalk` is wrapped when it is first loaded, not here: its module replaces the global
  * `Promise` with Bluebird, and Vortex's startup depends on when that happens.
  *
- * A walk that asks for directory terminators gets the real disk only: the one caller (game
- * discovery) looks for game executables, which a deployment does not provide.
+ * A walk that asks for directory terminators (discovery) gets the deployment too: tools are
+ * found by walking the game folder for their files, and a mod often provides them (SMAPI,
+ * xNVSE's and SKSE's loaders). The deployed entries come without terminators of their own,
+ * which only discovery's progress estimate counts.
  */
 import * as fsModule from "fs";
 import type * as fsType from "fs";
@@ -59,9 +61,7 @@ export function viewWalk(walk: Walk): Walk {
   const wrapped: Walk = (walkPath, progress, options, setCancel) => {
     const opts = options ?? {};
     const virtual =
-      typeof walkPath === "string" && opts.terminators !== true
-        ? virtualEntriesUnder(walkPath, opts.recurse !== false)
-        : [];
+      typeof walkPath === "string" ? virtualEntriesUnder(walkPath, opts.recurse !== false) : [];
     if (virtual.length === 0) {
       return walk(walkPath, progress, options, setCancel);
     }
