@@ -51,11 +51,22 @@ function resolveExePath(api: types.IExtensionApi): string {
   return path.join(stagingFolder, lsLib.installationPath, "tools", "divine.exe");
 }
 
+/**
+ * The real file behind a pak path. A pak a virtual deployment serves exists only in Vortex's
+ * view of the mods folder; divine, a program of its own, sees the real disk. Vortex versions
+ * without virtual deployment have no `util.realFilePath`, and their paths are real already.
+ */
+function realPath(filePath: string | undefined): string | undefined {
+  const resolve = (util as { realFilePath?: (input: string) => string }).realFilePath;
+  return filePath === undefined || resolve === undefined ? filePath : resolve(filePath);
+}
+
 async function runDivine(
   api: types.IExtensionApi,
   action: DivineAction,
-  divineOpts: IDivineOptions,
+  options: IDivineOptions,
 ): Promise<IDivineOutput> {
+  const divineOpts: IDivineOptions = { ...options, source: realPath(options.source) };
   // Capture the signal at enqueue time. If the controller is replaced by
   // abortDivineOperations() while this call is queued or retrying, the
   // captured signal stays aborted and every attempt fails fast.

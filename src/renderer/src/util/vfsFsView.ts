@@ -268,6 +268,16 @@ export function clearDeletions(deployed: string[]): void {
   if (any) rebuild();
 }
 
+/**
+ * The real file that holds what `filePath` shows: for a file a virtual deployment serves, its
+ * staged file (or the copy a program wrote over it), otherwise `filePath` itself. For handing
+ * a game-folder path to a program Vortex spawns without a session (an archive tool, say),
+ * which sees only the real disk.
+ */
+export function realFilePath(filePath: string): string {
+  return virtualSource(filePath) ?? filePath;
+}
+
 /** Whether the deployment itself (a mod, not a program's write) has a file at `filePath`. */
 export function isModFile(filePath: string): boolean {
   return index.mods.has(fold(filePath));

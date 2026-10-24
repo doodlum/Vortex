@@ -296,6 +296,21 @@ function main(context: types.IExtensionContext) {
     },
   });
 
+  // A custom user data folder reaches the game through Steam's launcher settings
+  // (launchersettings.json). A game Vortex starts itself (as it does when mods are deployed
+  // virtually) is given the folder on its command line instead.
+  context.registerStartHook(50, "7dtd-user-data-folder", (call) => {
+    const udf = util.getSafe(context.api.getState(), ["settings", "7daystodie", "udf"], undefined);
+    if (
+      udf === undefined ||
+      path.basename(call.executable).toLowerCase() !== gameExecutable().toLowerCase() ||
+      call.args.some((arg) => arg.toLowerCase().startsWith("-userdatafolder"))
+    ) {
+      return Promise.resolve(call);
+    }
+    return Promise.resolve({ ...call, args: [...call.args, `-UserDataFolder=${udf}`] });
+  });
+
   context.registerLoadOrder({
     deserializeLoadOrder: () => deserialize(context),
     serializeLoadOrder: ((loadOrder, prev) => serialize(context, loadOrder, prev)) as any,

@@ -2462,13 +2462,30 @@ class ExtensionManager {
         })
         .then(() => {
           // A registered launch runner (a virtual file system, say) may start the program
-          // itself; it reports the pid and exit through the same callbacks a spawn does.
+          // itself; it reports the pid and exit through the same callbacks a spawn does. It is
+          // given the arguments as a spawn is, with tool variables ({PROFILE_PATH}...) applied.
+          const vars = this.mToolParameterCBs.reduce(
+            (prev, cb) => ({ ...prev, ...cb({ executable, args, options: { ...options, env } }) }),
+            {},
+          );
           const routed = this.runThroughLaunchRunner(
-            { executable, args, options: { ...options, env } },
+            {
+              executable,
+              args: args.map((arg) => applyVariables(arg, vars)),
+              options: { ...options, env },
+            },
             cwd,
           );
           if (routed !== undefined) {
-            return routed;
+            // A runner's failure is its own: retrying elevated would start the program
+            // outside whatever the runner provides.
+            return routed.catch((err: unknown) =>
+              PromiseBB.reject(
+                getErrorCode(err) === "EACCES"
+                  ? Object.assign(unknownToError(err), { code: "EPERM" })
+                  : err,
+              ),
+            );
           }
           return new PromiseBB<void>((resolve, reject) => {
             const runExe = options.shell ? `"${executable}"` : executable;

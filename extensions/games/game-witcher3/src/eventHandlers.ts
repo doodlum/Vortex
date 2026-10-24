@@ -287,7 +287,8 @@ async function runScriptMerger(api) {
     return Promise.resolve();
   }
 
-  return api.runExecutable(tool.path, [], { suggestDeploy: true }).catch((err) =>
+  // The merger reads the game's deployed scripts: it runs where the game folder shows them.
+  return api.runExecutable(tool.path, [], { gameId: GAME_ID, suggestDeploy: true }).catch((err) =>
     api.showErrorNotification("Failed to run tool", err, {
       allowReport: ["EPERM", "EACCESS", "ENOENT"].indexOf(err.code) !== -1,
     }),

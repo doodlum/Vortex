@@ -140,6 +140,7 @@ import onceCB from "./onceCB";
 import opn from "./opn";
 import relativeTime, { userFriendlyTime } from "./relativeTime";
 import StarterInfo from "./StarterInfo";
+import { realFilePath } from "./vfsFsView";
 // CollectionInstallOutcomeProps: props for the exported collection-install event constructors.
 // ModChangeReason: reason vocabulary referenced by IRemoveModOptions.reason / IEnableOptions.reason.
 export type {
@@ -284,6 +285,7 @@ export {
   pad,
   ProcessCanceled,
   ReduxProp,
+  realFilePath,
   relativeTime,
   removeMods,
   renderModName,

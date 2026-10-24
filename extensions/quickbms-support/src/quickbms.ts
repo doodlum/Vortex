@@ -92,7 +92,19 @@ function validateArguments(
   return Promise.resolve();
 }
 
-function run(command: string, parameters: string[], options: IQBMSOptions): Promise<void> {
+/**
+ * The real file behind a path. An archive a virtual deployment serves exists only in Vortex's
+ * view of the game folder; QuickBMS, a program of its own, sees the real disk (and writes
+ * reach a mod's staged archive, as they did through a link). Vortex versions without virtual
+ * deployment have no `util.realFilePath`, and their paths are real already.
+ */
+function realPath(filePath: string): string {
+  const resolve = (util as { realFilePath?: (input: string) => string }).realFilePath;
+  return resolve === undefined ? filePath : resolve(filePath);
+}
+
+function run(command: string, paths: string[], options: IQBMSOptions): Promise<void> {
+  const parameters = paths.map(realPath);
   let timer: NodeJS.Timeout;
   let isClosed: boolean = false;
   let lastMessageReceived: number;

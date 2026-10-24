@@ -111,9 +111,19 @@ Every program Vortex starts for a game runs through one session per game (`@aeth
   (`Session.setRoot` swaps a root's provider live), so the long-lived LOOT worker follows later
   deploys. A target outside the game folder that did not exist when a program started reaches
   programs started later. Session folders of ended Vortex processes are removed at startup.
-- Native readers checked and left as they are: `exe-version` and the plugin header parser are
-  TypeScript over `fs`; QuickBMS, ARCtool and BG3's divine read staging or the game's own
-  archives, which are real files.
+- Native readers: `exe-version` and the plugin header parser are TypeScript over `fs`, and
+  ARCtool merging reads the game's originals and staging. Programs an extension spawns itself
+  see the real disk, so BG3's divine and QuickBMS are given `util.realFilePath(path)`: the
+  staged (or written) file behind a deployed path, the path itself otherwise.
+- Programs Vortex starts get tool variables expanded before a runner takes them, a runner's
+  failure never falls back to an elevated start outside the session, and "Close Vortex" on
+  start becomes "hide" for a virtually deployed game (its session lives in Vortex). FNIS and
+  the Witcher 3 script merger name their game, so they run in its session wherever they are.
+  7 Days to Die's custom user data folder, which Steam's launcher passes, is passed on the
+  command line of a direct start.
+- Known gaps: a launcher-specific option a direct start drops (Halo MCC's Steam "no EAC"
+  choice); Epic games that insist on starting through the Epic launcher; "Open folder" actions
+  open the real folder, which does not show the mods.
 
 ### 4. Linux: a FUSE mount
 

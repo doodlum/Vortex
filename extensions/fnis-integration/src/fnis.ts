@@ -305,6 +305,8 @@ async function runFNIS(
     args.push("InstantExecute=1");
   }
   await api.runExecutable(tool.path, args, {
+    // FNIS reads the game's deployed animations: it runs where the game folder shows them.
+    gameId: profile.gameId,
     suggestDeploy: false,
     onSpawned: genSpawnedHandler(api) as any,
   });

@@ -250,11 +250,17 @@ class StarterInfo implements IStarterInfo {
     onShowError: OnShowErrorFunc,
     onSpawned: () => void,
   ): Promise<void> {
+    // A game deployed through the virtual file system runs in a session Vortex keeps: closing
+    // Vortex would end it with the game, so Vortex hides instead.
+    const onStart =
+      info.onStart === "close" && api.ext?.vfsLaunchesDirectly?.(info.gameId)
+        ? "hide"
+        : info.onStart;
     const spawned = () => {
       onSpawned();
-      if (["hide", "hide_recover"].includes(info.onStart)) {
+      if (["hide", "hide_recover"].includes(onStart)) {
         void hideWindow();
-      } else if (info.onStart === "close") {
+      } else if (onStart === "close") {
         getApplication().quit();
       }
     };
@@ -265,7 +271,7 @@ class StarterInfo implements IStarterInfo {
       env: info.environment,
       suggestDeploy: true,
       shell: info.shell,
-      detach: info.detach || info.onStart === "close",
+      detach: info.detach || onStart === "close",
       onSpawned: spawned,
       onExit: (code) => recordLaunchExit(info.exePath, code),
     };
