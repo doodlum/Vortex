@@ -3152,6 +3152,9 @@ class ExtensionManager {
       instructions_overlay: () => require("./extensions/instructions_overlay/index.ts"),
       mod_load_order: () => require("./extensions/mod_load_order/index.ts"),
       mod_management: () => require("./extensions/mod_management/index.ts"),
+      // Before the extensions that read game folders at startup (the plugin list): it shows
+      // them their virtual deployment.
+      vfs_deployment: () => require("./extensions/vfs_deployment/index.ts"),
       move_activator: () => require("./extensions/move_activator/index.ts"),
       news_dashlet: () => require("./extensions/news_dashlet/index.ts"),
       nexus_integration: () => require("./extensions/nexus_integration/index.tsx"),
@@ -3181,7 +3184,6 @@ class ExtensionManager {
       symlink_activator_elevate: () => require("./extensions/symlink_activator_elevate/index.ts"),
       test_runner: () => require("./extensions/test_runner/index.ts"),
       tool_variables_base: () => require("./extensions/tool_variables_base/index.ts"),
-      vfs_deployment: () => require("./extensions/vfs_deployment/index.ts"),
       updater: () => require("./extensions/updater/index.ts"),
     };
 

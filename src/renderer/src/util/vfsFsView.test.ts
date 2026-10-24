@@ -4,7 +4,7 @@ import * as path from "node:path";
 
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
-import { install, setVirtualFiles, virtualSource } from "./vfsFsView";
+import { install, onVirtualChange, realStat, setVirtualFiles, virtualSource } from "./vfsFsView";
 
 // A copy of `fs` to wrap, so the real module (shared by every test in this worker) is untouched.
 const fs = {
@@ -118,6 +118,93 @@ describe("the deployed view of fs", () => {
     expect(realFsModule.statSync(staged).mtime.getTime()).toBe(time.getTime());
     expect(realFsModule.existsSync(path.join(game, "Data", "mod.esp"))).toBe(false);
     realFsModule.writeFileSync(staged, "mod plugin");
+  });
+
+  it("ghosts a plugin as a hard link did: the deployed file moves, the staged one stays", async () => {
+    const changes: string[] = [];
+    const stop = onVirtualChange((owner) => changes.push(owner));
+    const deployed = path.join(game, "Data", "mod.esp");
+    const ghosted = deployed + ".ghost";
+    fs.renameSync(deployed, ghosted);
+    expect(fs.existsSync(deployed)).toBe(false);
+    expect(fs.readFileSync(ghosted, "utf8")).toBe("mod plugin");
+    expect(fs.readdirSync(path.join(game, "Data")).sort()).toEqual(["mod.esp.ghost", "textures"]);
+    expect(realFsModule.existsSync(path.join(staging, "mod.esp"))).toBe(true);
+    // Vortex then renames the staged file too: the deployed one follows it.
+    await fs.promises.rename(path.join(staging, "mod.esp"), path.join(staging, "mod.esp.ghost"));
+    expect(fs.readFileSync(ghosted, "utf8")).toBe("mod plugin");
+    expect(virtualSource(ghosted)).toBe(path.join(staging, "mod.esp.ghost"));
+    // And back, through the callback form.
+    await new Promise<void>((resolve, reject) =>
+      fs.rename(ghosted, deployed, (err) => (err ? reject(err) : resolve())),
+    );
+    expect(fs.readFileSync(deployed, "utf8")).toBe("mod plugin");
+    realFsModule.renameSync(path.join(staging, "mod.esp.ghost"), path.join(staging, "mod.esp"));
+    expect(changes.length).toBeGreaterThanOrEqual(3);
+    expect(new Set(changes)).toEqual(new Set(["game"]));
+    stop();
+  });
+
+  it("follows a renamed mod folder in staging", () => {
+    const moved = path.join(root, "staging", "Renamed");
+    fs.renameSync(staging, moved);
+    try {
+      expect(fs.readFileSync(path.join(game, "Data", "textures", "x.dds"), "utf8")).toBe("texture");
+      expect(virtualSource(path.join(game, "Data", "mod.esp"))).toBe(path.join(moved, "mod.esp"));
+    } finally {
+      realFsModule.renameSync(moved, staging);
+    }
+  });
+
+  it("deletes a deployed file from the view only, sparing staging and the game's original", async () => {
+    const original = path.join(game, "Data", "mod.esp");
+    realFsModule.mkdirSync(path.dirname(original), { recursive: true });
+    realFsModule.writeFileSync(original, "game original");
+    try {
+      // The deployed file is the mod's, over the original, as a link that replaced it was.
+      expect(fs.readFileSync(original, "utf8")).toBe("mod plugin");
+      fs.unlinkSync(original);
+      expect(realFsModule.readFileSync(original, "utf8")).toBe("game original");
+      expect(realFsModule.readFileSync(path.join(staging, "mod.esp"), "utf8")).toBe("mod plugin");
+      expect(virtualSource(original)).toBeUndefined();
+      // A folder only mods provide, removed the way fs-extra removes.
+      await fs.promises.rm(path.join(game, "Data", "textures"), { recursive: true, force: true });
+      expect(fs.existsSync(path.join(game, "Data", "textures"))).toBe(false);
+      expect(realFsModule.existsSync(path.join(staging, "textures", "x.dds"))).toBe(true);
+    } finally {
+      realFsModule.rmSync(path.join(game, "Data"), { recursive: true, force: true });
+    }
+  });
+
+  it("wraps a second module (Electron's original-fs) once, sharing its promises", async () => {
+    // graceful-fs, fs-extra and rimraf read through original-fs (requireRemap).
+    const other = {
+      ...realFsModule,
+      promises: fs.promises,
+      Dirent: realFsModule.Dirent,
+    } as typeof realFsModule;
+    install(other);
+    install(other);
+    const deployed = path.join(game, "Data", "mod.esp");
+    expect(other.readFileSync(deployed, "utf8")).toBe("mod plugin");
+    expect(other.readdirSync(path.join(game, "Data")).sort()).toEqual(["mod.esp", "textures"]);
+    expect(await other.promises.readFile(deployed, "utf8")).toBe("mod plugin");
+    // The originals stay the first module's: the real disk has no such file.
+    await expect(realStat(deployed)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("copies a deployed file from its staged file, and resolves its real path", async () => {
+    const deployed = path.join(game, "Data", "mod.esp");
+    const copy = path.join(root, "copied.esp");
+    fs.copyFileSync(deployed, copy);
+    expect(realFsModule.readFileSync(copy, "utf8")).toBe("mod plugin");
+    await fs.promises.copyFile(deployed, copy);
+    expect(fs.realpathSync(deployed)).toBe(path.resolve(deployed));
+    expect(typeof fs.realpathSync.native).toBe("function");
+    expect(await fs.promises.realpath(path.join(game, "Data", "textures"))).toBe(
+      path.join(game, "Data", "textures"),
+    );
+    realFsModule.rmSync(copy);
   });
 
   it("leaves writes, other folders and a purged deployment alone", () => {

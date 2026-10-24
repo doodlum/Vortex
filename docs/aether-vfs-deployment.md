@@ -55,7 +55,8 @@ for games that declare `compatible.nulldeployment`).
 ### 2. The write layer ("Overwrite")
 
 Files a game or tool creates or changes inside a virtual root land in a per-game write folder,
-`<staging>/__vfs_overwrite/<root>`, never in the game install. Vortex shows it as a special mod
+`<staging>/__vortex_vfs_overwrite/<root>`, never in the game install (the `__vortex` prefix keeps
+the staging scan from taking it for a mod). Vortex shows it as a special mod
 that can be cleared, or whose files can be imported into a mod (the External Changes flow). Saves
 and settings outside the game folder are not virtualised and stay where the game writes them.
 
@@ -71,11 +72,35 @@ Every program Vortex starts for a game runs through one session per game (`@aeth
   `steam_appid.txt` semantics), which aether-vfs already supports for SteamStub-wrapped games.
   **A game started from Steam's own Play button does not see mods**, as with Mod Organizer 2.
   The Play button in Vortex is the supported way to play.
-- Vortex's own readers use a **deployed view** API: `readdir`, `stat` and `read` answered from
-  the virtual deployment in-process, plus the real game folder underneath. Plugin mtimes for
-  file-time load order are kept as virtual metadata and applied by the shim.
-- LOOT runs in a helper process (`ELECTRON_RUN_AS_NODE`) that the session launches, so native
-  libloot reads the composed `Data` folder.
+- Vortex and its extensions read game folders unchanged. `util/vfsFsView` wraps Node's `fs`,
+  `fs/promises` and Electron's `original-fs` at the start of the renderer. `requireRemap` hands
+  `original-fs` to graceful-fs and rimraf, so fs-extra and Vortex's `util/fs` read through it.
+  Under a virtual deployment:
+    - reads, copies, stats, existence checks, real paths and listings see the deployed files;
+    - writes, times and truncation of a mod's deployed file reach its staged file, as they did
+      through a hard link;
+    - renaming a deployed file moves it within the view (plugin ghosting), and renaming a staged
+      file or folder keeps what it serves deployed;
+    - deleting a deployed file removes it from the view only, sparing staging and any game
+      original underneath.
+
+    `util/vfsWalkView` does the same for `turbowalk`, wrapping the module when it is first loaded:
+    loading it replaces the global `Promise` with Bluebird, and Vortex's startup depends on when.
+    Code that needs the real disk (merging from the game's originals) uses `realFs`/`realStat`.
+
+- The view is filled synchronously from the staging manifests when the extension starts, before
+  the extensions that read game folders at startup (it loads right after `mod_management`).
+  Running programs of the game follow every change to the view, a ghosted plugin included.
+- LOOT already runs libloot in a worker (`ELECTRON_RUN_AS_NODE`) started through `runExecutable`.
+  The worker is started with `vfsGameId`, a run option that puts any program in the game's
+  session, so libloot reads the composed `Data` folder.
+- A deploy, purge or view change updates the sessions of programs still running
+  (`Session.setRoot` swaps a root's provider live), so the long-lived LOOT worker follows later
+  deploys. A target outside the game folder that did not exist when a program started reaches
+  programs started later. Session folders of ended Vortex processes are removed at startup.
+- Native readers checked and left as they are: `exe-version` and the plugin header parser are
+  TypeScript over `fs`; QuickBMS, ARCtool and BG3's divine read staging or the game's own
+  archives, which are real files.
 
 ### 4. Linux: a FUSE mount
 

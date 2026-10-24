@@ -275,6 +275,27 @@ function queryPurge(
   });
 }
 
+/**
+ * A virtual deployment's manifest, read at once: what the virtual file system shows has to be
+ * known before other extensions first read the game folder at startup. `undefined` when it is
+ * missing, unreadable or another instance's; the asynchronous `getManifest` (with its backups)
+ * stays the authority.
+ */
+export function readVirtualManifestSync(
+  stagingPath: string,
+  modType: string,
+  instanceId: string,
+): IDeploymentManifest | undefined {
+  try {
+    const manifest = readManifest(
+      fs.readFileSync(virtualManifestPath(stagingPath, modType), { encoding: "utf8" }),
+    );
+    return manifest?.instance === instanceId ? manifest : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function readManifestFile(filePath: string): Promise<any> {
   return Promise.resolve(fs.readFileAsync(filePath, "utf8")).then((data) => readManifest(data));
 }

@@ -3,17 +3,32 @@ import * as path from "path";
 import type { IExtensionApi } from "../../types/IExtensionContext";
 import type { IState } from "../../types/IState";
 import { installPathForGame } from "../../util/selectors";
-import { setVirtualFiles } from "../../util/vfsFsView";
+import {
+  forgetVirtualFiles,
+  onVirtualChange,
+  setVirtualFiles,
+  virtualDeployments,
+} from "../../util/vfsFsView";
 import { getGame } from "../gamemode_management/util/getGame";
 import type { IDeployedFile } from "../mod_management/types/IDeploymentMethod";
-import { getManifest } from "../mod_management/util/activationStore";
+import { getManifest, readVirtualManifestSync } from "../mod_management/util/activationStore";
 import { getCurrentActivator } from "../mod_management/util/deploymentMethods";
+import type { IAetherFile } from "./aether";
 import { isInside, stagingSource } from "./roots";
 import { VFS_DEPLOYMENT_ID } from "./VirtualDeployment";
 
 const caseInsensitive = process.platform === "win32";
 const ownerOf = (gameId: string, targetPath: string) =>
   `${gameId}|${caseInsensitive ? path.resolve(targetPath).toLowerCase() : path.resolve(targetPath)}`;
+const gameOf = (owner: string) => owner.slice(0, owner.indexOf("|"));
+
+/** The folder a target's files are listed from: the game folder when the target is inside it. */
+function rootOf(state: IState, gameId: string, targetPath: string): string {
+  const gamePath = state.settings.gameMode.discovered[gameId]?.path;
+  return gamePath !== undefined && isInside(gamePath, targetPath, caseInsensitive)
+    ? gamePath
+    : targetPath;
+}
 
 /**
  * Show one mod type's virtual deployment to Vortex's own file reads (`vfsFsView`): its files
@@ -27,14 +42,9 @@ export function showDeployment(
   stagingPath: string,
   files: IDeployedFile[],
 ): void {
-  const gamePath = state.settings.gameMode.discovered[gameId]?.path;
-  const root =
-    gamePath !== undefined && isInside(gamePath, targetPath, caseInsensitive)
-      ? gamePath
-      : targetPath;
   setVirtualFiles(
     ownerOf(gameId, targetPath),
-    [root],
+    [rootOf(state, gameId, targetPath)],
     files.map((file) => ({
       deployed: path.join(targetPath, file.target ?? "", file.relPath),
       source: stagingSource(stagingPath, file),
@@ -42,30 +52,90 @@ export function showDeployment(
   );
 }
 
-/** Stop showing a mod type's deployment (it was purged). */
-export function hideDeployment(gameId: string, targetPath: string): void {
-  setVirtualFiles(ownerOf(gameId, targetPath), [], []);
+/** A mod type's deployment was purged: it is still virtual, with nothing in it. */
+export function hideDeployment(state: IState, gameId: string, targetPath: string): void {
+  setVirtualFiles(ownerOf(gameId, targetPath), [rootOf(state, gameId, targetPath)], []);
 }
 
-/** Show every mod type's deployment of `gameId` from its manifests, or none if not virtual. */
-export async function showGameFromManifests(api: IExtensionApi, gameId: string): Promise<void> {
+/**
+ * The game's deployment as the view holds it now, as files of the given root locations, or
+ * `undefined` when the view does not hold this game. `null` when it holds a root that is not
+ * among them.
+ */
+export function viewFilesOfGame(
+  gameId: string,
+  locations: string[],
+): IAetherFile[][] | undefined | null {
+  const owners = virtualDeployments(`${gameId}|`);
+  if (owners.length === 0) {
+    return undefined;
+  }
+  const same = (lhs: string, rhs: string) =>
+    caseInsensitive
+      ? path.resolve(lhs).toLowerCase() === path.resolve(rhs).toLowerCase()
+      : path.resolve(lhs) === path.resolve(rhs);
+  const files: IAetherFile[][] = locations.map(() => []);
+  for (const { roots, files: deployed } of owners) {
+    const location = roots[0];
+    const at = location === undefined ? -1 : locations.findIndex((l) => same(l, location));
+    if (at < 0) {
+      if (deployed.length === 0) continue;
+      return null;
+    }
+    for (const file of deployed) {
+      files[at].push({ path: path.relative(location, file.deployed), source: file.source });
+    }
+  }
+  return files;
+}
+
+/** Called with the game whose view changed. */
+export function onGameViewChange(listener: (gameId: string) => void): () => void {
+  return onVirtualChange((owner) => listener(gameOf(owner)));
+}
+
+/**
+ * Show every mod type's deployment of `gameId` from its manifests, or none if not virtual.
+ * Synchronous where the manifest can be read at once, so the view is complete before other
+ * extensions' startup reads the game folder (the plugin list, for one); a manifest that needs
+ * its backups follows asynchronously.
+ */
+export function showGameFromManifests(api: IExtensionApi, gameId: string): Promise<void> {
   const state = api.getState();
   const game = getGame(gameId);
   const gamePath = state.settings.gameMode.discovered[gameId]?.path;
   const stagingPath = installPathForGame(state, gameId);
   if (game === undefined || gamePath === undefined || stagingPath === undefined) {
-    return;
+    return Promise.resolve();
   }
   const virtual = getCurrentActivator(state, gameId, true)?.id === VFS_DEPLOYMENT_ID;
+  const later: Array<[string, string]> = [];
   for (const [modType, targetPath] of Object.entries(game.getModPaths(gamePath))) {
     if (!targetPath) {
       continue;
     }
     if (!virtual) {
-      hideDeployment(gameId, targetPath);
+      forgetVirtualFiles(ownerOf(gameId, targetPath));
       continue;
     }
+    const manifest = readVirtualManifestSync(stagingPath, modType, state.app.instanceId);
+    if (manifest !== undefined) {
+      showDeployment(state, gameId, targetPath, stagingPath, manifest.files);
+    } else {
+      later.push([modType, targetPath]);
+    }
+  }
+  return later.length === 0 ? Promise.resolve() : showFromManifestsAsync(api, gameId, later);
+}
+
+async function showFromManifestsAsync(
+  api: IExtensionApi,
+  gameId: string,
+  types: Array<[string, string]>,
+): Promise<void> {
+  const stagingPath = installPathForGame(api.getState(), gameId);
+  for (const [modType, targetPath] of types) {
     const manifest = await getManifest(api, modType, gameId);
-    showDeployment(state, gameId, targetPath, stagingPath, manifest.files);
+    showDeployment(api.getState(), gameId, targetPath, stagingPath, manifest.files);
   }
 }

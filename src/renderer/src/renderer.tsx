@@ -17,7 +17,9 @@ requireRemap();
 // Next, before graceful-fs and fs-extra copy fs's functions: show game folders as programs see
 // them when a game is deployed through the virtual file system.
 // tslint:disable-next-line:no-var-requires
-require("./util/vfsFsView").install();
+require("./util/vfsFsView").installAll();
+// tslint:disable-next-line:no-var-requires
+require("./util/vfsWalkView").installWalk();
 
 const earlyErrHandler = (evt: ErrorEvent | PromiseRejectionEvent) => {
   let value: unknown;

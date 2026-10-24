@@ -453,6 +453,11 @@ export type MergeFunc = (filePath: string, mergePath: string) => PromiseLike<voi
 export interface IRunOptions {
   /** Associated Vortex game id for Linux Windows-tool launches; does not change the active profile. */
   gameId?: string;
+  /**
+   * A game whose folder the program reads, whatever the program: when that game is deployed
+   * through the virtual file system, the program runs in its session and sees the mods.
+   */
+  vfsGameId?: string;
   cwd?: string;
   env?: { [key: string]: string };
   suggestDeploy?: boolean;

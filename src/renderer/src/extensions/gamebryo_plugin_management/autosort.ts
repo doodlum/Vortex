@@ -906,6 +906,9 @@ class LootInterface {
     const attempt = (retries: number): Bluebird<void> => {
       return (this.mExtensionApi as any)
         .runExecutable(process.execPath, [modulePath].concat(args || []), {
+          // libloot reads the Data folder and the plugins natively: under a virtual
+          // deployment it has to run where the game's folder shows the mods.
+          vfsGameId: activeGameId(this.mExtensionApi.store.getState()),
           detach: false,
           suggestDeploy: false,
           expectSuccess: true,

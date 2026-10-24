@@ -49,7 +49,7 @@ export interface IModTypeDeployment {
  * Turn each mod type's virtual deployment into the session's roots. A target inside the game
  * folder belongs to root 0, the game folder itself; any other target is a root of its own.
  * Each root serves its real directory underneath the deployed files and copies programs'
- * writes up into a stable folder under staging's `__vfs_overwrite`.
+ * writes up into a stable folder under staging's `OVERWRITE_FOLDER`.
  */
 export function composeRoots(
   gamePath: string,
@@ -92,11 +92,27 @@ export function composeRoots(
   return Array.from(roots.values());
 }
 
-/** The roots for `gameId` as its manifests describe it now, every mod type included. */
-export async function rootsForGame(
+export interface IGameDeployment {
+  gamePath: string;
+  stagingPath: string;
+  deployments: IModTypeDeployment[];
+}
+
+/** The roots of a game's deployment. */
+export function gameRoots(game: IGameDeployment): IAetherRoot[] {
+  return composeRoots(
+    game.gamePath,
+    game.stagingPath,
+    game.deployments,
+    process.platform === "win32",
+  );
+}
+
+/** `gameId`'s deployment as its manifests describe it now, every mod type included. */
+export async function deploymentForGame(
   api: IExtensionApi,
   gameId: string,
-): Promise<IAetherRoot[] | undefined> {
+): Promise<IGameDeployment | undefined> {
   const state = api.getState();
   const game: IGame | undefined = getGame(gameId);
   const gamePath = state.settings.gameMode.discovered[gameId]?.path;
@@ -113,5 +129,14 @@ export async function rootsForGame(
     const manifest = await getManifest(api, typeId, gameId);
     deployments.push({ targetPath, files: manifest.files });
   }
-  return composeRoots(gamePath, stagingPath, deployments, process.platform === "win32");
+  return { gamePath, stagingPath, deployments };
+}
+
+/** The roots for `gameId` as its manifests describe it now. */
+export async function rootsForGame(
+  api: IExtensionApi,
+  gameId: string,
+): Promise<IAetherRoot[] | undefined> {
+  const game = await deploymentForGame(api, gameId);
+  return game === undefined ? undefined : gameRoots(game);
 }

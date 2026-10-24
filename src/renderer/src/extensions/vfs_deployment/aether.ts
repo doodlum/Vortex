@@ -48,6 +48,8 @@ export interface IAetherLaunchOptions {
 export interface IAetherSession {
   start(): void;
   roots(): Array<{ id: number; location: string; files: number }>;
+  /** Replace a root's content, also while its program runs (the location must stay). */
+  setRoot(id: number, root: IAetherRoot): void;
   launch(opts: IAetherLaunchOptions): Promise<IAetherLaunch>;
   close(): void;
 }
