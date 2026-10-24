@@ -5,8 +5,10 @@ import * as os from "os";
 import * as path from "path";
 
 import type { IExtensionApi } from "../../types/IExtensionContext";
+import { getApplication } from "../../util/application";
 import getVortexPath from "../../util/getVortexPath";
 import { log } from "../../util/log";
+import { getGame } from "../gamemode_management/util/getGame";
 import { loadAether } from "./aether";
 import { MOUNT_HELPER_SOURCE } from "./mountHelper";
 import { deploymentForGame, gameRoots } from "./roots";
@@ -41,8 +43,8 @@ interface IHelperStatus {
   pid: number;
   generation: number;
   mounted: boolean;
-  /** The addon the helper loaded: another Vortex install's cannot be swapped in. */
-  addon?: string;
+  /** The Vortex version whose addon the helper loaded: a native addon cannot be swapped. */
+  version?: string;
   error?: string;
 }
 
@@ -105,43 +107,102 @@ export function isMounted(api: IExtensionApi, gameId: string): boolean {
   }
 }
 
+/** The environment a helper runs in: Vortex's own Electron as Node, and FUSE's helper. */
+const helperEnv = (): Record<string, string> => ({
+  ELECTRON_RUN_AS_NODE: "1",
+  ...(process.env.FUSERMOUNT_PATH !== undefined
+    ? { FUSERMOUNT_PATH: process.env.FUSERMOUNT_PATH }
+    : {}),
+});
+
+/**
+ * How to start `dir`'s helper so that it outlives Vortex. Everything a Flatpak app starts ends
+ * with it; a process the portal starts in a new sandbox of the same app does not. An AppImage's
+ * files are in a mount that ends with Vortex, so the AppImage itself starts the helper, with a
+ * mount of its own.
+ */
+function helperCommand(dir: string): [string, string[]] {
+  const helper = path.join(dir, "helper.cjs");
+  if (isFlatpak()) {
+    const env = Object.entries(helperEnv()).map(([name, value]) => `--env=${name}=${value}`);
+    return ["flatpak-spawn", [...env, process.execPath, helper, dir]];
+  }
+  return [process.env.APPIMAGE ?? process.execPath, [helper, dir]];
+}
+
 /** Start a helper for `dir`, detached, so that it outlives Vortex. */
 function startHelper(dir: string): void {
-  const helper = path.join(dir, "helper.cjs");
-  fs.writeFileSync(helper, MOUNT_HELPER_SOURCE);
-  // Vortex's own Electron, run as Node.
-  const env = { ELECTRON_RUN_AS_NODE: "1", FUSERMOUNT_PATH: process.env.FUSERMOUNT_PATH };
-  const [command, args] = isFlatpak()
-    ? // Everything a Flatpak app starts ends with it; a process the portal starts in a new
-      // sandbox of the same app does not.
-      [
-        "flatpak-spawn",
-        [
-          ...Object.entries(env)
-            .filter(([, value]) => value !== undefined)
-            .map(([name, value]) => `--env=${name}=${value}`),
-          process.execPath,
-          helper,
-          dir,
-        ],
-      ]
-    : [process.execPath, [helper, dir]];
+  fs.writeFileSync(path.join(dir, "helper.cjs"), MOUNT_HELPER_SOURCE);
+  const [command, args] = helperCommand(dir);
   const output = fs.openSync(path.join(dir, "helper.log"), "a");
   try {
     spawn(command, args, {
       detached: true,
       stdio: ["ignore", output, output],
-      env: { ...process.env, ...env },
+      env: { ...process.env, ...helperEnv() },
     }).unref();
   } finally {
     fs.closeSync(output);
   }
 }
 
+/** The autostart entry that mounts `dir`'s folder again at login, as links survived a restart. */
+const loginEntry = (dir: string) =>
+  path.join(
+    process.env.VORTEX_VFS_AUTOSTART_DIR ??
+      path.join(
+        // A Flatpak's XDG_CONFIG_HOME is its own; the session reads the user's.
+        (isFlatpak() ? undefined : process.env.XDG_CONFIG_HOME) ??
+          path.join(os.userInfo().homedir, ".config"),
+        "autostart",
+      ),
+    `vortex-vfs-${path.basename(dir)}.desktop`,
+  );
+
+/** A desktop entry argument: quoted, with what quoting and field codes need escaped. */
+const desktopArg = (arg: string) => `"${arg.replace(/(["`$\\])/g, "\\$1").replace(/%/g, "%%")}"`;
+
+function writeLoginEntry(dir: string, gameName: string): void {
+  const [command, args] = helperCommand(dir);
+  const exec = isFlatpak()
+    ? // flatpak-spawn needs a running app; the login session starts one.
+      [
+        "flatpak",
+        "run",
+        ...Object.entries(helperEnv()).map(([name, value]) => `--env=${name}=${value}`),
+        `--command=${process.execPath}`,
+        process.env.FLATPAK_ID ?? "com.nexusmods.vortex",
+        ...args.slice(-2),
+      ]
+    : [
+        "env",
+        ...Object.entries(helperEnv()).map(([name, value]) => `${name}=${value}`),
+        command,
+        ...args,
+      ];
+  const entry = loginEntry(dir);
+  fs.mkdirSync(path.dirname(entry), { recursive: true });
+  fs.writeFileSync(
+    entry,
+    [
+      "[Desktop Entry]",
+      "Type=Application",
+      `Name=Vortex mods for ${gameName}`,
+      `Comment=Shows the mods Vortex deployed in ${gameName}'s folder`,
+      `Exec=${exec.map(desktopArg).join(" ")}`,
+      "NoDisplay=true",
+      "Terminal=false",
+      "X-GNOME-Autostart-enabled=true",
+      "",
+    ].join("\n"),
+  );
+}
+
 /** Remove `dir`'s spec, which unmounts, and wait for its helper to end. */
 async function stopHelper(gameId: string, dir: string): Promise<void> {
   const running = liveStatus(dir) !== undefined;
   fs.rmSync(path.join(dir, "spec.json"), { force: true });
+  fs.rmSync(loginEntry(dir), { force: true });
   if (!running) {
     return;
   }
@@ -172,9 +233,10 @@ export async function mountGame(api: IExtensionApi, gameId: string): Promise<voi
   ) {
     return;
   }
+  const version = getApplication().version;
   const running = liveStatus(dir);
-  if (running?.addon !== undefined && running.addon !== aether.addon) {
-    // Mounted by another Vortex install; its addon stays loaded in its helper.
+  if (running !== undefined && running.version !== version) {
+    // Mounted by another Vortex version, whose addon stays loaded in its helper.
     await stopHelper(gameId, dir);
     if (generations.get(gameId) !== mine) {
       return;
@@ -185,9 +247,9 @@ export async function mountGame(api: IExtensionApi, gameId: string): Promise<voi
   const generation = Date.now() * 1000 + mine;
   const spec = {
     owner: owner(),
+    version,
     addon: aether.addon,
     stateDir: path.join(dir, "state"),
-    artifactsDir: aether.dir,
     roots: gameRoots(game),
     generation,
   };
@@ -202,6 +264,7 @@ export async function mountGame(api: IExtensionApi, gameId: string): Promise<voi
     if (status?.generation === generation) {
       if (status.mounted) {
         log("info", "mounted the virtual file system", { gameId, pid: status.pid });
+        writeLoginEntry(dir, getGame(gameId)?.name ?? gameId);
       } else {
         log("error", "failed to mount the virtual file system", { gameId, error: status.error });
         api.showErrorNotification("The game cannot see its mods", status.error ?? "", {

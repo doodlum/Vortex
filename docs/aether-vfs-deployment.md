@@ -138,7 +138,12 @@ another install's addon. Vortex and the helper talk through files there: Vortex 
 `spec.json` (the session to
 serve); the helper mounts it, swaps a new deployment of the same folders in place, remounts
 other folders, reports `status.json` (touched every two seconds, so a dead helper's status goes
-stale) and logs to `helper.log`. Removing the spec unmounts and ends the helper. A deploy
+stale) and logs to `helper.log`. The helper runs Vortex's own Electron as Node, and loads the
+addon beside it; an AppImage starts it through `$APPIMAGE`, whose own mount lasts as long as the
+helper (Vortex's ends with Vortex), and a Vortex of another version replaces a running helper,
+whose native addon cannot be swapped. While a folder is mounted, an autostart entry
+(`~/.config/autostart/vortex-vfs-<game>-<hash>.desktop`) starts its helper again at login, so
+the mods are there after a restart, as links were; unmounting removes it. Removing the spec unmounts and ends the helper. A deploy
 unmounts first and waits for the helper to end, so the deployment reads the game's own files,
 then mounts the result; a purge unmounts. Vortex's support check needs `/dev/fuse` and
 `fusermount3` (package `fuse3`). A Flatpak Vortex mounts through the host's `fusermount3` (a

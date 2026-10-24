@@ -3,11 +3,11 @@
  * one game's FUSE mount, so the mods stay visible after Vortex closes, as they did with links:
  * Steam's Play button keeps working. Vortex talks to it through files only:
  *
- * - `<dir>/spec.json`: the session to serve (`addon`, `stateDir`, `artifactsDir`, `roots`,
- *   `generation`). The helper mounts it, and follows every change: the same root locations are
+ * - `<dir>/spec.json`: the session to serve (`addon`, `stateDir`, `roots`, `generation`, and the
+ *   `version` and `owner` of the Vortex that wrote it). The helper mounts it, and follows every change: the same root locations are
  *   updated in place (`setRoot`), others remount. Removing the file unmounts and ends the
  *   helper.
- * - `<dir>/status.json`: written by the helper, `{ pid, generation, mounted, addon, error? }`, for
+ * - `<dir>/status.json`: written by the helper, `{ pid, generation, mounted, version, error? }`, for
  *   Vortex to wait on. The helper touches it every two seconds and removes it when it ends.
  *
  * The source is written next to the spec when Vortex starts a helper, so nothing extra has to
@@ -24,12 +24,15 @@ let session;
 let served;
 let ending;
 let loadedAddon;
+let loadedVersion;
+// The addon beside this program, if it is a packaged Vortex: an AppImage's own mount (Vortex's
+// ends with it), and the one a login entry finds again after a restart.
+const ownAddon = path.join(path.dirname(process.execPath), "resources", "app.asar.unpacked", "assets", "aether-vfs", "aether_vfs_node.node");
 
 function writeStatus(status) {
   const temp = statusFile + "." + process.pid;
   fs.writeFileSync(temp, JSON.stringify({ pid: process.pid, ...status }));
   fs.renameSync(temp, statusFile);
-
 }
 
 function end() {
@@ -70,9 +73,12 @@ function apply() {
     } else {
       close();
       // A native addon cannot be unloaded: the first one loaded stays.
-      loadedAddon = loadedAddon ?? spec.addon;
+      if (loadedAddon === undefined) {
+        loadedAddon = fs.existsSync(ownAddon) ? ownAddon : spec.addon;
+        loadedVersion = spec.version;
+      }
       const { Session } = require(loadedAddon);
-      session = new Session({ stateDir: spec.stateDir, artifactsDir: spec.artifactsDir, roots: spec.roots });
+      session = new Session({ stateDir: spec.stateDir, artifactsDir: path.dirname(loadedAddon), roots: spec.roots });
       session.start();
     }
     served = spec;
@@ -82,7 +88,7 @@ function apply() {
     served = spec;
     result = { mounted: false, error: String(err && err.message || err) };
   }
-  writeStatus({ generation: spec.generation, addon: loadedAddon, ...result });
+  writeStatus({ generation: spec.generation, version: loadedVersion, ...result });
 }
 
 for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {

@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 const fakes = vi.hoisted(() => ({
   root: "",
   roots: [] as Array<{ location: string; files: unknown[] }>,
-  addon: "fake-addon.cjs",
+  version: "1.0.0",
 }));
 
 const FAKE_ADDON = `
@@ -34,8 +34,10 @@ exports.Session = class {
 
 vi.mock("../../util/getVortexPath", () => ({ default: () => path.join(fakes.root, "profile") }));
 vi.mock("./aether", () => ({
-  loadAether: () => ({ dir: fakes.root, addon: path.join(fakes.root, fakes.addon) }),
+  loadAether: () => ({ dir: fakes.root, addon: path.join(fakes.root, "fake-addon.cjs") }),
 }));
+vi.mock("../../util/application", () => ({ getApplication: () => ({ version: fakes.version }) }));
+vi.mock("../gamemode_management/util/getGame", () => ({ getGame: () => ({ name: "Some Game" }) }));
 vi.mock("./roots", () => ({
   deploymentForGame: () => Promise.resolve({ deployments: [] }),
   gameRoots: () => fakes.roots,
@@ -50,11 +52,12 @@ beforeAll(() => {
   fakes.root = fs.mkdtempSync(path.join(os.tmpdir(), "vfs-mounts-"));
   process.env.VORTEX_VFS_MOUNTS_DIR = path.join(fakes.root, "vfs-mounts");
   fs.writeFileSync(path.join(fakes.root, "fake-addon.cjs"), FAKE_ADDON);
-  fs.writeFileSync(path.join(fakes.root, "other-addon.cjs"), FAKE_ADDON);
+  process.env.VORTEX_VFS_AUTOSTART_DIR = path.join(fakes.root, "autostart");
 });
 afterAll(async () => {
   await Promise.all(["x", "y"].map((gameId) => unmountGame(api, gameId)));
   delete process.env.VORTEX_VFS_MOUNTS_DIR;
+  delete process.env.VORTEX_VFS_AUTOSTART_DIR;
   Object.defineProperty(process, "platform", { value: platform });
   fs.rmSync(fakes.root, { recursive: true, force: true });
 });
@@ -98,6 +101,15 @@ describe("the Linux mounts", () => {
     expect(isMounted(api, "x")).toBe(true);
     expect(calls("x")).toEqual(["new /games/x", "start"]);
     const pid = helperPid("x");
+    // Mounted again at login, as links survived a restart.
+    const entry = path.join(
+      fakes.root,
+      "autostart",
+      `vortex-vfs-${path.basename(helperDir("x"))}.desktop`,
+    );
+    expect(fs.readFileSync(entry, "utf8")).toMatch(
+      /^Exec="env" "ELECTRON_RUN_AS_NODE=1" ".+" ".+helper\.cjs" ".+"$/m,
+    );
 
     // A new deployment of the same folders is swapped in by the running helper.
     fakes.roots = [{ location: "/games/x", files: [{}] }];
@@ -112,21 +124,22 @@ describe("the Linux mounts", () => {
 
     await unmountGame(api, "x");
     expect(isMounted(api, "x")).toBe(false);
+    expect(fs.existsSync(entry)).toBe(false);
     expect(calls("x").at(-1)).toBe("close");
     expect(alive(pid)).toBe(false);
     expect(fs.existsSync(path.join(helperDir("x"), "status.json"))).toBe(false);
   }, 30000);
 
-  it("replaces a helper another Vortex install started, whose addon stays loaded", async () => {
+  it("replaces a helper another Vortex version started, whose addon stays loaded", async () => {
     fakes.roots = [{ location: "/games/x", files: [] }];
     await mountGame(api, "x");
     const pid = helperPid("x");
-    fakes.addon = "other-addon.cjs";
+    fakes.version = "1.1.0";
     await mountGame(api, "x");
     expect(helperPid("x")).not.toBe(pid);
     expect(alive(pid)).toBe(false);
     expect(isMounted(api, "x")).toBe(true);
-    fakes.addon = "fake-addon.cjs";
+    fakes.version = "1.0.0";
     await unmountGame(api, "x");
   }, 30000);
 
