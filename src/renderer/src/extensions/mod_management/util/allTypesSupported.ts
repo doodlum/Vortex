@@ -5,19 +5,16 @@ import { getSafe } from "../../../util/storeHelper";
 import type { IModType } from "../../gamemode_management/types/IModType";
 import { getModType } from "../../gamemode_management/util/modTypeExtensions";
 import type { IDeploymentMethod, IUnavailableReason } from "../types/IDeploymentMethod";
+import { getAllActivators } from "./deploymentMethods";
 
-function allTypesSupported(
+type Support = { errors: IUnavailableReason[]; warnings: IUnavailableReason[] };
+
+function typesSupported(
   activator: IDeploymentMethod,
   state: any,
   gameId: string,
   types: string[],
-): { errors: IUnavailableReason[]; warnings: IUnavailableReason[] } {
-  if (activator === undefined) {
-    return {
-      errors: [{ description: (t) => t("No deployment method selected") }],
-      warnings: [],
-    };
-  }
+): Support {
   return types.reduce(
     (prev, type) => {
       const reason = activator.isSupported(state, gameId, type);
@@ -41,6 +38,48 @@ function allTypesSupported(
     },
     { errors: [], warnings: [] },
   );
+}
+
+/** The supported method that replaces `activator` for this game, if any (`supersedes`). */
+export function supersedingMethod(
+  activator: IDeploymentMethod,
+  state: any,
+  gameId: string,
+  types: string[],
+): IDeploymentMethod | undefined {
+  return getAllActivators().find(
+    (other) =>
+      other.id !== activator.id &&
+      (other.supersedes ?? []).includes(activator.id) &&
+      typesSupported(other, state, gameId, types).errors.length === 0,
+  );
+}
+
+function allTypesSupported(
+  activator: IDeploymentMethod,
+  state: any,
+  gameId: string,
+  types: string[],
+): Support {
+  if (activator === undefined) {
+    return {
+      errors: [{ description: (t) => t("No deployment method selected") }],
+      warnings: [],
+    };
+  }
+  const successor = supersedingMethod(activator, state, gameId, types);
+  if (successor !== undefined) {
+    return {
+      errors: [
+        {
+          description: (t) =>
+            t("Replaced by {{method}} for this game.", { replace: { method: successor.name } }),
+        },
+      ],
+      warnings: [],
+    };
+  }
+  return typesSupported(activator, state, gameId, types);
 }
 
 export default allTypesSupported;

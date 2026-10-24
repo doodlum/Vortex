@@ -21,6 +21,7 @@ export const DEPLOYMENT_FAILED_NOTIFICATION_ID = "deployment-failed";
 
 /** id of the notification that a game's deployment method can no longer be used */
 export const METHOD_UNAVAILABLE_NOTIFICATION_ID = "deployment-method-unavailable";
+export const METHOD_UPGRADED_NOTIFICATION_ID = "deployment-method-upgraded";
 
 /** how many failed files one deployment keeps. */
 export const MAX_STORED_DEPLOYMENT_FAILURES = 100;

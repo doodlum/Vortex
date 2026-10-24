@@ -42,7 +42,7 @@ import { setDeploymentNecessary } from "./actions/deployment";
 import { addMod, removeMod } from "./actions/mods";
 import { setActivator } from "./actions/settings";
 import { setInstallPath } from "./actions/settings";
-import { METHOD_UNAVAILABLE_NOTIFICATION_ID } from "./constants";
+import { METHOD_UNAVAILABLE_NOTIFICATION_ID, METHOD_UPGRADED_NOTIFICATION_ID } from "./constants";
 import type InstallManager from "./InstallManager";
 import { currentActivator, installPath, installPathForGame } from "./selectors";
 import { ensureStagingDirectory } from "./stagingDirectory";
@@ -59,7 +59,7 @@ import {
   savePurgeLeftovers,
   withActivationLock,
 } from "./util/activationStore";
-import allTypesSupported from "./util/allTypesSupported";
+import allTypesSupported, { supersedingMethod } from "./util/allTypesSupported";
 import { genSubDirFunc, purgeMods } from "./util/deploy";
 import { reportRecordedFailures, resetDeploymentFailures } from "./util/deploymentFailures";
 import {
@@ -370,6 +370,8 @@ export function onGameModeActivated(
 
     changeActivator = true;
     const oldActivator = activators.find((iter) => iter.id === configuredActivatorId);
+    // A method that replaces the configured one (the virtual file system replacing links)
+    let successor: IDeploymentMethod | undefined;
     const modPaths = game.getModPaths(gameDiscovery.path);
 
     const safeFB =
@@ -400,11 +402,23 @@ export function onGameModeActivated(
         const modTypes = Object.keys(modPaths);
 
         const reason = allTypesSupported(oldActivator, state, gameId, modTypes);
+        successor = supersedingMethod(oldActivator, state, gameId, modTypes);
         if (reason.errors.length === 0) {
           // wut? Guess the problem was temporary
           changeActivator = false;
         } else {
-          if (safeFB !== undefined) {
+          if (successor !== undefined) {
+            // An upgrade, not a failure: the old method purges below, restoring the folder.
+            api.sendNotification({
+              type: "info",
+              id: METHOD_UPGRADED_NOTIFICATION_ID,
+              title: "Deployment method upgraded",
+              message:
+                "{{game}} now uses {{method}}. Vortex removed the files it had placed in the " +
+                "game folder and will deploy your mods again.",
+              replace: { game: game.name, method: successor.name },
+            });
+          } else if (safeFB !== undefined) {
             api.sendNotification({
               type: "info",
               title: "Deployment method changed",
@@ -462,7 +476,11 @@ export function onGameModeActivated(
           oldInit().then(() => {
             // by this point the flag may have been reset
             if (changeActivator) {
-              if (supported.length > 0) {
+              if (successor !== undefined) {
+                api.store.dispatch(setActivator(gameId, successor.id));
+                api.store.dispatch(setDeploymentNecessary(gameId, true));
+                api.dismissNotification(METHOD_UNAVAILABLE_NOTIFICATION_ID);
+              } else if (supported.length > 0) {
                 api.store.dispatch(setActivator(gameId, (safeFB ?? supported[0]).id));
                 api.dismissNotification(METHOD_UNAVAILABLE_NOTIFICATION_ID);
               }

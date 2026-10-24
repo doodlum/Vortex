@@ -5,8 +5,9 @@ import type { IExtensionApi, LaunchRunner } from "../../types/IExtensionContext"
 import getVortexPath from "../../util/getVortexPath";
 import { log } from "../../util/log";
 import { activeGameId } from "../../util/selectors";
+import { getGame } from "../gamemode_management/util/getGame";
 import { getCurrentActivator } from "../mod_management/util/deploymentMethods";
-import { loadAether } from "./aether";
+import { loadAether, type IAetherRoot } from "./aether";
 import { isInside, rootsForGame } from "./roots";
 import { gameExecutable } from "./support";
 import { VFS_DEPLOYMENT_ID } from "./VirtualDeployment";
@@ -63,6 +64,42 @@ export function makeLaunchRunner(api: IExtensionApi): LaunchRunner {
   };
 }
 
+/**
+ * A Steam game started outside Steam asks Steam to start it instead (Skyrim SE exits with 53),
+ * and Steam then runs its own copy without the session. The game stays when it can tell its
+ * app id: a `steam_appid.txt` beside the executable and `SteamAppId`/`SteamGameId` in its
+ * environment. The file is served by the session, so nothing is written into the game folder;
+ * a real one there is left as it is. Returns the variables to add.
+ */
+export function steamIdentity(
+  gameId: string,
+  executable: string,
+  roots: IAetherRoot[],
+  stateDir: string,
+  env: Record<string, string>,
+): Record<string, string> {
+  const appId = getGame(gameId)?.details?.steamAppId;
+  const root = roots[0];
+  if (appId === undefined || root === undefined || !isInside(root.location, executable, true)) {
+    return {};
+  }
+  const relative = path.join(
+    path.relative(root.location, path.dirname(executable)),
+    "steam_appid.txt",
+  );
+  if (!fs.existsSync(path.join(root.location, relative))) {
+    fs.mkdirSync(stateDir, { recursive: true });
+    const source = path.join(stateDir, "steam_appid.txt");
+    fs.writeFileSync(source, String(appId));
+    root.files.push({ path: relative, source });
+  }
+  const id = String(appId);
+  return {
+    ...(env.SteamAppId === undefined ? { SteamAppId: id } : {}),
+    ...(env.SteamGameId === undefined ? { SteamGameId: id } : {}),
+  };
+}
+
 async function startInSession(
   api: IExtensionApi,
   gameId: string,
@@ -83,6 +120,7 @@ async function startInSession(
     "vfs-sessions",
     `${gameId}-${process.pid}-${Date.now()}-${sequence++}`,
   );
+  const steam = steamIdentity(gameId, executable, roots, stateDir, env);
   const session = aether.createSession(stateDir, roots);
   const release = () => {
     session.close();
@@ -101,7 +139,7 @@ async function startInSession(
       image: executable,
       // As for a spawned process without a shell: literal arguments.
       args: args.map((arg) => arg.replace(/"/g, "")),
-      env,
+      env: { ...env, ...steam },
       stageAlso,
     });
     log("info", "started in the virtual file system", {

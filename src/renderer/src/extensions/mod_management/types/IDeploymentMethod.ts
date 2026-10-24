@@ -161,6 +161,13 @@ export interface IDeploymentMethod {
   readonly virtual?: boolean;
 
   /**
+   * ids of methods this one replaces. Wherever this method is supported, those are treated as
+   * unsupported, so a game configured with one of them is purged with it (restoring the game
+   * folder) and moved to this method when it is next activated.
+   */
+  readonly supersedes?: string[];
+
+  /**
    * returns more extensive description/explanation of the activator.
    *
    * @type {string}

@@ -50,6 +50,14 @@ export default class VirtualDeployment implements IDeploymentMethod {
   public readonly isFallbackPurgeSafe = true;
   public readonly priority = 1;
   public readonly virtual = true;
+  // The linking methods and move: a game they deployed is purged with them, restoring its
+  // folder, and redeployed virtually.
+  public readonly supersedes = [
+    "hardlink_activator",
+    "symlink_activator",
+    "symlink_activator_elevated",
+    "move_activator",
+  ];
 
   private mQueue: Promise<void> = Promise.resolve();
   private mContext: IDeploymentContext | undefined;

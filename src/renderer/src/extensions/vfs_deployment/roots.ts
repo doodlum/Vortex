@@ -9,8 +9,11 @@ import type { IDeployedFile } from "../mod_management/types/IDeploymentMethod";
 import { getManifest } from "../mod_management/util/activationStore";
 import type { IAetherRoot } from "./aether";
 
-/** The folder in staging that receives what programs write into a virtual root. */
-export const OVERWRITE_FOLDER = "__vfs_overwrite";
+/**
+ * The folder in staging that receives what programs write into a virtual root. Its `__vortex`
+ * prefix is one the staging scan ignores, so it is never taken for a mod.
+ */
+export const OVERWRITE_FOLDER = "__vortex_vfs_overwrite";
 
 /** Whether `child` is `parent` or inside it, comparing as the game's file system would. */
 export function isInside(parent: string, child: string, caseInsensitive: boolean): boolean {
