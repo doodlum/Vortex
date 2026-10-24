@@ -18,10 +18,15 @@ function selectArtifact(platform, arch, pins = artifacts) {
   return pins[platform];
 }
 
+class DownloadRefused extends Error {
+  constructor(status) {
+    super(`QuickBMS download failed (${status})`);
+    this.status = status;
+  }
+}
 async function downloadBytes(url, fetcher) {
   const response = await fetcher(url, { signal: AbortSignal.timeout(60_000), redirect: "error" });
-  if (!response.ok || !response.body)
-    throw new Error(`QuickBMS download failed (${response.status})`);
+  if (!response.ok || !response.body) throw new DownloadRefused(response.status);
   const chunks = [];
   let length = 0;
   for await (const bytes of response.body) {
@@ -31,6 +36,25 @@ async function downloadBytes(url, fetcher) {
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
+}
+
+// The mirror is one host that sometimes times out (a CI build failed on it): failed
+// connections, timeouts, 429 and 5xx are tried again. Anything else is final.
+const retryable = (error) =>
+  error instanceof DownloadRefused
+    ? error.status === 429 || error.status >= 500
+    : ["TypeError", "TimeoutError", "AbortError"].includes(error?.name);
+
+async function downloadWithRetry(url, fetcher, { attempts = 3, retryDelayMs = 5000 } = {}) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await downloadBytes(url, fetcher);
+    } catch (error) {
+      if (attempt >= attempts || !retryable(error)) throw error;
+      console.warn(`QuickBMS download attempt ${attempt} failed, trying again:`, error.message);
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs * attempt));
+    }
+  }
 }
 
 async function extractExecutable(archive, destination, executable) {
@@ -60,6 +84,7 @@ async function prepareQuickBms({
   pins = artifacts,
   fetcher = globalThis.fetch,
   extract = extractExecutable,
+  retry = undefined,
 } = {}) {
   const asset = selectArtifact(platform, arch, pins);
   await fs.mkdir(dist, { recursive: true });
@@ -67,7 +92,7 @@ async function prepareQuickBms({
   if (!(await verifiedFile(output, asset.executableSha256))) {
     const stage = await fs.mkdtemp(path.join(os.tmpdir(), "vortex-quickbms-"));
     try {
-      const bytes = await downloadBytes(asset.url, fetcher);
+      const bytes = await downloadWithRetry(asset.url, fetcher, retry);
       if (hash(bytes) !== asset.archiveSha256)
         throw new Error("QuickBMS archive checksum mismatch");
       const archive = path.join(stage, "archive.zip");
@@ -96,7 +121,13 @@ async function prepareQuickBms({
   return output;
 }
 
-module.exports = { selectArtifact, downloadBytes, extractExecutable, prepareQuickBms };
+module.exports = {
+  selectArtifact,
+  downloadBytes,
+  downloadWithRetry,
+  extractExecutable,
+  prepareQuickBms,
+};
 if (require.main === module) {
   prepareQuickBms().catch((error) => {
     console.error(error);
