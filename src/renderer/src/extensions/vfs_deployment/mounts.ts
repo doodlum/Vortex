@@ -1,25 +1,26 @@
-import { spawnSync } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
-
-import { getErrorMessageOrDefault } from "@vortex/shared";
 
 import type { IExtensionApi } from "../../types/IExtensionContext";
 import getVortexPath from "../../util/getVortexPath";
 import { log } from "../../util/log";
-import { aetherErrorCode, type IAetherSession, loadAether } from "./aether";
+import { loadAether } from "./aether";
+import { MOUNT_HELPER_SOURCE } from "./mountHelper";
 import { deploymentForGame, gameRoots } from "./roots";
 
 /**
  * Linux: a game deployed through the virtual file system has its roots mounted at their real
- * locations (FUSE) for as long as Vortex runs. Every program sees the mods there with no help:
- * the game started by Vortex or by Steam's own Play button, tools, and Vortex itself. What
- * programs write lands in the roots' write folders, as on Windows.
+ * locations (FUSE). Every program sees the mods there with no help: the game started by Vortex
+ * or by Steam's own Play button, tools, and Vortex itself. What programs write lands in the
+ * roots' write folders, as on Windows.
  *
- * A deploy unmounts first, so that the deployment reads the game's own files (merging from
- * originals, say), and mounts the new deployment when it is done. A purge unmounts.
+ * A mount helper owns each game's mount (mountHelper.ts), so the mods stay visible after
+ * Vortex closes, as they did with links. A deploy unmounts first, so that the deployment reads
+ * the game's own files (merging from originals, say), and mounts the new deployment when it is
+ * done; a purge unmounts.
  */
-const mounts = new Map<string, IAetherSession>();
+
 /**
  * Bumped by every mount and unmount of a game: a mount still reading the manifests when an
  * unmount (a deploy starting) or a newer mount comes gives up instead of mounting late.
@@ -33,67 +34,144 @@ const bump = (gameId: string) => {
 
 export const mountsApply = () => process.platform === "linux";
 
-export function isMounted(gameId: string): boolean {
-  return mounts.has(gameId);
+interface IHelperStatus {
+  pid: number;
+  generation: number;
+  mounted: boolean;
+  error?: string;
 }
 
-/** Mount `gameId`'s deployment as its manifests describe it, replacing a mount it has. */
+const mountsDir = () => path.join(getVortexPath("userData"), "vfs-mounts");
+const helperDir = (gameId: string) => path.join(mountsDir(), gameId);
+const statusFile = (gameId: string) => path.join(helperDir(gameId), "status.json");
+
+/** How long a helper may go without touching its status before it counts as gone. */
+const HEARTBEAT_LIMIT_MS = 6000;
+
+/**
+ * The helper's status while it runs. It touches the file every two seconds and removes it when
+ * it ends; a status left by a helper that died goes stale. (A Flatpak helper runs in its own
+ * sandbox, whose process ids mean nothing here.)
+ */
+function liveStatus(gameId: string): IHelperStatus | undefined {
+  try {
+    const file = statusFile(gameId);
+    if (Date.now() - fs.statSync(file).mtimeMs > HEARTBEAT_LIMIT_MS) {
+      return undefined;
+    }
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Whether `gameId`'s helper is up and serving its mount. */
+export function isMounted(gameId: string): boolean {
+  return liveStatus(gameId)?.mounted === true;
+}
+
+/** Start a helper for `dir`, detached, so that it outlives Vortex. */
+function startHelper(dir: string): void {
+  const helper = path.join(dir, "helper.cjs");
+  fs.writeFileSync(helper, MOUNT_HELPER_SOURCE);
+  // Vortex's own Electron, run as Node.
+  const env = { ELECTRON_RUN_AS_NODE: "1", FUSERMOUNT_PATH: process.env.FUSERMOUNT_PATH };
+  const [command, args] = isFlatpak()
+    ? // Everything a Flatpak app starts ends with it; a process the portal starts in a new
+      // sandbox of the same app does not.
+      [
+        "flatpak-spawn",
+        [
+          ...Object.entries(env)
+            .filter(([, value]) => value !== undefined)
+            .map(([name, value]) => `--env=${name}=${value}`),
+          process.execPath,
+          helper,
+          dir,
+        ],
+      ]
+    : [process.execPath, [helper, dir]];
+  const output = fs.openSync(path.join(dir, "helper.log"), "a");
+  try {
+    spawn(command, args, {
+      detached: true,
+      stdio: ["ignore", output, output],
+      env: { ...process.env, ...env },
+    }).unref();
+  } finally {
+    fs.closeSync(output);
+  }
+}
+
+/** Mount `gameId`'s deployment as its manifests describe it, or update the mount it has. */
 export async function mountGame(api: IExtensionApi, gameId: string): Promise<void> {
   if (!mountsApply()) {
     return;
   }
-  unmountGame(gameId);
   const mine = bump(gameId);
   const aether = loadAether();
   const game = await deploymentForGame(api, gameId);
   if (aether === undefined || game === undefined || generations.get(gameId) !== mine) {
     return;
   }
-  const stateDir = path.join(getVortexPath("temp"), "vfs-mounts", `${gameId}-${process.pid}`);
-  try {
-    useHostFusermount();
-    const session = aether.createSession(stateDir, gameRoots(game));
-    session.start();
-    mounts.set(gameId, session);
-    log("info", "mounted the virtual file system", { gameId, roots: session.roots() });
-  } catch (err) {
-    log("error", "failed to mount the virtual file system", {
-      gameId,
-      code: aetherErrorCode(err),
-      error: getErrorMessageOrDefault(err),
-    });
-    api.showErrorNotification("The game cannot see its mods", err, {
-      allowReport: aetherErrorCode(err) === "E_INTERNAL",
-      message: "Mounting the virtual file system failed.",
-    });
+  const dir = helperDir(gameId);
+  fs.mkdirSync(dir, { recursive: true });
+  useHostFusermount();
+  const generation = Date.now() * 1000 + mine;
+  const spec = {
+    addon: aether.addon,
+    stateDir: path.join(dir, "state"),
+    artifactsDir: aether.dir,
+    roots: gameRoots(game),
+    generation,
+  };
+  const specFile = path.join(dir, "spec.json");
+  fs.writeFileSync(`${specFile}.tmp`, JSON.stringify(spec));
+  fs.renameSync(`${specFile}.tmp`, specFile);
+  if (liveStatus(gameId) === undefined) {
+    startHelper(dir);
   }
+  for (let waited = 0; waited < 15000; waited += 100) {
+    const status = liveStatus(gameId);
+    if (status?.generation === generation) {
+      if (status.mounted) {
+        log("info", "mounted the virtual file system", { gameId, pid: status.pid });
+      } else {
+        log("error", "failed to mount the virtual file system", { gameId, error: status.error });
+        api.showErrorNotification("The game cannot see its mods", status.error ?? "", {
+          allowReport: false,
+          message: "Mounting the virtual file system failed.",
+        });
+      }
+      return;
+    }
+    await delay(100);
+  }
+  log("error", "the mount helper did not answer", { gameId });
 }
 
-/** Unmount `gameId`'s deployment (lazily, if a program still holds files there). */
-export function unmountGame(gameId: string): void {
+/**
+ * Unmount `gameId`'s deployment (lazily, if a program still holds files there), and wait for
+ * its helper to end: a deploy that follows must see the game's own files.
+ */
+export async function unmountGame(gameId: string): Promise<void> {
   bump(gameId);
-  const session = mounts.get(gameId);
-  if (session === undefined) {
+  const running = liveStatus(gameId) !== undefined;
+  fs.rmSync(path.join(helperDir(gameId), "spec.json"), { force: true });
+  if (!running) {
     return;
   }
-  mounts.delete(gameId);
-  try {
-    session.close();
-    log("info", "unmounted the virtual file system", { gameId });
-  } catch (err) {
-    log("warn", "failed to unmount the virtual file system", {
-      gameId,
-      error: getErrorMessageOrDefault(err),
-    });
+  for (let waited = 0; liveStatus(gameId) !== undefined; waited += 100) {
+    if (waited >= 15000) {
+      log("error", "the mount helper did not unmount", { gameId });
+      return;
+    }
+    await delay(100);
   }
+  log("info", "unmounted the virtual file system", { gameId });
 }
-
-export function unmountAll(): void {
-  for (const gameId of Array.from(mounts.keys())) {
-    unmountGame(gameId);
-  }
-}
-
 /** Whether this machine can mount: `/dev/fuse` and `fusermount3` (package fuse3). */
 export function canMount(): boolean {
   if (isFlatpak()) {
@@ -132,7 +210,8 @@ function useHostFusermount(): void {
   if (!isFlatpak() || process.env.FUSERMOUNT_PATH !== undefined) {
     return;
   }
-  const wrapper = path.join(getVortexPath("temp"), "vfs-host-fusermount3");
+  // Beside the helpers, which a Flatpak helper sandbox shares (its /tmp is its own).
+  const wrapper = path.join(mountsDir(), "host-fusermount3");
   fs.mkdirSync(path.dirname(wrapper), { recursive: true });
   fs.writeFileSync(
     wrapper,

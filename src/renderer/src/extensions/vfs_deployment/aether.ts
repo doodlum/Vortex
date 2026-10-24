@@ -68,6 +68,8 @@ interface IAetherModule {
 export interface IAether {
   /** The directory holding the addon, the shim DLL and (under Proton) the injector. */
   dir: string;
+  /** The addon file, for programs that load it themselves (the Linux mount helper). */
+  addon: string;
   createSession(stateDir: string, roots: IAetherRoot[]): IAetherSession;
 }
 
@@ -101,6 +103,7 @@ export function loadAether(): IAether | undefined {
     const addon = __non_webpack_require__(path.join(dir, ADDON)) as IAetherModule;
     loaded = {
       dir,
+      addon: path.join(dir, ADDON),
       createSession: (stateDir, roots) => new addon.Session({ stateDir, artifactsDir: dir, roots }),
     };
     log("info", "virtual file system loaded", { dir });

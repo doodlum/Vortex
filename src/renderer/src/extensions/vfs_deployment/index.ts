@@ -5,7 +5,7 @@ import { activeGameId } from "../../util/selectors";
 import { clearDeletions } from "../../util/vfsFsView";
 import type { IDeploymentMethod } from "../mod_management/types/IDeploymentMethod";
 import { onVirtualActivationSaved } from "../mod_management/util/activationStore";
-import { isMounted, mountGame, mountsApply, unmountAll, unmountGame } from "./mounts";
+import { isMounted, mountGame, mountsApply, unmountGame } from "./mounts";
 import { isVirtualGame, showOverwriteDialog } from "./overwrite";
 import { cleanStaleSessions, launchesDirectly, makeLaunchRunner } from "./runner";
 import { vfsSupport } from "./support";
@@ -80,7 +80,8 @@ function init(context: IExtensionContextEx): boolean {
     });
 
     if (mountsApply()) {
-      // Linux: the game's folders are mounted while Vortex runs (mounts.ts).
+      // Linux: the game's folders are mounted by helpers that outlive Vortex (mounts.ts), so
+      // that the mods stay visible to Steam's own Play button after Vortex closes.
       const gameOf = (profileId: string): string | undefined =>
         api.getState().persistent.profiles[profileId]?.gameId;
       const mount = (gameId: string | undefined) => {
@@ -88,23 +89,20 @@ function init(context: IExtensionContextEx): boolean {
           void mountGame(api, gameId);
         }
       };
-      api.onAsync("will-deploy", (profileId: string) => {
+      api.onAsync("will-deploy", async (profileId: string) => {
         const gameId = gameOf(profileId);
-        if (gameId !== undefined) unmountGame(gameId);
-        return Promise.resolve();
+        if (gameId !== undefined) await unmountGame(gameId);
       });
       api.onAsync("did-deploy", async (profileId: string) => {
         const gameId = gameOf(profileId);
         if (gameId !== undefined && isVirtualGame(api, gameId)) await mountGame(api, gameId);
       });
-      api.onAsync("will-purge", (profileId: string) => {
+      api.onAsync("will-purge", async (profileId: string) => {
         const gameId = gameOf(profileId);
-        if (gameId !== undefined) unmountGame(gameId);
-        return Promise.resolve();
+        if (gameId !== undefined) await unmountGame(gameId);
       });
       mount(activeGameId(api.getState()));
       api.events.on("gamemode-activated", mount);
-      window.addEventListener("beforeunload", () => unmountAll());
     }
   });
   return true;

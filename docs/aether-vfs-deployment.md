@@ -127,17 +127,25 @@ Every program Vortex starts for a game runs through one session per game (`@aeth
 
 ### 4. Linux: a FUSE mount
 
-Implemented in `vfs_deployment/mounts.ts` on aether-vfs's `vfs-fuse`. While Vortex runs, each
-virtually deployed game's roots are mounted at their locations (unprivileged, through
-`fusermount3`); a deploy unmounts first, so the deployment reads the game's own files, and
-mounts the result; a purge unmounts. Vortex's support check needs `/dev/fuse` and `fusermount3`
-(package `fuse3`). Verified on Ubuntu with the `vfs-nightly-20261024.2` tar.gz and a copy of
-Stardew Valley (a Proton game): the method was chosen by itself, a deploy unmounted and mounted
+Implemented in `vfs_deployment/mounts.ts` on aether-vfs's `vfs-fuse`. Each virtually deployed
+game's roots are mounted at their locations (unprivileged, through `fusermount3`) by a mount
+helper (`mountHelper.ts`): Vortex's own Electron run as Node, detached, so the mount outlives
+Vortex as links did and Steam's own Play button keeps seeing the mods. Vortex and the helper
+talk through files in `<userData>/vfs-mounts/<game>`: Vortex writes `spec.json` (the session to
+serve); the helper mounts it, swaps a new deployment of the same folders in place, remounts
+other folders, reports `status.json` (touched every two seconds, so a dead helper's status goes
+stale) and logs to `helper.log`. Removing the spec unmounts and ends the helper. A deploy
+unmounts first and waits for the helper to end, so the deployment reads the game's own files,
+then mounts the result; a purge unmounts. Vortex's support check needs `/dev/fuse` and
+`fusermount3` (package `fuse3`). A Flatpak Vortex mounts through the host's `fusermount3` (a
+wrapper forwarding the FUSE socket with `flatpak-spawn --host`) and starts its helper with
+`flatpak-spawn`, in a new sandbox of the app that does not end with Vortex.
+
+Verified on Ubuntu with the `vfs-nightly-20261024.2` tar.gz and a copy of Stardew Valley (a
+Proton game), before the helper: the method was chosen by itself, a deploy unmounted and mounted
 again, the mod read through the mount from a shell and from inside Steam's Snap
-(`snap run --shell steam`, so Steam installed as a Snap sees the mounts), Vortex unmounted on
-exit and the game folder was unchanged. Not yet: a Flatpak Vortex
-(mounting from the sandbox), and keeping the mount after Vortex exits (a helper process would
-own it).
+(`snap run --shell steam`, so Steam installed as a Snap sees the mounts) and the game folder was
+unchanged. `mounts.test.ts` runs the real helper with a fake addon.
 
 The original plan follows.
 
