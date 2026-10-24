@@ -222,6 +222,36 @@ aether-vfs gains an x86 build: `vfs-ntlayout` with 32-bit layouts, the shim and 
 `vfs-injector32.exe`. A 64-bit Vortex launches a 32-bit game through the 32-bit injector; the ring
 is fixed-width, so the same director serves both (asserted at compile time on both targets).
 
+## Games verified
+
+Each with a disposable copy of the Steam install, a popular collection or the mods named, started
+from Vortex (Windows, 2026-10-24):
+
+| Game               | Collection                                        | What it exercised                                                                                                  |
+| ------------------ | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Skyrim SE          | probe mods                                        | plugins, BSAs and meshes served; LOOT; 64-bit SteamStub                                                            |
+| Fallout: New Vegas | Gopher's Stable New Vegas (`60wuix`)              | 32-bit SteamStub, xNVSE's loader starting the game, 4GB Patcher writing into the write folder                      |
+| Stardew Valley     | Stardew Valley VERY Expanded (`tckf0m`, 101 mods) | SMAPI found as a tool through the view, 58 mods and 64 content packs, a .NET mod mapping its own DLL               |
+| Valheim            | Valhiem Expanded 2025 (`y738ki`, 86 mods)         | a downloaded game extension, BepInEx's doorstop proxy, 77 plugins, its log in the write folder                     |
+| Oblivion           | Through The Valleys (`a5pbuu`, 106 mods)          | xOBSE downloaded by the script extender's Fix, `obse_loader` injecting the 32-bit game, OBSE plugins from the view |
+| 7 Days to Die      | Jeebie's 7Days+ (`kfn2nc`)                        | a mods folder outside the game folder (the User Data Folder), passed as `-UserDataFolder`                          |
+| Palworld           | Palworld Better Experience (`rpy5tv`, 35 mods)    | a downloaded game extension, the launcher starting the shipping exe, UE4SS's proxy DLL with C++ and Lua mods       |
+
+On Linux (Ubuntu VM, Snap Steam, Proton): Stardew Valley with the `vfs-nightly-20261024.13`
+tar.gz, as described under "Linux: a FUSE mount".
+
+What these found and fixed: tools a mod provides were not discovered (the walk view gave
+discovery walks the real disk only); a flush of a view of a served file failed (.NET's
+`MemoryMappedViewAccessor.Dispose`); 32-bit SteamStub and child injection by the shim's virtual
+path; on Linux, a purge as the game activated left it mounted.
+
+Not caused by the virtual file system, and the same with links: vanilla New Vegas and Oblivion do
+not start on that machine (Oblivion crashes on start without mods too); game extensions create
+their mod folders in the game folder when the game is activated (Valheim's `BepInEx\plugins`,
+Palworld's `ue4ss\Mods`), so those empty folders appear there; an extension that purges during
+its own setup, before the game has a deployment method, reports "No deployment method currently
+available" once (Palworld).
+
 ## Packaging
 
 `src/main/copy-assets.mjs` installs aether-vfs into `assets/aether-vfs` (unpacked from the
