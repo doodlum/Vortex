@@ -30,25 +30,25 @@ const digest = (data) => createHash("sha256").update(data).digest("hex");
 // development build at a local one.
 const AETHER_VFS = {
   url: "https://github.com/doodlum/aether-vfs/releases/download",
-  tag: "vortex-88d3ffe2a5cd",
+  tag: "vortex-b0bb02718c51",
   files: {
     "win32-x64": {
       "aether_vfs_node-win32-x64.node": {
         name: "aether_vfs_node.node",
-        sha256: "aeb6a5fa3c8d1e48e91ae6e75e989d8305396aa70086f1660b602d095b0b695e",
+        sha256: "725fa0b0f70fef1acb63615c9faf17be7ff54b77419f8423053571b0fe3a3ef8",
       },
       "vfs_shim_dll-win32-x64.dll": {
         name: "vfs_shim_dll.dll",
-        sha256: "8a6292b6fd31a48c78bfd17b0197b2d0dc32647041f307f792a8decd2a00d330",
+        sha256: "260dcb399ce1896c0a8c00ab0a8b4dfd99cce3f1a8a4731134ddbe6bf20fd307",
       },
       // 32-bit games get the 32-bit shim, and its injector, from the x86 folder.
       "vfs_shim_dll-win32-ia32.dll": {
         name: "x86/vfs_shim_dll.dll",
-        sha256: "8bce2cfc47b055f67ef988e0dd57bb7faba90f242de5753423b3c29e60c382fd",
+        sha256: "be5253f1a46e41d3d7a5a5c8e111a13c53a32552dfd7cd1effe6f0ca67909965",
       },
       "vfs-injector-win32-ia32.exe": {
         name: "x86/vfs-injector.exe",
-        sha256: "0dec274ad8e51ba42ba5d4e709677e88b21320d003129ca25641e0e81dd65bb0",
+        sha256: "7cc786ace11b16472c98ba5f6501a66062bc0311eb9d423b1b5e1b5cc7500d54",
       },
     },
     // Linux mounts game folders (FUSE): the binding, no shim, and the relay a Flatpak mounts

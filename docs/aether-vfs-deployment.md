@@ -202,8 +202,21 @@ On Linux the view is a FUSE filesystem served by the same provider graph (a new 
 Implemented: a 32-bit game gets the 32-bit shim and injector from `assets/aether-vfs/x86`, and
 Vortex's support check accepts it when they are installed. Verified with aether-vfs's 32-bit
 fixture launched from a 64-bit session, and with the real 32-bit `SysWOW64\cmd.exe`, `xcopy` and
-`robocopy` reading and copying a served mod file by name and by wildcard. No real 32-bit game
-has been launched yet. The plan:
+`robocopy` reading and copying a served mod file by name and by wildcard. Verified with a real
+32-bit game, Fallout: New Vegas (Steam, Ultimate Edition) and Gopher's Stable New Vegas
+(collection `60wuix`, revision 17): the FNV 4GB Patcher, run from Vortex, writes the patched
+`FalloutNV.exe` and its backup to the write folder, leaving the game's own unchanged; started from
+Vortex, `nvse_loader.exe` starts the patched game, which loads xNVSE and its plugins (JIP LN,
+JohnnyGuitar, Engine Optimizations) and the collection's plugins through the session and reaches
+its main menu. Vanilla New Vegas does not start on that machine with or without the virtual file
+system; the collection's engine fixes are what let it run.
+
+Steam's DRM wrapper is never bypassed. The game's own wrapper runs unchanged and checks ownership
+with Steam as when Steam starts it (Steam records the game process for its app id). A
+32-bit wrapper whose header the injector cannot read (New Vegas's) is not touched at all: the shim
+goes in by remote injection instead of the in-memory import patch, which edits the image's import
+directory in memory. `steam_appid.txt` and `SteamAppId` only tell Steam which game a directly
+started executable is, as script-extender loaders do. The plan:
 
 aether-vfs gains an x86 build: `vfs-ntlayout` with 32-bit layouts, the shim and its hooks, and
 `vfs-injector32.exe`. A 64-bit Vortex launches a 32-bit game through the 32-bit injector; the ring
