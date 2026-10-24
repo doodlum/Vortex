@@ -152,6 +152,17 @@ class StarterInfo implements IStarterInfo {
       }
     };
 
+    // A game deployed through the virtual file system sees its mods only when started in its
+    // session: the store's launcher would start it without, so it is started directly, with
+    // its store identity (vfs_deployment).
+    if (launcherResult !== undefined && hasExe && api.ext?.vfsLaunchesDirectly?.(info.gameId)) {
+      log("info", "starting directly instead of through the store's launcher", {
+        gameId: info.gameId,
+        launcher: launcherResult.launcher,
+      });
+      launcherResult = undefined;
+    }
+
     if (launcherResult === undefined) {
       if (hasExe) {
         await StarterInfo.runDirectly(info, api, onShowError, onSpawned);

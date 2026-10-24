@@ -93,6 +93,17 @@ export function vfsSupport(state: IState, gameId: string): IUnavailableReason | 
   if (executable === undefined) {
     return { description: (t) => t("The game has not been found yet.") };
   }
+  if (state.settings.gameMode.discovered[gameId]?.store === "xbox") {
+    // The store starts its games inside their app container, where no program Vortex starts
+    // (and so no session) can reach them.
+    return {
+      description: (t) =>
+        t(
+          "Microsoft Store games are started inside their app container, which the virtual " +
+            "file system cannot reach.",
+        ),
+    };
+  }
   const arch = imageArch(executable);
   if (arch === "x64") {
     return undefined;

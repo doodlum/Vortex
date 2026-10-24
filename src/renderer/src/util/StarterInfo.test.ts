@@ -1,6 +1,7 @@
 import PromiseBB from "bluebird";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
+import { getGame } from "../extensions/gamemode_management/util/getGame";
 import {
   makeApiHarness,
   makeStarterInfo,
@@ -8,6 +9,7 @@ import {
   resetHarnessRegistries,
 } from "../test-utils/builders";
 import type { IExtensionApi, IRunOptions } from "../types/IExtensionContext";
+import type { IGame } from "../types/IGame";
 import { MissingDependency, ProcessCanceled, UserCanceled } from "./CustomErrors";
 import StarterInfo, { type IStarterInfo } from "./StarterInfo";
 
@@ -179,6 +181,34 @@ for (const mode of ["hide", "hide_recover", "close"] as const) {
       expect(launch.show).toHaveBeenCalledTimes(mode === "hide_recover" ? 1 : 0);
       expect(launch.quit).toHaveBeenCalledTimes(mode === "close" ? 1 : 0);
       expect(h.error).not.toHaveBeenCalled();
+    },
+  );
+}
+
+for (const direct of [true, false]) {
+  test(
+    "a store-launched game " +
+      (direct ? "deployed virtually starts directly" : "otherwise goes through its launcher"),
+    async () => {
+      const h = harness();
+      registerHarnessGame(h.info.gameId);
+      const game = getGame(h.info.gameId) as IGame;
+      game.requiresLauncher = () => PromiseBB.resolve({ launcher: "steam" });
+      (h.api as { ext: Record<string, unknown> }).ext = {
+        ...h.api.ext,
+        vfsLaunchesDirectly: (gameId: string) => direct && gameId === h.info.gameId,
+      };
+      const throughLauncher = vi
+        .spyOn(
+          StarterInfo as unknown as { runThroughLauncher: () => Promise<void> },
+          "runThroughLauncher",
+        )
+        .mockResolvedValue(undefined);
+      await StarterInfo.run(h.info, h.api, h.error);
+      expect(throughLauncher).toHaveBeenCalledTimes(direct ? 0 : 1);
+      expect(h.runExecutableCalls).toHaveLength(direct ? 1 : 0);
+      expect(h.error).not.toHaveBeenCalled();
+      delete game.requiresLauncher;
     },
   );
 }

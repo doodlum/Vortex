@@ -136,6 +136,18 @@ export function vfsGameForLaunch(
 }
 
 /**
+ * Whether `gameId`'s game has to be started directly, in its session, rather than through its
+ * store's launcher: on Windows, while it is deployed through the virtual file system.
+ */
+export function launchesDirectly(api: IExtensionApi, gameId: string): boolean {
+  if (process.platform !== "win32") {
+    return false;
+  }
+  const executable = gameExecutable(api.getState(), gameId);
+  return executable !== undefined && vfsGameForLaunch(api, executable, gameId) !== undefined;
+}
+
+/**
  * Starts every Windows program of a game deployed through the virtual file system inside a
  * session composed from the game's current deployment, so it sees the game folder with the
  * mods in it. Each launch gets its own session, closed (and its state removed) when everything

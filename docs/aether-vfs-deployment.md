@@ -69,9 +69,12 @@ Every program Vortex starts for a game runs through one session per game (`@aeth
   loaders all see the mods. Start hooks still run first. Exit and running state come from the
   launch handle (every process in its Job Object), which keeps `toolsRunning` correct.
 - Store launches are replaced by direct launches with the store's environment (`SteamAppId`,
-  `steam_appid.txt` semantics), which aether-vfs already supports for SteamStub-wrapped games.
-  **A game started from Steam's own Play button does not see mods**, as with Mod Organizer 2.
-  The Play button in Vortex is the supported way to play.
+  `steam_appid.txt` semantics), which aether-vfs already supports for SteamStub-wrapped games:
+  `StarterInfo` asks the extension's `vfsLaunchesDirectly` API before handing a game to its
+  store's launcher. **A game started from Steam's own Play button does not see mods**, as with
+  Mod Organizer 2. The Play button in Vortex is the supported way to play.
+- Microsoft Store (Xbox app) games start inside their app container, which no session reaches.
+  The virtual method reports itself unavailable for them, so they keep the link methods.
 - Vortex and its extensions read game folders unchanged. `util/vfsFsView` wraps Node's `fs`,
   `fs/promises` and Electron's `original-fs` at the start of the renderer. `requireRemap` hands
   `original-fs` to graceful-fs and rimraf, so fs-extra and Vortex's `util/fs` read through it.
@@ -120,6 +123,18 @@ On Linux the view is a FUSE filesystem served by the same provider graph (a new 
 aether-vfs gains an x86 build: `vfs-ntlayout` with 32-bit layouts, the shim and its hooks, and
 `vfs-injector32.exe`. A 64-bit Vortex launches a 32-bit game through the 32-bit injector; the ring
 is fixed-width, so the same director serves both (asserted at compile time on both targets).
+
+## Packaging
+
+`src/main/copy-assets.mjs` installs aether-vfs into `assets/aether-vfs` (unpacked from the
+asar): the Node binding and the shim, downloaded from a pinned release of doodlum/aether-vfs
+(`vortex-<sha>`, published by its `vortex-artifacts` workflow for every push to a `vortex-*`
+branch) and checked against pinned SHA-256 sums. To move to a newer aether-vfs, pin that
+release's tag and the sums from its `SHA256SUMS-*.txt`. `VORTEX_AETHER_VFS_DIR` makes a
+development build load a local aether-vfs build instead.
+
+The fork's `aether-vfs-nightly.yml` keeps this branch merged with `linux` and publishes
+`vfs-nightly-*` pre-releases.
 
 ## Migration
 

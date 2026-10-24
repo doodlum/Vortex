@@ -75,6 +75,7 @@
     "node_modules/@nexusmods/fomod-installer-ipc/dist/*.exe",
     "assets/dotnetprobe*",
     "assets/loot/**",
+    "assets/aether-vfs/**",
     "assets/*.exe",
     "assets/css/**",
     "**/*.node",

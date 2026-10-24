@@ -23,6 +23,27 @@ const MONO_RUNTIME = {
 };
 const digest = (data) => createHash("sha256").update(data).digest("hex");
 
+// aether-vfs, the virtual file system deployment runs on (extensions/vfs_deployment): its Node
+// binding and the shim it injects, as published by doodlum/aether-vfs's vortex-artifacts
+// workflow, one release per commit. Each file is pinned by its SHA-256 and installed under the
+// name the extension loads. `VORTEX_AETHER_VFS_DIR` points a development build at a local one.
+const AETHER_VFS = {
+  url: "https://github.com/doodlum/aether-vfs/releases/download",
+  tag: "vortex-edb87e34347b",
+  files: {
+    "win32-x64": {
+      "aether_vfs_node-win32-x64.node": {
+        name: "aether_vfs_node.node",
+        sha256: "1b8b81daafd49d76947be342a29665a61d7a2a3a0f4c082cc4bf2fd94f3b725f",
+      },
+      "vfs_shim_dll-win32-x64.dll": {
+        name: "vfs_shim_dll.dll",
+        sha256: "4a94149ecdae357e06c135258e829146406eebce59d867836b67a30bd256e095",
+      },
+    },
+  },
+};
+
 const WORKSPACE = join(import.meta.dirname, "../..");
 const BUILD = join(import.meta.dirname, "build");
 const ASSETS = join(BUILD, "assets");
@@ -67,6 +88,30 @@ if (process.platform === "linux" && process.arch === "x64") {
   }
   const ipcPackage = dirname(require.resolve("@nexusmods/fomod-installer-ipc/package.json"));
   await copy(join(ipcPackage, "dist/mono"), join(destination, "helper"));
+}
+
+// aether-vfs: downloaded once into the workspace cache, verified on every copy.
+{
+  const files = AETHER_VFS.files[`${process.platform}-${process.arch}`];
+  const destination = join(ASSETS, "aether-vfs");
+  await rm(destination, { recursive: true, force: true });
+  if (files === undefined) {
+    console.log(`no aether-vfs build for ${process.platform}-${process.arch}`);
+  } else {
+    await mkdir(destination, { recursive: true });
+    for (const [asset, { name, sha256 }] of Object.entries(files)) {
+      const cached = join(WORKSPACE, "node_modules/.cache/aether-vfs", AETHER_VFS.tag, asset);
+      if (!existsSync(cached) || digest(await readFile(cached)) !== sha256) {
+        const response = await fetch(`${AETHER_VFS.url}/${AETHER_VFS.tag}/${asset}`);
+        if (!response.ok) throw new Error(`Downloading ${asset} failed: ${response.status}`);
+        const data = Buffer.from(await response.arrayBuffer());
+        if (digest(data) !== sha256) throw new Error(`${asset} does not match its pinned SHA-256`);
+        await mkdir(dirname(cached), { recursive: true });
+        await writeFile(cached, data);
+      }
+      await copy(cached, join(destination, name));
+    }
+  }
 }
 
 // SCSS sources for runtime stylesheet compiler load paths

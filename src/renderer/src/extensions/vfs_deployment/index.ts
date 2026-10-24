@@ -1,7 +1,7 @@
 import type { IExtensionContext } from "../../types/IExtensionContext";
 import { activeGameId } from "../../util/selectors";
 import type { IDeploymentMethod } from "../mod_management/types/IDeploymentMethod";
-import { cleanStaleSessions, makeLaunchRunner } from "./runner";
+import { cleanStaleSessions, launchesDirectly, makeLaunchRunner } from "./runner";
 import { vfsSupport } from "./support";
 import { hideDeployment, showDeployment, showGameFromManifests } from "./view";
 import VirtualDeployment from "./VirtualDeployment";
@@ -33,6 +33,11 @@ function init(context: IExtensionContextEx): boolean {
   );
   // Before the default spawn; no other runner is registered in core.
   context.registerLaunchRunner(100, "aether-vfs", makeLaunchRunner(api));
+  // A store launcher (Steam, Epic, GOG) would start the game outside the session: the game is
+  // started directly instead, with its store identity (runner.ts). StarterInfo asks.
+  context.registerAPI("vfsLaunchesDirectly", (gameId: string) => launchesDirectly(api, gameId), {
+    minArguments: 1,
+  });
   context.once(() => {
     cleanStaleSessions();
     const show = (gameId: string | undefined) => {
