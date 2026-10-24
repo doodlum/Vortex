@@ -5,7 +5,7 @@ import { activeGameId } from "../../util/selectors";
 import { clearDeletions } from "../../util/vfsFsView";
 import type { IDeploymentMethod } from "../mod_management/types/IDeploymentMethod";
 import { onVirtualActivationSaved } from "../mod_management/util/activationStore";
-import { isMounted, mountGame, mountsApply, unmountGame } from "./mounts";
+import { mountGame, mountIfIdle, mountsApply, setChanging, unmountGame } from "./mounts";
 import { isVirtualGame, showOverwriteDialog } from "./overwrite";
 import { cleanStaleSessions, launchesDirectly, makeLaunchRunner } from "./runner";
 import { vfsSupport } from "./support";
@@ -85,21 +85,31 @@ function init(context: IExtensionContextEx): boolean {
       const gameOf = (profileId: string): string | undefined =>
         api.getState().persistent.profiles[profileId]?.gameId;
       const mount = (gameId: string | undefined) => {
-        if (gameId !== undefined && isVirtualGame(api, gameId) && !isMounted(api, gameId)) {
-          void mountGame(api, gameId);
+        if (gameId !== undefined && isVirtualGame(api, gameId)) {
+          void mountIfIdle(api, gameId);
         }
       };
       api.onAsync("will-deploy", async (profileId: string) => {
         const gameId = gameOf(profileId);
-        if (gameId !== undefined) await unmountGame(api, gameId);
+        if (gameId === undefined) return;
+        setChanging(gameId, true);
+        await unmountGame(api, gameId);
       });
       api.onAsync("did-deploy", async (profileId: string) => {
         const gameId = gameOf(profileId);
-        if (gameId !== undefined && isVirtualGame(api, gameId)) await mountGame(api, gameId);
+        if (gameId === undefined) return;
+        setChanging(gameId, false);
+        if (isVirtualGame(api, gameId)) await mountGame(api, gameId);
       });
       api.onAsync("will-purge", async (profileId: string) => {
         const gameId = gameOf(profileId);
-        if (gameId !== undefined) await unmountGame(api, gameId);
+        if (gameId === undefined) return;
+        setChanging(gameId, true);
+        await unmountGame(api, gameId);
+      });
+      api.onAsync("did-purge", async (profileId: string) => {
+        const gameId = gameOf(profileId);
+        if (gameId !== undefined) setChanging(gameId, false);
       });
       mount(activeGameId(api.getState()));
       api.events.on("gamemode-activated", mount);

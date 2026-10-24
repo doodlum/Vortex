@@ -44,7 +44,15 @@ vi.mock("./roots", () => ({
 }));
 
 import type { IExtensionApi } from "../../types/IExtensionContext";
-import { flatpakHostPath, hostFusermountScript, isMounted, mountGame, unmountGame } from "./mounts";
+import {
+  flatpakHostPath,
+  hostFusermountScript,
+  isMounted,
+  mountGame,
+  mountIfIdle,
+  setChanging,
+  unmountGame,
+} from "./mounts";
 
 const platform = process.platform;
 beforeAll(() => {
@@ -129,6 +137,34 @@ describe("the Linux mounts", () => {
     expect(fs.existsSync(path.join(helperDir("x"), "status.json"))).toBe(false);
     // The helper removes its status as its last act; the process ends a moment later.
     await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 5000 });
+  }, 30000);
+
+  it("a purge that begins as the game activates leaves it unmounted", async () => {
+    const entry = path.join(
+      fakes.root,
+      "autostart",
+      `vortex-vfs-${path.basename(helperDir("y"))}.desktop`,
+    );
+    fakes.roots = [{ location: "/games/y", files: [] }];
+    // The helper mounted at login; Vortex starts and is asked to purge as the game activates.
+    await mountGame(api, "y");
+    const pid = helperPid("y");
+    setChanging("y", true);
+    const purge = unmountGame(api, "y");
+    // The activation comes after the purge's unmount removed the spec, as it did on Linux.
+    await vi.waitFor(() =>
+      expect(fs.existsSync(path.join(helperDir("y"), "spec.json"))).toBe(false),
+    );
+    await mountIfIdle(api, "y");
+    await purge;
+    setChanging("y", false);
+    expect(isMounted(api, "y")).toBe(false);
+    expect(fs.existsSync(path.join(helperDir("y"), "spec.json"))).toBe(false);
+    expect(fs.existsSync(entry)).toBe(false);
+    await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 5000 });
+    // A mount and an unmount called together still end unmounted.
+    await Promise.all([mountGame(api, "y"), unmountGame(api, "y")]);
+    expect(isMounted(api, "y")).toBe(false);
   }, 30000);
 
   it("replaces a helper another Vortex version started, whose addon stays loaded", async () => {

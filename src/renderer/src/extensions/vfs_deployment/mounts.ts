@@ -216,21 +216,62 @@ async function stopHelper(gameId: string, dir: string): Promise<void> {
   log("info", "unmounted the virtual file system", { gameId });
 }
 
+/**
+ * Each game's mounts and unmounts, run one after another. A mount Vortex starts on its own (at
+ * startup) and a purge's unmount otherwise interleave: the mount wrote its spec and login entry
+ * after the unmount removed them, and the helper went on serving a purged game.
+ */
+const queues = new Map<string, Promise<void>>();
+
+function inTurn(gameId: string, run: () => Promise<void>): Promise<void> {
+  const next = (queues.get(gameId) ?? Promise.resolve()).catch(() => undefined).then(run);
+  queues.set(gameId, next);
+  return next;
+}
+
+/** Games with a deploy or purge under way: that change's own unmount and mount decide. */
+const changing = new Set<string>();
+
+/** Note that a deploy or purge of `gameId` began (`true`) or ended. */
+export function setChanging(gameId: string, value: boolean): void {
+  if (value) {
+    changing.add(gameId);
+  } else {
+    changing.delete(gameId);
+  }
+}
+
+/**
+ * Mount `gameId` when Vortex starts or activates it, unless it is mounted or being deployed or
+ * purged. A purge that began as the game activated had unmounted it, and the activation mounted
+ * the purged deployment again.
+ */
+export function mountIfIdle(api: IExtensionApi, gameId: string): Promise<void> {
+  if (changing.has(gameId) || isMounted(api, gameId)) {
+    return Promise.resolve();
+  }
+  return mountGame(api, gameId);
+}
+
 /** Mount `gameId`'s deployment as its manifests describe it, or update the mount it has. */
-export async function mountGame(api: IExtensionApi, gameId: string): Promise<void> {
+export function mountGame(api: IExtensionApi, gameId: string): Promise<void> {
   if (!mountsApply()) {
-    return;
+    return Promise.resolve();
   }
   const mine = bump(gameId);
+  return inTurn(gameId, () => mountInTurn(api, gameId, mine));
+}
+
+async function mountInTurn(api: IExtensionApi, gameId: string, mine: number): Promise<void> {
+  // A later mount or unmount of the game supersedes this one.
+  const superseded = () => generations.get(gameId) !== mine;
+  if (superseded()) {
+    return;
+  }
   const aether = loadAether();
   const game = await deploymentForGame(api, gameId);
   const dir = helperDir(api, gameId);
-  if (
-    aether === undefined ||
-    game === undefined ||
-    dir === undefined ||
-    generations.get(gameId) !== mine
-  ) {
+  if (aether === undefined || game === undefined || dir === undefined || superseded()) {
     return;
   }
   const version = getApplication().version;
@@ -238,7 +279,7 @@ export async function mountGame(api: IExtensionApi, gameId: string): Promise<voi
   if (running !== undefined && running.version !== version) {
     // Mounted by another Vortex version, whose addon stays loaded in its helper.
     await stopHelper(gameId, dir);
-    if (generations.get(gameId) !== mine) {
+    if (superseded()) {
       return;
     }
   }
@@ -260,6 +301,10 @@ export async function mountGame(api: IExtensionApi, gameId: string): Promise<voi
     startHelper(dir);
   }
   for (let waited = 0; waited < 15000; waited += 100) {
+    if (superseded()) {
+      // The unmount or mount queued behind this one decides the login entry.
+      return;
+    }
     const status = liveStatus(dir);
     if (status?.generation === generation) {
       if (status.mounted) {
@@ -283,12 +328,14 @@ export async function mountGame(api: IExtensionApi, gameId: string): Promise<voi
  * Unmount `gameId`'s deployment (lazily, if a program still holds files there), and wait for
  * its helper to end: a deploy that follows must see the game's own files.
  */
-export async function unmountGame(api: IExtensionApi, gameId: string): Promise<void> {
-  bump(gameId);
-  const dir = helperDir(api, gameId);
-  if (dir !== undefined) {
-    await stopHelper(gameId, dir);
-  }
+export function unmountGame(api: IExtensionApi, gameId: string): Promise<void> {
+  const mine = bump(gameId);
+  return inTurn(gameId, async () => {
+    const dir = helperDir(api, gameId);
+    if (dir !== undefined && generations.get(gameId) === mine) {
+      await stopHelper(gameId, dir);
+    }
+  });
 }
 /** Whether this machine can mount: `/dev/fuse` and `fusermount3` (package fuse3). */
 export function canMount(): boolean {
