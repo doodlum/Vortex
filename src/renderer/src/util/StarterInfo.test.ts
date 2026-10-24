@@ -1,3 +1,7 @@
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+
 import PromiseBB from "bluebird";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
@@ -12,6 +16,7 @@ import type { IExtensionApi, IRunOptions } from "../types/IExtensionContext";
 import type { IGame } from "../types/IGame";
 import { MissingDependency, ProcessCanceled, UserCanceled } from "./CustomErrors";
 import StarterInfo, { type IStarterInfo } from "./StarterInfo";
+import type * as StoreLookup from "./storeLookup";
 
 const launch = vi.hoisted(() => ({
   run: vi.fn(),
@@ -27,9 +32,41 @@ vi.mock("./gameLaunchAnalytics", () => ({
 }));
 
 vi.mock("./application", () => ({ getApplication: () => ({ quit: launch.quit }) }));
+const stores = vi.hoisted(() => ({ steamExe: undefined as string | undefined }));
+vi.mock("./storeLookup", async (original) => {
+  const actual = await original<typeof StoreLookup>();
+  return {
+    ...actual,
+    getGameStore: (...args: Parameters<typeof actual.getGameStore>) =>
+      stores.steamExe !== undefined && args[1] === "steam"
+        ? { getGameStorePath: () => Promise.resolve(stores.steamExe) }
+        : actual.getGameStore(...args),
+  };
+});
 vi.mock("../extensions/analytics/utils/modListSnapshot", () => ({
   emitModListSnapshot: vi.fn().mockResolvedValue(undefined),
 }));
+
+/** A v28 appinfo.vdf holding Halo MCC (976730) with its option2 launch entry only. */
+const MCC_APPINFO = (() => {
+  const text = (value: string) => Buffer.from(value + "\0", "utf8");
+  const u32 = (value: number) => {
+    const out = Buffer.alloc(4);
+    out.writeUInt32LE(value);
+    return out;
+  };
+  const body = Buffer.concat([
+    Buffer.alloc(4 + 4 + 8 + 20 + 4 + 20),
+    ...["appinfo", "config", "launch", "1"].flatMap((name) => [Buffer.from([0x00]), text(name)]),
+    ...[
+      ["executable", "mcc\\binaries\\win64\\mcc-win64-shipping.exe"],
+      ["arguments", "-no-eac"],
+      ["type", "option2"],
+    ].flatMap(([name, value]) => [Buffer.from([0x01]), text(name), text(value)]),
+    Buffer.from([0x08, 0x08, 0x08, 0x08, 0x08]),
+  ]);
+  return Buffer.concat([u32(0x07564428), u32(1), u32(976730), u32(body.length), body, u32(0)]);
+})();
 
 interface IStarterInternals {
   runDirectly: (
@@ -212,6 +249,42 @@ for (const direct of [true, false]) {
     },
   );
 }
+
+test("a virtually deployed game started directly runs the Steam launch option it asked for", async () => {
+  const h = harness();
+  registerHarnessGame(h.info.gameId);
+  const game = getGame(h.info.gameId) as IGame;
+  game.requiresLauncher = () =>
+    PromiseBB.resolve({ launcher: "steam", addInfo: { appId: "976730", parameters: ["option2"] } });
+  (h.api as { ext: Record<string, unknown> }).ext = {
+    ...h.api.ext,
+    vfsLaunchesDirectly: () => true,
+  };
+  // Halo MCC's "Anti-Cheat Disabled" entry, in Steam's v28 cache layout.
+  const steam = fs.mkdtempSync(path.join(os.tmpdir(), "vortex-steam-"));
+  fs.mkdirSync(path.join(steam, "appcache"));
+  fs.writeFileSync(path.join(steam, "appcache", "appinfo.vdf"), MCC_APPINFO);
+  stores.steamExe = path.join(steam, "steam.exe");
+  const gamePath = path.join(steam, "steamapps", "common", "Halo The Master Chief Collection");
+  h.setState((draft) => {
+    draft.settings.gameMode.discovered[h.info.gameId] = { path: gamePath };
+  });
+  h.info.commandLine = ["-user"];
+  try {
+    await StarterInfo.run(h.info, h.api, h.error);
+  } finally {
+    stores.steamExe = undefined;
+    delete game.requiresLauncher;
+    fs.rmSync(steam, { recursive: true, force: true });
+  }
+  expect(h.runExecutableCalls).toHaveLength(1);
+  expect(h.runExecutableCalls[0]).toMatchObject({
+    executable: path.join(gamePath, "mcc\\binaries\\win64\\mcc-win64-shipping.exe"),
+    args: ["-no-eac", "-user"],
+    options: { gameId: h.info.gameId },
+  });
+  expect(h.error).not.toHaveBeenCalled();
+});
 
 test("a tool outside its game passes explicit game context to the shared API", async () => {
   const h = harness();

@@ -25,6 +25,7 @@ import {
 } from "./CustomErrors";
 import { emitGameLaunched, recordLaunchExit } from "./gameLaunchAnalytics";
 import getVortexPath from "./getVortexPath";
+import { findSteamLaunchOption } from "./steamAppInfo";
 import { getSafe } from "./storeHelper";
 import * as storeLookup from "./storeLookup";
 
@@ -155,17 +156,19 @@ class StarterInfo implements IStarterInfo {
     // A game deployed through the virtual file system sees its mods only when started in its
     // session: the store's launcher would start it without, so it is started directly, with
     // its store identity (vfs_deployment).
+    let direct: IStarterInfo = info;
     if (launcherResult !== undefined && hasExe && api.ext?.vfsLaunchesDirectly?.(info.gameId)) {
       log("info", "starting directly instead of through the store's launcher", {
         gameId: info.gameId,
         launcher: launcherResult.launcher,
       });
+      direct = await StarterInfo.withLaunchOption(info, api, game, launcherResult);
       launcherResult = undefined;
     }
 
     if (launcherResult === undefined) {
       if (hasExe) {
-        await StarterInfo.runDirectly(info, api, onShowError, onSpawned);
+        await StarterInfo.runDirectly(direct, api, onShowError, onSpawned);
       } else {
         onShowError(
           "Failed to start game",
@@ -242,6 +245,58 @@ class StarterInfo implements IStarterInfo {
     }
 
     return info["__iconCache"];
+  }
+
+  /**
+   * `info` with the program and arguments of the Steam launch option its launcher asked for
+   * (`parameters: ["option2"]`, Halo MCC's "Anti-Cheat Disabled"), for a game started directly
+   * rather than through Steam. `info` itself when it names no option or Steam's cache does not
+   * have it.
+   */
+  private static async withLaunchOption(
+    info: IStarterInfo,
+    api: IExtensionApi,
+    game: IGame,
+    launcherResult: { launcher: string; addInfo?: any },
+  ): Promise<IStarterInfo> {
+    const option = (launcherResult.addInfo?.parameters ?? []).find(
+      (parameter: unknown) => typeof parameter === "string" && /^option\d+$/.test(parameter),
+    );
+    const appId = Number(launcherResult.addInfo?.appId ?? game.details?.steamAppId);
+    const gamePath = api.getState().settings.gameMode.discovered[info.gameId]?.path;
+    if (launcherResult.launcher !== "steam" || option === undefined || !appId || !gamePath) {
+      return info;
+    }
+    const steamExe = await storeLookup
+      .getGameStore(getGameStoresSafe(), "steam")
+      ?.getGameStorePath?.();
+    if (steamExe === undefined) {
+      return info;
+    }
+    const entry = await findSteamLaunchOption(
+      (filePath) => fs.promises.readFile(filePath),
+      path.dirname(steamExe),
+      appId,
+      option,
+    );
+    if (entry === undefined) {
+      log("warn", "Steam launch option not found; starting the game's own executable", {
+        gameId: info.gameId,
+        option,
+      });
+      return info;
+    }
+    log("info", "starting the Steam launch option directly", { gameId: info.gameId, option });
+    const exePath = path.join(gamePath, entry.executable);
+    return {
+      ...info,
+      exePath,
+      commandLine: [...entry.arguments, ...info.commandLine],
+      workingDirectory:
+        entry.workingdir !== undefined
+          ? path.join(gamePath, entry.workingdir)
+          : path.dirname(exePath),
+    };
   }
 
   private static async runDirectly(
