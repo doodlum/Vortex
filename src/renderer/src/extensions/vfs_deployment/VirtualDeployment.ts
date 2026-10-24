@@ -223,23 +223,23 @@ export default class VirtualDeployment implements IDeploymentMethod {
     return Promise.resolve(files);
   }
 
-  public cancel(gameId: string, dataPath: string, installationPath: string): PromiseLike<void> {
+  public cancel(_gameId: string, _dataPath: string, _installationPath: string): PromiseLike<void> {
     if (this.mContext !== undefined) {
       this.complete(this.mContext);
     }
     return Promise.resolve();
   }
 
-  public prePurge(installPath: string): PromiseLike<void> {
+  public prePurge(_installPath: string): PromiseLike<void> {
     return Promise.resolve();
   }
 
   /** Nothing is on disk: clearing the deployment is saving an empty manifest, which core does. */
   public purge(
-    installPath: string,
+    _installPath: string,
     dataPath: string,
     gameId?: string,
-    onProgress?: (num: number, total: number) => void,
+    _onProgress?: (num: number, total: number) => void,
   ): PromiseLike<void> {
     this.mHooks.purged?.(gameId, dataPath);
     return Promise.resolve();
