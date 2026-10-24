@@ -131,8 +131,11 @@ Implemented in `vfs_deployment/mounts.ts` on aether-vfs's `vfs-fuse`. While Vort
 virtually deployed game's roots are mounted at their locations (unprivileged, through
 `fusermount3`); a deploy unmounts first, so the deployment reads the game's own files, and
 mounts the result; a purge unmounts. Vortex's support check needs `/dev/fuse` and `fusermount3`
-(package `fuse3`). Steam installed as a Snap sees the mounts: checked on Ubuntu with a mount
-under the Snap's home, read through `snap run --shell steam`. Not yet: a Flatpak Vortex
+(package `fuse3`). Verified on Ubuntu with the `vfs-nightly-20261024.2` tar.gz and a copy of
+Stardew Valley (a Proton game): the method was chosen by itself, a deploy unmounted and mounted
+again, the mod read through the mount from a shell and from inside Steam's Snap
+(`snap run --shell steam`, so Steam installed as a Snap sees the mounts), Vortex unmounted on
+exit and the game folder was unchanged. Not yet: a Flatpak Vortex
 (mounting from the sandbox), and keeping the mount after Vortex exits (a helper process would
 own it).
 
