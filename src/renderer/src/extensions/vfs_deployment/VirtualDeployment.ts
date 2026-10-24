@@ -23,6 +23,17 @@ export type SupportCheck = (
   modTypeId: string,
 ) => IUnavailableReason | undefined;
 
+/** Called when a mod type's deployment changes, to show it to Vortex's own file reads. */
+export interface IDeploymentHooks {
+  deployed?: (
+    gameId: string,
+    dataPath: string,
+    stagingPath: string,
+    files: IDeployedFile[],
+  ) => void;
+  purged?: (gameId: string | undefined, dataPath: string) => void;
+}
+
 interface IDeploymentContext {
   /** Keyed by the normalized `target/relPath`, as a linking deployment keys its files. */
   deployment: Map<string, IDeployedFile>;
@@ -63,9 +74,11 @@ export default class VirtualDeployment implements IDeploymentMethod {
   private mContext: IDeploymentContext | undefined;
   private mNormalize: Normalize = (input) => input;
   private mSupport: SupportCheck;
+  private mHooks: IDeploymentHooks;
 
-  constructor(support: SupportCheck) {
+  constructor(support: SupportCheck, hooks: IDeploymentHooks = {}) {
     this.mSupport = support;
+    this.mHooks = hooks;
   }
 
   public detailedDescription(t: TFunction): string {
@@ -203,6 +216,8 @@ export default class VirtualDeployment implements IDeploymentMethod {
     }
     const files = Array.from(context.deployment.values());
     progressCB?.(files.length, files.length);
+    // Before core saves the manifest and emits did-deploy, so its readers already see it.
+    this.mHooks.deployed?.(gameId, dataPath, installationPath, files);
     this.complete(context);
     return Promise.resolve(files);
   }
@@ -225,6 +240,7 @@ export default class VirtualDeployment implements IDeploymentMethod {
     gameId?: string,
     onProgress?: (num: number, total: number) => void,
   ): PromiseLike<void> {
+    this.mHooks.purged?.(gameId, dataPath);
     return Promise.resolve();
   }
 

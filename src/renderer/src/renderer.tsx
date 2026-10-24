@@ -14,6 +14,11 @@ if (process.env.DEBUG_REACT_RENDERS === "true") {
 const requireRemap = require("./util/requireRemap").default;
 requireRemap();
 
+// Next, before graceful-fs and fs-extra copy fs's functions: show game folders as programs see
+// them when a game is deployed through the virtual file system.
+// tslint:disable-next-line:no-var-requires
+require("./util/vfsFsView").install();
+
 const earlyErrHandler = (evt: ErrorEvent | PromiseRejectionEvent) => {
   let value: unknown;
   let fallbackMessage = "";

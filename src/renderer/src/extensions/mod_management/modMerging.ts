@@ -12,6 +12,7 @@ import type { IFileEntry } from "../../util/getFileList";
 import getFileList from "../../util/getFileList";
 import type { Normalize } from "../../util/getNormalizeFunc";
 import { setdefault, truthy } from "../../util/util";
+import { realStat } from "../../util/vfsFsView";
 import walk from "../../util/walk";
 import { BACKUP_TAG } from "./LinkingDeployment";
 import type { IMod } from "./types/IMod";
@@ -164,9 +165,10 @@ async function mergeMods(
   const archiveMerges: {
     [relPath: string]: Array<{ id: string; path: string }>;
   } = {};
+  // The game's originals as they are on disk. With a virtual deployment the folder holds only
+  // those, and its deployed view would show a mod's file, or this merge's own output.
   const fileExists = (file: string) =>
-    fs
-      .statAsync(file)
+    realStat(file)
       .then(() => true)
       .catch(() => false);
 

@@ -1,3 +1,4 @@
+import { readdir } from "node:fs/promises";
 import * as path from "path";
 
 import { getErrorCode, getErrorMessageOrDefault, unknownToError } from "@vortex/shared";
@@ -13,7 +14,6 @@ import { discoveryByGame } from "../../gamemode_management/selectors";
 import { getGame } from "../../gamemode_management/util/getGame";
 import { setDeploymentNecessary } from "../../mod_management/actions/deployment";
 import { installPathForGame } from "../../mod_management/selectors";
-import { listDeployedFiles } from "../../mod_management/util/deployedView";
 import { getCurrentActivator } from "../../mod_management/util/deploymentMethods";
 import { setPluginList } from "../actions/plugins";
 import { ESPFile } from "../esp/ESPFile";
@@ -43,17 +43,11 @@ async function updatePluginListImpl(
   const modIdByFileName: Record<string, string> = {};
   const pluginStates: IPlugins = {};
 
-  const addPlugin = (
-    basePath: string,
-    fileName: string,
-    modId: string,
-    deployed: boolean,
-    filePath: string = path.join(basePath, fileName),
-  ) => {
+  const addPlugin = (basePath: string, fileName: string, modId: string, deployed: boolean) => {
     const pluginId = toPluginId(fileName);
     pluginStates[pluginId] = {
       modId,
-      filePath,
+      filePath: path.join(basePath, fileName),
       isNative: isNativePlugin(gameId, fileName),
       warnings: state.session.plugins?.pluginList?.[pluginId]?.warnings ?? {},
       deployed,
@@ -77,14 +71,10 @@ async function updatePluginListImpl(
   const dataModType: unknown = game.details?.dataModType;
   const modType = typeof dataModType === "string" ? dataModType : "";
   const modPath = game.getModPaths(discovery.path)[modType];
-  // The folder as the game sees it: with a virtual deployment, its mods' plugins are listed
-  // there too, read from their staged files.
-  const scanGameFolder = async (): Promise<
-    Array<{ name: string; filePath: string }> | undefined
-  > => {
-    let entries: Array<{ name: string; filePath: string }>;
+  const scanGameFolder = async (): Promise<string[] | undefined> => {
+    let fileNames: string[];
     try {
-      entries = await withFileRetry(() => listDeployedFiles(state, gameId, modPath));
+      fileNames = await withFileRetry(() => readdir(modPath));
     } catch (err) {
       // the game's own plugins only come from here, so keep the previous list
       log("warn", "failed to read the game folder, keeping the plugin list", {
@@ -96,14 +86,7 @@ async function updatePluginListImpl(
       });
       return undefined;
     }
-    const kept = await Promise.all(
-      entries.map(async (entry) => {
-        const dir = path.dirname(entry.filePath);
-        const plugins = await selectPluginFiles(dir, [path.basename(entry.filePath)], gameId);
-        return plugins.length > 0 ? entry : undefined;
-      }),
-    );
-    return kept.filter((entry) => entry !== undefined);
+    return selectPluginFiles(modPath, fileNames, gameId);
   };
   const deployedScan = scanGameFolder();
 
@@ -155,12 +138,12 @@ async function updatePluginListImpl(
     store.dispatch(dismissNotification("failed-to-read-mods"));
   }
 
-  const deployedEntries = await deployedScan;
-  if (deployedEntries === undefined) {
+  const deployedFileNames = await deployedScan;
+  if (deployedFileNames === undefined) {
     return;
   }
-  for (const { name, filePath } of deployedEntries) {
-    addPlugin(modPath, name, modIdByFileName[name] ?? "", true, filePath);
+  for (const fileName of deployedFileNames) {
+    addPlugin(modPath, fileName, modIdByFileName[fileName] ?? "", true);
   }
 
   store.dispatch(setPluginList(pluginStates));
