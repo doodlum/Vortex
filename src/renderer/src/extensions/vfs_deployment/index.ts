@@ -4,6 +4,7 @@ import type { IExtensionContext } from "../../types/IExtensionContext";
 import { activeGameId } from "../../util/selectors";
 import { clearDeletions } from "../../util/vfsFsView";
 import type { IDeploymentMethod } from "../mod_management/types/IDeploymentMethod";
+import { onVirtualActivationSaved } from "../mod_management/util/activationStore";
 import { isMounted, mountGame, mountsApply, unmountAll, unmountGame } from "./mounts";
 import { isVirtualGame, showOverwriteDialog } from "./overwrite";
 import { cleanStaleSessions, launchesDirectly, makeLaunchRunner } from "./runner";
@@ -25,12 +26,6 @@ function init(context: IExtensionContextEx): boolean {
   const api = context.api;
   context.registerDeploymentMethod(
     new VirtualDeployment((state, gameId) => vfsSupport(state, gameId), {
-      // Running programs of the game follow the view (runner.ts).
-      deployed: (gameId, dataPath, stagingPath, files) => {
-        // A deploy restores what it deploys, as relinking did: deletions over its files go.
-        clearDeletions(files.map((file) => path.join(dataPath, file.target ?? "", file.relPath)));
-        showDeployment(api.getState(), gameId, dataPath, stagingPath, files);
-      },
       purged: (gameId, dataPath) => {
         const id = gameId ?? activeGameId(api.getState());
         if (id !== undefined) {
@@ -39,6 +34,13 @@ function init(context: IExtensionContextEx): boolean {
       },
     }),
   );
+  // A mod type's deployment is shown as its manifest is saved, right after finalize and before
+  // did-deploy; running programs of the game follow the view (runner.ts).
+  onVirtualActivationSaved((gameId, modType, dataPath, stagingPath, files) => {
+    // A deploy restores what it deploys, as relinking did: deletions over its files go.
+    clearDeletions(files.map((file) => path.join(dataPath, file.target ?? "", file.relPath)));
+    showDeployment(api.getState(), gameId, modType, dataPath, stagingPath, files);
+  });
   // Before the default spawn; no other runner is registered in core.
   context.registerLaunchRunner(100, "aether-vfs", makeLaunchRunner(api));
   // A store launcher (Steam, Epic, GOG) would start the game outside the session: the game is
@@ -67,6 +69,15 @@ function init(context: IExtensionContextEx): boolean {
     };
     show(activeGameId(api.getState()));
     api.events.on("gamemode-activated", show);
+    // A game switched to another deployment method leaves the view (and its write layer).
+    api.onStateChange(["settings", "mods", "activator"], (previous, current) => {
+      for (const gameId of new Set([
+        ...Object.keys(previous ?? {}),
+        ...Object.keys(current ?? {}),
+      ])) {
+        if (previous?.[gameId] !== current?.[gameId]) show(gameId);
+      }
+    });
 
     if (mountsApply()) {
       // Linux: the game's folders are mounted while Vortex runs (mounts.ts).

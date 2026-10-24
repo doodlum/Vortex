@@ -183,7 +183,7 @@ describe.runIf(process.platform === "win32")("a running program's view", () => {
     ]);
 
     // Vortex deploys: the view changes, and the running program with it.
-    showDeployment(state, "plain", dataPath, stagingPath, [file("b.esp")]);
+    showDeployment(state, "plain", "", dataPath, stagingPath, [file("b.esp")]);
     expect(session.setRoot).toHaveBeenCalledTimes(1);
     const [id, root] = session.setRoot.mock.calls[0] as [number, IAetherRoot];
     expect(id).toBe(0);
@@ -199,7 +199,7 @@ describe.runIf(process.platform === "win32")("a running program's view", () => {
     session.end();
     await started.exited;
     expect(session.close).toHaveBeenCalled();
-    showDeployment(state, "plain", dataPath, stagingPath, [file("c.esp")]);
+    showDeployment(state, "plain", "", dataPath, stagingPath, [file("c.esp")]);
     expect(session.setRoot).toHaveBeenCalledTimes(2);
   });
 
@@ -211,7 +211,7 @@ describe.runIf(process.platform === "win32")("a running program's view", () => {
       cwd: gamePath,
     })!;
     const session = fakes.sessions.at(-1)!;
-    showDeployment(state, "plain", path.join(dir, "Documents", "Mods"), stagingPath, [
+    showDeployment(state, "plain", "docs", path.join(dir, "Documents", "Mods"), stagingPath, [
       file("x.cfg"),
     ]);
     expect(session.setRoot).not.toHaveBeenCalled();

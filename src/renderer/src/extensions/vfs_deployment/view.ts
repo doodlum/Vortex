@@ -19,9 +19,13 @@ import { isInside, OVERWRITE_FOLDER, overwriteName, stagingSource } from "./root
 import { VFS_DEPLOYMENT_ID } from "./VirtualDeployment";
 
 const caseInsensitive = process.platform === "win32";
-const ownerOf = (gameId: string, targetPath: string) =>
-  `${gameId}|${caseInsensitive ? path.resolve(targetPath).toLowerCase() : path.resolve(targetPath)}`;
+const foldPath = (input: string) =>
+  caseInsensitive ? path.resolve(input).toLowerCase() : path.resolve(input);
+/** One owner per mod type: two types can share a target (dinput and enb: the game folder). */
+const ownerOf = (gameId: string, modType: string) => `${gameId}|${modType}`;
 const gameOf = (owner: string) => owner.slice(0, owner.indexOf("|"));
+/** Each owner's target, for a purge, which names the target and not the type. */
+const targets = new Map<string, string>();
 
 /** The folder a target's files are listed from: the game folder when the target is inside it. */
 function rootOf(state: IState, gameId: string, targetPath: string): string {
@@ -39,13 +43,16 @@ function rootOf(state: IState, gameId: string, targetPath: string): string {
 export function showDeployment(
   state: IState,
   gameId: string,
+  modType: string,
   targetPath: string,
   stagingPath: string,
   files: IDeployedFile[],
 ): void {
   const root = rootOf(state, gameId, targetPath);
+  const owner = ownerOf(gameId, modType);
+  targets.set(owner, foldPath(targetPath));
   setVirtualFiles(
-    ownerOf(gameId, targetPath),
+    owner,
     [root],
     files.map((file) => ({
       deployed: path.join(targetPath, file.target ?? "", file.relPath),
@@ -60,9 +67,14 @@ export function showDeployment(
   );
 }
 
-/** A mod type's deployment was purged: it is still virtual, with nothing in it. */
+/** The mod types deployed at `targetPath` were purged: still virtual, with nothing in them. */
 export function hideDeployment(state: IState, gameId: string, targetPath: string): void {
-  setVirtualFiles(ownerOf(gameId, targetPath), [rootOf(state, gameId, targetPath)], []);
+  const target = foldPath(targetPath);
+  for (const [owner, ownerTarget] of targets) {
+    if (gameOf(owner) === gameId && ownerTarget === target) {
+      setVirtualFiles(owner, [rootOf(state, gameId, targetPath)], []);
+    }
+  }
 }
 
 /**
@@ -123,13 +135,13 @@ export function showGameFromManifests(api: IExtensionApi, gameId: string): Promi
       continue;
     }
     if (!virtual) {
-      forgetVirtualFiles(ownerOf(gameId, targetPath));
+      forgetVirtualFiles(ownerOf(gameId, modType));
       setOverwrite(rootOf(state, gameId, targetPath), undefined);
       continue;
     }
     const manifest = readVirtualManifestSync(stagingPath, modType, state.app.instanceId);
     if (manifest !== undefined) {
-      showDeployment(state, gameId, targetPath, stagingPath, manifest.files);
+      showDeployment(state, gameId, modType, targetPath, stagingPath, manifest.files);
     } else {
       later.push([modType, targetPath]);
     }
@@ -145,6 +157,6 @@ async function showFromManifestsAsync(
   const stagingPath = installPathForGame(api.getState(), gameId);
   for (const [modType, targetPath] of types) {
     const manifest = await getManifest(api, modType, gameId);
-    showDeployment(api.getState(), gameId, targetPath, stagingPath, manifest.files);
+    showDeployment(api.getState(), gameId, modType, targetPath, stagingPath, manifest.files);
   }
 }

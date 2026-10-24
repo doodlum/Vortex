@@ -19,6 +19,16 @@ import { deploymentForGame, gameRoots } from "./roots";
  * originals, say), and mounts the new deployment when it is done. A purge unmounts.
  */
 const mounts = new Map<string, IAetherSession>();
+/**
+ * Bumped by every mount and unmount of a game: a mount still reading the manifests when an
+ * unmount (a deploy starting) or a newer mount comes gives up instead of mounting late.
+ */
+const generations = new Map<string, number>();
+const bump = (gameId: string) => {
+  const next = (generations.get(gameId) ?? 0) + 1;
+  generations.set(gameId, next);
+  return next;
+};
 
 export const mountsApply = () => process.platform === "linux";
 
@@ -32,9 +42,10 @@ export async function mountGame(api: IExtensionApi, gameId: string): Promise<voi
     return;
   }
   unmountGame(gameId);
+  const mine = bump(gameId);
   const aether = loadAether();
   const game = await deploymentForGame(api, gameId);
-  if (aether === undefined || game === undefined) {
+  if (aether === undefined || game === undefined || generations.get(gameId) !== mine) {
     return;
   }
   const stateDir = path.join(getVortexPath("temp"), "vfs-mounts", `${gameId}-${process.pid}`);
@@ -58,6 +69,7 @@ export async function mountGame(api: IExtensionApi, gameId: string): Promise<voi
 
 /** Unmount `gameId`'s deployment (lazily, if a program still holds files there). */
 export function unmountGame(gameId: string): void {
+  bump(gameId);
   const session = mounts.get(gameId);
   if (session === undefined) {
     return;

@@ -217,6 +217,12 @@ describe("the deployed view of fs", () => {
     realFsModule.rmSync(copy);
   });
 
+  it("keeps what wrapped functions carry, and lists Buffers and recursion as the disk does", async () => {
+    const { promisify } = await import("node:util");
+    expect(await promisify(fs.exists)(path.join(game, "Data", "mod.esp"))).toBe(true);
+    expect(() => fs.readdirSync(path.join(game, "Data"), { encoding: "buffer" })).toThrow(/ENOENT/);
+  });
+
   it("leaves writes, other folders and a purged deployment alone", () => {
     const written = path.join(game, "Data", "written.txt");
     // A folder only mods provide does not exist on disk: a real write needs it made first.
@@ -317,6 +323,45 @@ describe("what programs wrote inside a root", () => {
     expect(fs.existsSync(path.join(game, "Data", "Output", "made.nif"))).toBe(false);
   });
 
+  it("puts a replacement of a deployed file in the write folder, as an atomic write does", () => {
+    const deployed = path.join(game, "Data", "mod.esp");
+    // writeFileAtomic: a temporary file elsewhere, renamed onto the target.
+    const temp = path.join(root, "atomic.tmp");
+    realFsModule.writeFileSync(temp, "atomically replaced");
+    fs.renameSync(temp, deployed);
+    expect(fs.readFileSync(deployed, "utf8")).toBe("atomically replaced");
+    expect(realFsModule.existsSync(path.join(game, "Data", "mod.esp"))).toBe(false);
+    expect(realFsModule.readFileSync(path.join(staging, "mod.esp"), "utf8")).toBe("mod plugin");
+    // A copy onto it is the same.
+    realFsModule.writeFileSync(temp, "copied over");
+    fs.copyFileSync(temp, deployed);
+    expect(fs.readFileSync(deployed, "utf8")).toBe("copied over");
+    realFsModule.rmSync(temp);
+  });
+
+  it("writes a file a program deleted again, and new files into folders only mods provide", () => {
+    const exe = path.join(game, "Game.exe");
+    fs.writeFileSync(exe, "rewritten");
+    expect(fs.readFileSync(exe, "utf8")).toBe("rewritten");
+    expect(realFsModule.existsSync(path.join(overwrite, ".wh.Game.exe"))).toBe(false);
+    expect(realFsModule.readFileSync(exe, "utf8")).toBe("real exe");
+    // Data/textures exists only in the view; a new file there lands in the write folder.
+    const made = path.join(game, "Data", "textures", "new.dds");
+    fs.writeFileSync(made, "made by Vortex");
+    expect(fs.readFileSync(made, "utf8")).toBe("made by Vortex");
+    expect(fs.readdirSync(path.join(game, "Data", "textures")).sort()).toEqual([
+      "new.dds",
+      "x.dds",
+    ]);
+    expect(realFsModule.existsSync(path.join(game, "Data", "textures"))).toBe(false);
+    // A real file is still written in place, and a real rename inside the game stays real.
+    realFsModule.writeFileSync(path.join(game, "real.txt"), "real");
+    fs.appendFileSync(path.join(game, "real.txt"), "!");
+    expect(realFsModule.readFileSync(path.join(game, "real.txt"), "utf8")).toBe("real!");
+    fs.renameSync(path.join(game, "real.txt"), path.join(game, "real2.txt"));
+    expect(realFsModule.existsSync(path.join(game, "real2.txt"))).toBe(true);
+    realFsModule.rmSync(path.join(game, "real2.txt"));
+  });
   it("restores a deleted file when it is deployed again, and rereads the folder on request", () => {
     clearDeletions([path.join(game, "Game.exe")]);
     expect(realFsModule.existsSync(path.join(overwrite, ".wh.Game.exe"))).toBe(false);

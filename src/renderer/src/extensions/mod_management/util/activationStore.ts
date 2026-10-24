@@ -587,6 +587,25 @@ export function loadActivation(
   });
 }
 
+type VirtualSaveListener = (
+  gameId: string,
+  modType: string,
+  deployPath: string,
+  stagingPath: string,
+  files: IDeployedFile[],
+) => void;
+const virtualSaveListeners = new Set<VirtualSaveListener>();
+
+/**
+ * Told each virtual deployment as its manifest is saved, with its mod type: what a deployment
+ * method that serves files itself needs to show, and finalize alone does not say (two mod
+ * types can share a target).
+ */
+export function onVirtualActivationSaved(listener: VirtualSaveListener): () => void {
+  virtualSaveListeners.add(listener);
+  return () => virtualSaveListeners.delete(listener);
+}
+
 export function saveActivation(
   gameId: string,
   modType: string,
@@ -618,12 +637,18 @@ export function saveActivation(
     repErr["attachFilesOnReport"] = [failedPath];
     return Promise.reject(repErr);
   }
+  const virtual = activatorId !== undefined && getActivator(activatorId)?.virtual === true;
   const { manifestPath, backupPath, binaryBackupPath } = manifestPaths(
     gamePath,
     stagingPath,
     modType,
-    activatorId !== undefined && getActivator(activatorId)?.virtual === true,
+    virtual,
   );
+  if (virtual) {
+    for (const listener of virtualSaveListeners) {
+      listener(gameId, modType, gamePath, stagingPath, activation);
+    }
+  }
 
   if (activation.length > 0) {
     // write backup synchronously

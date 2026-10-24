@@ -2390,9 +2390,19 @@ class ExtensionManager {
         params.options.onSpawned?.(pid);
         return PromiseBB.resolve(exited).then(({ code }) => {
           params.options.onExit?.(code, null);
-          if (params.options.expectSuccess && code !== 0) {
-            throw new ProcessCanceled(`${path.basename(params.executable)} exited with ${code}`);
+          if (!params.options.expectSuccess || code === 0) {
+            return;
           }
+          // As for a spawned process: stopped (no exit code) is a cancellation, a failing exit
+          // code an error carrying it.
+          if (code === null) {
+            throw new ProcessCanceled(`${path.basename(params.executable)} was stopped`);
+          }
+          const err = new Error(
+            `Failed to run "${params.executable}": "<No output>" (${code.toString(16)})`,
+          );
+          err["exitCode"] = code;
+          throw err;
         });
       });
     }

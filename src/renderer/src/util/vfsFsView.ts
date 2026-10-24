@@ -16,7 +16,9 @@
  */
 import * as fsModule from "fs";
 import type * as fsType from "fs";
+import * as os from "os";
 import * as path from "path";
+import { promisify } from "util";
 
 declare const __non_webpack_require__: NodeJS.Require | undefined;
 
@@ -291,7 +293,11 @@ export function isHidden(filePath: string): boolean {
 function overwriteAt(filePath: string): IOverwrite | undefined {
   const key = fold(filePath);
   for (const [rootKey, overwrite] of overwrites) {
-    if (isUnder(rootKey, key)) return overwrite;
+    // The write folder lives in staging (`<staging>/<OVERWRITE>/<root>`): a staging folder
+    // inside the game folder is staging, never something to route into the write folder.
+    if (isUnder(rootKey, key) && !isUnder(fold(path.dirname(path.dirname(overwrite.dir))), key)) {
+      return overwrite;
+    }
   }
   return undefined;
 }
@@ -588,6 +594,75 @@ function redirect(input: unknown): { target: unknown; dirAnchor?: string } {
   return { target: input, dirAnchor: anchor };
 }
 
+/**
+ * Where a write that may create `input` goes, as it went with hard links:
+ * - into a file a program wrote (the write folder's copy), or into a mod's deployed file,
+ *   which is its staged file (`replace` false: written in place through the link);
+ * - a real file is written in place, as before;
+ * - a new file, one a program deleted, or a replacement of a mod's file (`replace`: a rename
+ *   or copy onto it, as an atomic write does, which replaced the link) goes to the root's
+ *   write folder, where the game's session sees it too and External Changes offers it.
+ */
+function writeTarget(fs: typeof fsType, input: unknown, replace: boolean): unknown {
+  if (typeof input !== "string") {
+    return input;
+  }
+  const key = fold(input);
+  const served = index.files.get(key);
+  if (served !== undefined && (index.real.has(key) || !replace)) {
+    return served;
+  }
+  const overwrite = overwriteAt(input);
+  if (overwrite === undefined) {
+    return served ?? input;
+  }
+  const hidden = index.hidden.has(key);
+  if (!hidden && served === undefined && realExists(fs, input)) {
+    return input;
+  }
+  const relative = path.relative(overwrite.root, path.resolve(input));
+  const file = path.join(overwrite.dir, relative);
+  const mkdirSync = (realFs.mkdirSync ?? fsModule.mkdirSync) as typeof fsModule.mkdirSync;
+  mkdirSync(path.dirname(file), { recursive: true });
+  if (hidden) {
+    const unlinkSync = (realFs.unlinkSync ?? fsModule.unlinkSync) as typeof fsModule.unlinkSync;
+    try {
+      unlinkSync(
+        path.join(overwrite.dir, path.dirname(relative), WHITEOUT_PREFIX + path.basename(relative)),
+      );
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+  }
+  noteWritten(overwrite, input, file);
+  return file;
+}
+
+/** Whether `open`'s flags can write (and so create) rather than only read. */
+function opensForWriting(flags: unknown): boolean {
+  if (typeof flags === "string") {
+    return /[wax+]/.test(flags);
+  }
+  if (typeof flags === "number") {
+    const constants = fsModule.constants;
+    return (flags & (constants.O_WRONLY | constants.O_RDWR | constants.O_CREAT)) !== 0;
+  }
+  return false;
+}
+
+/** A function's own properties (`.native`, `util.promisify.custom`) onto its wrapper. */
+function keepProperties<T extends object>(wrapper: T, original: object): T {
+  for (const key of Reflect.ownKeys(original)) {
+    // A promisified form calls the original, past the view: not kept (see `exists`).
+    if (key === "length" || key === "name" || key === "prototype" || key === promisify.custom) {
+      continue;
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(original, key);
+    if (descriptor !== undefined) Object.defineProperty(wrapper, key, descriptor);
+  }
+  return wrapper;
+}
+
 function makeDirent(fs: typeof fsType, parent: string, entry: IDirEntry): fsType.Dirent {
   const dirent = Object.create(fs.Dirent.prototype) as fsType.Dirent & Record<string, unknown>;
   Object.defineProperties(dirent, {
@@ -630,6 +705,19 @@ function mergeListing(
   return Array.from(out.values());
 }
 
+/**
+ * Whether a listing can be merged: a path given as a string, names or Dirents as strings, one
+ * level. Buffer names and recursive listings go to the real disk as they are.
+ */
+function mergeable(args: unknown[]): boolean {
+  if (typeof args[0] !== "string") return false;
+  const options = args[1];
+  if (typeof options === "string") return options !== "buffer";
+  if (typeof options !== "object" || options === null) return true;
+  const { encoding, recursive } = options as { encoding?: unknown; recursive?: unknown };
+  return encoding !== "buffer" && recursive !== true;
+}
+
 function readdirOptions(args: unknown[]): boolean {
   const options = args[1];
   return typeof options === "object" && options !== null && (options as any).withFileTypes === true;
@@ -658,14 +746,14 @@ export function install(fs: typeof fsType = nodeFs()): void {
     const original = sync[name];
     if (typeof original !== "function") return;
     realFs[name] ??= original;
-    sync[name] = function (this: unknown, input: unknown, ...rest: unknown[]) {
+    sync[name] = keepProperties(function (this: unknown, input: unknown, ...rest: unknown[]) {
       const { target, dirAnchor } = redirect(input);
       return original.call(
         this,
         onDirAnchor && dirAnchor ? (realExists(fs, input) ? input : dirAnchor) : target,
         ...rest,
       );
-    };
+    }, original);
   };
   const wrapPromisePath = (name: string, onDirAnchor: boolean) => {
     const original = promises[name];
@@ -680,13 +768,53 @@ export function install(fs: typeof fsType = nodeFs()): void {
       );
     };
   };
+  // A write that may create its file: `writes` says whether this call writes (given the
+  // arguments after the path), and `writeTarget` where it goes.
+  const wrapWrite = (
+    table: Record<string, AnyFn>,
+    real: Record<string, AnyFn | undefined>,
+    name: string,
+    writes: (rest: unknown[]) => boolean,
+  ) => {
+    const original = table[name];
+    if (typeof original !== "function") return;
+    real[name] ??= original;
+    table[name] = keepProperties(function (this: unknown, input: unknown, ...rest: unknown[]) {
+      const target = writes(rest) ? writeTarget(fs, input, false) : redirect(input).target;
+      return original.call(this, target, ...rest);
+    }, original);
+  };
+  // A copy reads its source through the view and writes its destination as a replacement.
+  const wrapCopy = (
+    table: Record<string, AnyFn>,
+    real: Record<string, AnyFn | undefined>,
+    name: string,
+  ) => {
+    const original = table[name];
+    if (typeof original !== "function") return;
+    real[name] ??= original;
+    table[name] = keepProperties(function (
+      this: unknown,
+      source: unknown,
+      destination: unknown,
+      ...rest: unknown[]
+    ) {
+      return original.call(
+        this,
+        redirect(source).target,
+        writeTarget(fs, destination, true),
+        ...rest,
+      );
+    }, original);
+  };
 
   // Reads of a file: the staged source. Stat-like calls also answer for a directory only mods
   // provide, with the real directory it sits in.
-  // Copying a deployed file copies its staged file.
-  for (const name of ["readFile", "readFileSync", "createReadStream", "copyFile", "copyFileSync"]) {
+  for (const name of ["readFile", "readFileSync", "createReadStream"]) {
     wrapPath(name, false);
   }
+  for (const name of ["copyFile", "copyFileSync"]) wrapCopy(sync, realFs, name);
+  wrapCopy(promises, realFs.promises, "copyFile");
   for (const name of [
     "stat",
     "statSync",
@@ -699,28 +827,36 @@ export function install(fs: typeof fsType = nodeFs()): void {
   ]) {
     wrapPath(name, true);
   }
-  for (const name of ["readFile", "copyFile"]) wrapPromisePath(name, false);
+  // `util.promisify(fs.exists)` uses the function's own promisified form, which calls Node's
+  // `exists`, not this one: it gets one that goes through the view.
+  if (typeof sync.exists === "function") {
+    const exists = sync.exists;
+    Object.defineProperty(exists, promisify.custom, {
+      value: (input: unknown) => new Promise<boolean>((resolve) => exists(input, resolve)),
+      configurable: true,
+    });
+  }
+  wrapPromisePath("readFile", false);
   for (const name of ["stat", "lstat", "access"]) wrapPromisePath(name, true);
 
   // A mod's deployed file is its staged file, as it was with a hard link: opening it (for
   // reading or writing), writing it, or changing its times or size reaches the staged file.
-  // A new file is created on the real disk, as before.
-  for (const name of [
-    "open",
-    "openSync",
-    "writeFile",
-    "writeFileSync",
-    "appendFile",
-    "appendFileSync",
-    "utimes",
-    "utimesSync",
-    "truncate",
-    "truncateSync",
-    "createWriteStream",
-  ]) {
+  // A file a write creates under a root goes to its write folder (`writeTarget`).
+  const always = () => true;
+  const openFlags = (rest: unknown[]) => opensForWriting(rest[0] ?? "r");
+  for (const name of ["writeFile", "writeFileSync", "appendFile", "appendFileSync"]) {
+    wrapWrite(sync, realFs, name, always);
+  }
+  wrapWrite(sync, realFs, "createWriteStream", always);
+  for (const name of ["open", "openSync"]) wrapWrite(sync, realFs, name, openFlags);
+  for (const name of ["writeFile", "appendFile"])
+    wrapWrite(promises, realFs.promises, name, always);
+  wrapWrite(promises, realFs.promises, "open", openFlags);
+  // Existing files only: a deleted one is missing, as it was.
+  for (const name of ["utimes", "utimesSync", "truncate", "truncateSync"]) {
     wrapPath(name, false);
   }
-  for (const name of ["open", "writeFile", "appendFile", "utimes", "truncate"]) {
+  for (const name of ["utimes", "truncate"]) {
     wrapPromisePath(name, false);
   }
   // Listings: merged.
@@ -731,7 +867,7 @@ export function install(fs: typeof fsType = nodeFs()): void {
   realFs.readdirSync ??= readdirSync;
   realFs.promises.readdir ??= readdirPromise;
   sync.readdirSync = function (this: unknown, ...args: unknown[]) {
-    const virtual = typeof args[0] === "string" ? virtualChildren(args[0]) : undefined;
+    const virtual = mergeable(args) ? virtualChildren(args[0] as string) : undefined;
     if (virtual === undefined) return readdirSync.apply(this, args);
     let real: Array<string | fsType.Dirent> | undefined;
     try {
@@ -743,7 +879,7 @@ export function install(fs: typeof fsType = nodeFs()): void {
   };
   sync.readdir = function (this: unknown, ...args: unknown[]) {
     const callback = args[args.length - 1] as AnyFn;
-    const virtual = typeof args[0] === "string" ? virtualChildren(args[0]) : undefined;
+    const virtual = mergeable(args) ? virtualChildren(args[0] as string) : undefined;
     if (virtual === undefined || typeof callback !== "function") return readdir.apply(this, args);
     return readdir.call(
       this,
@@ -758,7 +894,7 @@ export function install(fs: typeof fsType = nodeFs()): void {
     );
   };
   promises.readdir = async function (this: unknown, ...args: unknown[]) {
-    const virtual = typeof args[0] === "string" ? virtualChildren(args[0]) : undefined;
+    const virtual = mergeable(args) ? virtualChildren(args[0] as string) : undefined;
     if (virtual === undefined) return readdirPromise.apply(this, args);
     let real: Array<string | fsType.Dirent> | undefined;
     try {
@@ -848,12 +984,24 @@ function wrapRenames(
   const followSources = (from: unknown, to: unknown) => {
     if (typeof from === "string" && typeof to === "string") moveSources(from, to);
   };
+  // A real file renamed onto a deployed or deleted path, or into a root from outside it (an
+  // atomic write's temporary file, say), replaces what is there: in the write folder. A real
+  // file renamed within the game folder stays a real rename, as before.
+  const destination = (from: unknown, to: unknown): unknown => {
+    if (typeof from !== "string" || typeof to !== "string") return to;
+    const key = fold(to);
+    const replaces = index.files.has(key) || index.hidden.has(key);
+    if (!replaces && overwriteAt(from) !== undefined && overwriteAt(to) === overwriteAt(from)) {
+      return to;
+    }
+    return writeTarget(fs, to, true);
+  };
   sync.renameSync = function (this: unknown, from: unknown, to: unknown) {
     if (isVirtualFile(from) && typeof to === "string") {
       moveVirtual(from, to, fs);
       return undefined;
     }
-    const result = renameSync.call(this, from, to);
+    const result = renameSync.call(this, from, destination(from, to));
     followSources(from, to);
     return result;
   };
@@ -861,7 +1009,7 @@ function wrapRenames(
     if (isVirtualFile(from) && typeof to === "string") {
       return settle(callback, () => moveVirtual(from, to, fs));
     }
-    return rename.call(this, from, to, (err: NodeJS.ErrnoException | null) => {
+    return rename.call(this, from, destination(from, to), (err: NodeJS.ErrnoException | null) => {
       if (!err) followSources(from, to);
       if (typeof callback === "function") callback(err);
     });
@@ -871,7 +1019,7 @@ function wrapRenames(
       moveVirtual(from, to, fs);
       return;
     }
-    await renamePromise.call(this, from, to);
+    await renamePromise.call(this, from, destination(from, to));
     followSources(from, to);
   };
 }
@@ -906,7 +1054,7 @@ function wrapDeletes(
       }
       return Object.assign(new Error(`ENOENT: no such file or directory, ${name} '${target}'`), {
         code: "ENOENT",
-        errno: -4058,
+        errno: process.platform === "win32" ? -4058 : -os.constants.errno.ENOENT,
         syscall: name,
         path: target,
       });
