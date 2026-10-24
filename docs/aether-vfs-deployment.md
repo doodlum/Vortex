@@ -157,9 +157,17 @@ host path of the app's files that `/.flatpak-info` gives). The relay gives the h
 forwarded: Ubuntu's profile refuses a socket from inside bubblewrap (`file_inherit`, peer
 `bwrap`), so forwarding the sandbox's socket straight to `fusermount3` fails there. The
 helper is started with `flatpak-spawn`, in a new sandbox of the app that does not end with
-Vortex, and its login entry runs `flatpak run --command=...`. Verified in the installed
-Flatpak on Ubuntu 26.04 with the relay and binding built from aether-vfs's
-`vortex-integration`.
+Vortex, and its login entry runs `flatpak run --command=...`. Verified with the
+`vfs-nightly-20261024.9` Flatpak installed on Ubuntu 26.04: from inside the sandbox the helper
+mounted through the bundled relay, the host saw the mod, the mount stayed with no Vortex
+sandbox running, a program's new file landed in the write folder, ending the helper and running
+the login entry's command mounted again, and removing the spec unmounted.
+
+An AppImage's GUI does not start on Ubuntu 24.04 and later (Chromium's sandbox, see the Linux
+packaging guide). Its mount helper needs no GUI: started through `$APPIMAGE` from the
+`vfs-nightly-20261024.9` AppImage, it ran in its own mount of the image, loaded the addon beside
+its program, served a mod over a folder's own files, and removing the spec unmounted the folder
+and ended the helper and its image mount.
 
 Verified on Ubuntu 26.04 with the `vfs-nightly-20261024.7` tar.gz and the real Stardew Valley
 install (a Windows game under Steam's Proton, Steam installed as a Snap): the method was chosen
