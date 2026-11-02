@@ -16,6 +16,7 @@
 export const MOUNT_HELPER_SOURCE = String.raw`"use strict";
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 // The real path: libuv's Windows watcher aborts on a short (8.3) name.
 const dir = fs.realpathSync.native(process.argv[2]);
 const specFile = path.join(dir, "spec.json");
@@ -25,6 +26,7 @@ let served;
 let ending;
 let loadedAddon;
 let loadedVersion;
+let loadedRuntime;
 // The addon beside this program, if it is a packaged Vortex: an AppImage's own mount (Vortex's
 // ends with it), and the one a login entry finds again after a restart.
 const ownAddon = path.join(path.dirname(process.execPath), "resources", "app.asar.unpacked", "assets", "aether-vfs", "aether_vfs_node.node");
@@ -74,8 +76,14 @@ function apply() {
       close();
       // A native addon cannot be unloaded: the first one loaded stays.
       if (loadedAddon === undefined) {
-        loadedAddon = fs.existsSync(ownAddon) ? ownAddon : spec.addon;
+        const hash = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+        // An AppImage's helper owns another mount of the same payload. Prefer that durable
+        // copy only when its bytes match the requested addon; development overrides win.
+        const candidate = fs.existsSync(ownAddon) && hash(ownAddon) === spec.addonHash ? ownAddon : spec.addon;
+        if (hash(candidate) !== spec.addonHash) throw new Error("The virtual file system addon changed before the helper loaded it. Deploy again.");
+        loadedAddon = candidate;
         loadedVersion = spec.version;
+        loadedRuntime = spec.runtime;
       }
       const { Session } = require(loadedAddon);
       session = new Session({ stateDir: spec.stateDir, artifactsDir: path.dirname(loadedAddon), roots: spec.roots });
@@ -88,7 +96,7 @@ function apply() {
     served = spec;
     result = { mounted: false, error: String(err && err.message || err) };
   }
-  writeStatus({ generation: spec.generation, version: loadedVersion, ...result });
+  writeStatus({ generation: spec.generation, version: loadedVersion, runtime: loadedRuntime, ...result });
 }
 
 for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {

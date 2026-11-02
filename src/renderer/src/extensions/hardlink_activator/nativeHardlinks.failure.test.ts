@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { setImmediate } from "node:timers/promises";
 
+import PromiseBB from "bluebird";
 import { beforeEach, expect, it, vi } from "vitest";
 
 import { purgeNativeHardlinks } from "./nativeHardlinks";
@@ -45,37 +46,46 @@ it("tolerates a destination disappearing before its identity can be read", async
   expect(io.unlink).not.toHaveBeenCalled();
 });
 
-it("drains a pending filesystem operation before reporting another operation's failure", async () => {
-  io.readdir.mockResolvedValue([entry("bad"), entry("pending")]);
-  const failure = Object.assign(new Error("permission denied"), { code: "EACCES" });
-  let finishPending!: (value: ReturnType<typeof stats>) => void;
-  const pending = new Promise<ReturnType<typeof stats>>((resolve) => {
-    finishPending = resolve;
-  });
-  io.lstat.mockImplementation(async (file: string) => {
-    if (path.basename(file) === "bad") throw failure;
-    return pending;
-  });
-  let settled = false;
-  const result = purgeNativeHardlinks(staging, game).then(
-    () => {
-      settled = true;
-      return undefined;
-    },
-    (err: unknown) => {
-      settled = true;
-      return err;
-    },
-  );
-  try {
-    await vi.waitFor(() => expect(io.lstat).toHaveBeenCalledTimes(2));
-    await setImmediate();
-    expect(settled).toBe(false);
-  } finally {
-    finishPending(stats(1n));
-  }
-  const error = await result;
-  expect(error).toBeInstanceOf(AggregateError);
-  expect((error as AggregateError).errors).toEqual([failure]);
-  expect(io.unlink).not.toHaveBeenCalled();
-});
+it.each(["native", "bluebird"])(
+  "drains a pending filesystem operation before reporting another failure (%s Promise)",
+  async (implementation) => {
+    const previousPromise = globalThis.Promise;
+    if (implementation === "bluebird") vi.stubGlobal("Promise", PromiseBB);
+    try {
+      io.readdir.mockResolvedValue([entry("bad"), entry("pending")]);
+      const failure = Object.assign(new Error("permission denied"), { code: "EACCES" });
+      let finishPending!: (value: ReturnType<typeof stats>) => void;
+      const pending = new Promise<ReturnType<typeof stats>>((resolve) => {
+        finishPending = resolve;
+      });
+      io.lstat.mockImplementation(async (file: string) => {
+        if (path.basename(file) === "bad") throw failure;
+        return pending;
+      });
+      let settled = false;
+      const result = purgeNativeHardlinks(staging, game).then(
+        () => {
+          settled = true;
+          return undefined;
+        },
+        (err: unknown) => {
+          settled = true;
+          return err;
+        },
+      );
+      try {
+        await vi.waitFor(() => expect(io.lstat).toHaveBeenCalledTimes(2));
+        await setImmediate();
+        expect(settled).toBe(false);
+      } finally {
+        finishPending(stats(1n));
+      }
+      const error = await result;
+      expect(error).toBeInstanceOf(AggregateError);
+      expect((error as AggregateError).errors).toEqual([failure]);
+      expect(io.unlink).not.toHaveBeenCalled();
+    } finally {
+      vi.stubGlobal("Promise", previousPromise);
+    }
+  },
+);

@@ -40,6 +40,8 @@ export interface IAetherLaunch {
 export interface IAetherLaunchOptions {
   image: string;
   args?: string[];
+  cwd?: string;
+  windowsVerbatimArguments?: boolean;
   env?: Record<string, string>;
   envRemove?: string[];
   stageAlso?: string[];

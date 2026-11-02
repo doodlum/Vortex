@@ -4,6 +4,8 @@ import * as process from "process";
 import { log, types, util } from "@nexusmods/vortex-api";
 import * as which from "which";
 
+import { commandScript } from "./commandScript";
+
 function exeExtension(): string {
   return process.platform === "win32" ? ".exe" : "";
 }
@@ -67,24 +69,8 @@ function init(context: types.IExtensionContext): boolean {
   });
 
   if (process.platform === "win32") {
-    context.registerInterpreter(".cmd", (input: types.IRunParameters) => {
-      return {
-        executable: "cmd.exe",
-        args: ["/K", `"${input.executable}"`].concat(input.args),
-        options: input.options,
-      };
-    });
-
-    context.registerInterpreter(".bat", (input: types.IRunParameters) => {
-      return {
-        executable: "cmd.exe",
-        args: ["/K", `"${input.executable}"`].concat(input.args),
-        options: {
-          ...input.options,
-          shell: true,
-        },
-      };
-    });
+    context.registerInterpreter(".cmd", commandScript);
+    context.registerInterpreter(".bat", commandScript);
   }
   return true;
 }

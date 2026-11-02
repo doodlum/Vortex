@@ -1,5 +1,6 @@
 import { createHash } from "crypto";
 import * as fs from "fs";
+import type * as FsModule from "fs";
 import * as os from "os";
 import * as path from "path";
 
@@ -11,7 +12,17 @@ const fakes = vi.hoisted(() => ({
   root: "",
   roots: [] as Array<{ location: string; files: unknown[] }>,
   version: "1.0.0",
+  mountInfo: "",
 }));
+
+vi.mock("fs", async (original) => {
+  const real = await original<typeof FsModule>();
+  return {
+    ...real,
+    readFileSync: (...args: Parameters<typeof real.readFileSync>) =>
+      args[0] === "/proc/self/mountinfo" ? fakes.mountInfo : real.readFileSync(...args),
+  };
+});
 
 const FAKE_ADDON = `
 const fs = require("fs");
@@ -25,6 +36,7 @@ exports.Session = class {
     if (opts.roots[0].location.includes("broken")) throw new Error("E_MOUNT: fusermount3 failed");
     this.opts = opts;
     record(opts.stateDir, "new " + opts.roots.map((root) => root.location).join(","));
+    fs.writeFileSync(path.join(opts.stateDir, "roots.json"), JSON.stringify(opts.roots));
   }
   start() { record(this.opts.stateDir, "start"); }
   setRoot(id, root) { record(this.opts.stateDir, "setRoot " + id + " " + root.files.length); }
@@ -44,12 +56,14 @@ vi.mock("./roots", () => ({
 }));
 
 import type { IExtensionApi } from "../../types/IExtensionContext";
+import { withDeploymentPreparation } from "../mod_management/util/deploymentPreparation";
 import {
   flatpakHostPath,
   hostFusermountScript,
   isMounted,
   mountGame,
   mountIfIdle,
+  registerMountPreparation,
   setChanging,
   unmountGame,
 } from "./mounts";
@@ -93,6 +107,12 @@ const calls = (gameId: string) =>
     .split("\n");
 const helperPid = (gameId: string): number =>
   JSON.parse(fs.readFileSync(path.join(helperDir(gameId), "status.json"), "utf8")).pid;
+const runtime = () =>
+  createHash("sha256")
+    .update(process.env.APPIMAGE ?? process.execPath)
+    .update(path.join(fakes.root, "fake-addon.cjs"))
+    .update(fs.readFileSync(path.join(fakes.root, "fake-addon.cjs")))
+    .digest("hex");
 const alive = (pid: number) => {
   try {
     process.kill(pid, 0);
@@ -182,10 +202,51 @@ describe("the Linux mounts", () => {
 
   it("reports a mount that fails", async () => {
     fakes.roots = [{ location: "/games/broken", files: [] }];
-    await mountGame(api, "y");
+    await expect(mountGame(api, "y")).rejects.toThrow("fusermount3 failed");
     expect(isMounted(api, "y")).toBe(false);
     expect(errors).toHaveLength(1);
     await unmountGame(api, "y");
+  }, 30000);
+
+  it("replaces a helper whose addon changed without an app version change", async () => {
+    fakes.roots = [{ location: "/games/x", files: [] }];
+    await mountIfIdle(api, "x");
+    const pid = helperPid("x");
+    fs.appendFileSync(path.join(fakes.root, "fake-addon.cjs"), "\n// a new addon build\n");
+    try {
+      await mountIfIdle(api, "x");
+      expect(helperPid("x")).not.toBe(pid);
+      await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 5000 });
+      expect(isMounted(api, "x")).toBe(true);
+    } finally {
+      await unmountGame(api, "x");
+      fs.writeFileSync(path.join(fakes.root, "fake-addon.cjs"), FAKE_ADDON);
+    }
+  }, 30000);
+
+  it("remounts remaining targets after a partial purge through core preparation", async () => {
+    fakes.roots = [
+      { location: "/games/x", files: [{}] },
+      { location: "/outside", files: [{}] },
+    ];
+    await mountGame(api, "x");
+    const unregister = registerMountPreparation(api, () => true);
+    try {
+      await withDeploymentPreparation("x", "purge-type", async () => {
+        expect(isMounted(api, "x")).toBe(false);
+        fakes.roots = [
+          { location: "/games/x", files: [] },
+          { location: "/outside", files: [{}] },
+        ];
+      });
+      expect(isMounted(api, "x")).toBe(true);
+      expect(
+        JSON.parse(fs.readFileSync(path.join(helperDir("x"), "state", "roots.json"), "utf8")),
+      ).toEqual(fakes.roots);
+    } finally {
+      unregister();
+      await unmountGame(api, "x");
+    }
   }, 30000);
 
   it("counts only this profile's live mount", () => {
@@ -201,6 +262,143 @@ describe("the Linux mounts", () => {
     const old = new Date(Date.now() - 60000);
     fs.utimesSync(status, old, old);
     expect(isMounted(api, "z")).toBe(false);
+  });
+
+  it("refuses to continue a deployment when the previous helper does not unmount", async () => {
+    const dir = helperDir("z");
+    fs.mkdirSync(dir, { recursive: true });
+    const status = path.join(dir, "status.json");
+    // A helper that stays alive even after its spec is removed. Only the wait timer is
+    // accelerated; its real, fresh status remains live throughout the attempted stop.
+    fs.writeFileSync(status, JSON.stringify({ pid: 1, generation: 1, mounted: true }));
+    fs.writeFileSync(
+      path.join(dir, "spec.json"),
+      JSON.stringify({ owner: path.join(fakes.root, "profile") }),
+    );
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      const check = unmountGame(api, "z").then(
+        () => undefined,
+        (err) => err,
+      );
+      await vi.runAllTimersAsync();
+      expect(await check).toMatchObject({ message: expect.stringMatching(/unmount/i) });
+      expect(fs.existsSync(path.join(dir, "spec.json"))).toBe(false);
+    } finally {
+      vi.useRealTimers();
+      fs.rmSync(status, { force: true });
+    }
+  });
+
+  it("reports and rejects a helper that never acknowledges a new mount", async () => {
+    const dir = helperDir("z");
+    fs.mkdirSync(dir, { recursive: true });
+    const status = path.join(dir, "status.json");
+    fs.writeFileSync(
+      status,
+      JSON.stringify({
+        pid: 1,
+        generation: 1,
+        mounted: false,
+        version: fakes.version,
+        runtime: runtime(),
+      }),
+    );
+    fakes.roots = [{ location: "/games/z", files: [] }];
+    const previousErrors = errors.length;
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      const check = mountGame(api, "z").then(
+        () => undefined,
+        (err) => err,
+      );
+      await vi.runAllTimersAsync();
+      expect(await check).toMatchObject({ message: expect.stringMatching(/answer|respond/i) });
+      expect(errors).toHaveLength(previousErrors + 1);
+    } finally {
+      vi.useRealTimers();
+      fs.rmSync(status, { force: true });
+      fs.rmSync(path.join(dir, "spec.json"), { force: true });
+    }
+  });
+
+  it("does not mistake a stale heartbeat for an unmounted root", async () => {
+    const dir = helperDir("z");
+    fs.mkdirSync(dir, { recursive: true });
+    const status = path.join(dir, "status.json");
+    fs.writeFileSync(status, JSON.stringify({ pid: 1, generation: 1, mounted: true }));
+    const old = new Date(Date.now() - 60000);
+    fs.utimesSync(status, old, old);
+    fakes.mountInfo = "32 1 0:42 / /games/z rw - fuse.aether-vfs aether-vfs rw\n";
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      const check = unmountGame(api, "z").then(
+        () => undefined,
+        (err) => err,
+      );
+      await vi.runAllTimersAsync();
+      expect(await check).toMatchObject({ message: expect.stringMatching(/unmount/i) });
+    } finally {
+      vi.useRealTimers();
+      fakes.mountInfo = "";
+      fs.rmSync(status, { force: true });
+    }
+  });
+
+  it("remembers external roots across a failed unmount and retry after the spec is gone", async () => {
+    const dir = helperDir("z");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "spec.json"),
+      JSON.stringify({ roots: [{ location: "/outside" }] }),
+    );
+    fakes.mountInfo = "32 1 0:42 / /outside rw - fuse.aether-vfs aether-vfs rw\n";
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const check = unmountGame(api, "z").then(
+          () => undefined,
+          (err) => err,
+        );
+        await vi.runAllTimersAsync();
+        expect(await check).toMatchObject({ message: expect.stringMatching(/unmount/i) });
+        expect(fs.existsSync(path.join(dir, "spec.json"))).toBe(false);
+      }
+      fakes.mountInfo = "";
+      await unmountGame(api, "z");
+      expect(fs.existsSync(path.join(dir, "unmount-roots.json"))).toBe(false);
+    } finally {
+      vi.useRealTimers();
+      fakes.mountInfo = "";
+    }
+  });
+
+  it("checks the kernel's canonical mountpoint when discovery used a symlink", async () => {
+    const target = path.join(fakes.root, "real game");
+    const alias = path.join(fakes.root, "game alias");
+    fs.mkdirSync(target);
+    fs.symlinkSync(target, alias, platform === "win32" ? "junction" : "dir");
+    const previous = discovered.z.path;
+    discovered.z.path = alias;
+    const kernelPath = fs.realpathSync
+      .native(target)
+      .replace(/\\/g, "\\134")
+      .replace(/ /g, "\\040");
+    fakes.mountInfo = `32 1 0:42 / ${kernelPath} rw - fuse.aether-vfs aether-vfs rw\n`;
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      const check = unmountGame(api, "z").then(
+        () => undefined,
+        (err) => err,
+      );
+      await vi.runAllTimersAsync();
+      expect(await check).toMatchObject({ message: expect.stringMatching(/unmount/i) });
+    } finally {
+      vi.useRealTimers();
+      fakes.mountInfo = "";
+      await unmountGame(api, "z");
+      discovered.z.path = previous;
+    }
   });
 });
 

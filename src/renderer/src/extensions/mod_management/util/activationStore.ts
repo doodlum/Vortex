@@ -26,6 +26,7 @@ import type { IDeploymentManifest, ManifestFormat } from "../types/IDeploymentMa
 import type { IDeployedFile, IDeploymentMethod } from "../types/IDeploymentMethod";
 import { deployedFilePath } from "./deployedFilePath";
 import { getActivator, getCurrentActivator } from "./deploymentMethods";
+import { withDeploymentPreparation } from "./deploymentPreparation";
 import format_1 from "./manifest_formats/format_1";
 
 const CURRENT_VERSION = 1;
@@ -454,9 +455,13 @@ export async function fallbackPurge(api: IExtensionApi, gameId?: string): Promis
   const stagingPath = installPathForGame(state, gameId);
   const activator = getCurrentActivator(state, gameId, false);
 
-  for (const typeId of Object.keys(modPaths)) {
-    await fallbackPurgeType(api, activator, gameId, typeId, modPaths[typeId], stagingPath);
-  }
+  await withActivationLock(() =>
+    withDeploymentPreparation(gameId, "purge", async () => {
+      for (const typeId of Object.keys(modPaths)) {
+        await fallbackPurgeType(api, activator, gameId, typeId, modPaths[typeId], stagingPath);
+      }
+    }),
+  );
 }
 
 const activationQueue = makeQueue();

@@ -77,6 +77,55 @@ function harness() {
   return { api, internals: manager as unknown as ManagerInternals };
 }
 
+for (const shell of [undefined, false, true]) {
+  test(`Windows command-script spawn preserves interpreter quoting (shell=${shell})`, async () => {
+    vi.stubGlobal("process", { ...originalProcess, platform: "win32" });
+    const { api, internals } = harness();
+    const command = ["/D", "/S", "/K", '""C:\\tools\\script & tool.cmd" "quoted & argument""'];
+    internals.mInterpreters[".cmd"] = (input) => ({
+      executable: "cmd.exe",
+      args: command,
+      options: input.options,
+    });
+    const executable = "C:\\tools\\script & tool.cmd";
+    const args = ['"quoted & argument"'];
+    await api.runExecutable(executable, args, { cwd: "C:\\tools", shell });
+    expect(launch.spawn).toHaveBeenCalledWith(
+      "cmd.exe",
+      command,
+      expect.objectContaining({ shell: false, windowsVerbatimArguments: true }),
+    );
+  });
+}
+
+test("Windows caller environment overrides inherited variables with different casing", async () => {
+  vi.stubGlobal("process", { ...originalProcess, platform: "win32" });
+  const inheritedKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path")!;
+  const callerKey = inheritedKey === "PATH" ? "Path" : "PATH";
+  const { api } = harness();
+  await api.runExecutable("C:\\tools\\Tool.exe", [], {
+    cwd: "C:\\tools",
+    env: { [callerKey]: "C:\\requested-tools" },
+  });
+  const env = launch.spawn.mock.calls[0][2].env;
+  expect(Object.keys(env).filter((key) => key.toLowerCase() === "path")).toEqual([callerKey]);
+  expect(env[callerKey]).toBe("C:\\requested-tools");
+});
+
+test("Linux launch environment retains distinct case-sensitive variable names", async () => {
+  const { api } = harness();
+  await api.runExecutable("/native/tool", [], {
+    cwd: "/native",
+    env: { PATH: "/requested-tools", Path: "/different-variable" },
+  });
+  expect(launch.spawn.mock.calls[0][2].env).toEqual(
+    expect.objectContaining({
+      PATH: "/requested-tools",
+      Path: "/different-variable",
+    }),
+  );
+});
+
 for (const condition of [
   "missing-store",
   "disabled-store",

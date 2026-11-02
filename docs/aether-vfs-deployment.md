@@ -78,6 +78,31 @@ Every program Vortex starts for a game runs through one session per game (`@aeth
   `launch` instead of `spawn`, so the Play button, tools, primary tools and script-extender
   loaders all see the mods. Start hooks still run first. Exit and running state come from the
   launch handle (every process in its Job Object), which keeps `toolsRunning` correct.
+- The runner passes the requested working directory to the addon. Tools that read relative
+  paths keep their configured directory, including directories the virtual deployment alone
+  provides. The pinned `vortex-548f28e543e4` addon release includes this option;
+  older addon releases predate it.
+- Windows shell tools use their command interpreter inside the same session. The command
+  line keeps the quoting used by Vortex's normal Windows shell launch, so command scripts
+  can read virtual files through relative paths and quoted paths containing spaces or
+  shell characters. The same pinned addon provides the verbatim-argument option.
+  Bare interpreter names are resolved in the requested working directory and launch
+  environment's PATH. Windows environment overrides replace inherited variables
+  regardless of key casing, consistently for lookup and the launched process;
+  Linux variable names remain case-sensitive. Explicit relative paths stay relative
+  to the requested directory. An unresolved bare shell command keeps its name so
+  the command interpreter can still find scripts through PATH/PATHEXT.
+  Shell script resolution honours PATHEXT before associating the program with the
+  active game, keeping cwd-local scripts and their Steam identity inside the session.
+  The bundled `.cmd`/`.bat` interpreter quotes its entire command and retains `/K`;
+  an explicitly selected `cmd.exe` runs once with verbatim command arguments rather
+  than inside another command processor. Explicit shell settings are retained.
+  On Windows, run `pnpm exec vitest run` from `extensions/common-interpreters` to
+  exercise both batch formats with real command processes and quoted temporary paths;
+  no game or addon is required. Run renderer `util/windowsCommandLine.test.ts`,
+  `ExtensionManager.proton.test.ts` and `extensions/vfs_deployment/runner.test.ts`
+  for the normal-spawn and VFS routing boundaries. These checks do not prove injection;
+  separately launch a command script reading a virtually deployed file through Vortex.
 - Store launches are replaced by direct launches with the store's environment (`SteamAppId`,
   `steam_appid.txt` semantics), which aether-vfs already supports for SteamStub-wrapped games:
   `StarterInfo` asks the extension's `vfsLaunchesDirectly` API before handing a game to its
@@ -152,9 +177,24 @@ whose native addon cannot be swapped. While a folder is mounted, an autostart en
 the mods are there after a restart, as links were; unmounting removes it. Removing the spec unmounts and ends the helper. A deploy
 unmounts first and waits for the helper to end, so the deployment reads the game's own files,
 then mounts the result; a purge unmounts. Vortex's support check needs `/dev/fuse` and
-`fusermount3` (package `fuse3`). Ubuntu's AppArmor profile for `fusermount3` only mounts under
+`fusermount3` (package `fuse3`). DEB, RPM and Arch packages declare this dependency;
+portable archives, AppImage, Snap and Flatpak need `fuse3` installed on the host.
+Restart Vortex after installing it. Ubuntu's AppArmor profile for `fusermount3` only mounts under
 `$HOME`, `/mnt`, `/media`, `/tmp` and `/run/user`, whatever the package: a game elsewhere needs
 a local rule (`/etc/apparmor.d/local/fusermount3`).
+
+An unmount that does not finish within 15 seconds stops deployment or purge before core reads
+the originals, merges mods or changes manifests. Close the game and its tools and retry; the
+helper's `helper.log` is beside its `spec.json`. Preparation is awaited directly under the
+deployment lock, because ordinary `will-deploy` and `will-purge` notifications catch listener
+errors. The changing flag is released on failure as well as success. A helper that cannot
+mount, or does not acknowledge its new deployment within 15 seconds, reports an error and
+rejects the operation. Helpers are replaced when the application version, executable path or
+addon path/content changes, including another build with the same application version.
+The kernel's mount table must also confirm that every root has unmounted; a stale heartbeat
+alone does not establish that. Canonical paths and interrupted-stop root records keep symlink
+locations and external targets protected on retry. This preparation covers single-mod deploys
+and fallback purges too. Purging one target remounts the remaining targets from their manifests.
 
 A Flatpak Vortex has no `/dev/fuse`: aether-vfs then mounts through `$FUSERMOUNT_PATH`, a
 wrapper that runs aether-vfs's `fusermount-relay` on the host (`flatpak-spawn --host`, at the
@@ -240,6 +280,15 @@ from Vortex (Windows, 2026-10-24):
 On Linux (Ubuntu VM, Snap Steam, Proton): Stardew Valley with the `vfs-nightly-20261024.13`
 tar.gz, as described under "Linux: a FUSE mount".
 
+The same tar.gz was also verified with Stardew's **native Linux build** (Steam's default
+Steam Linux Runtime 1.0 selected in Compatibility). The vanilla ELF executable reached its main
+menu. A Vortex-deployed title-texture probe remained mounted after Vortex exited; stopping its
+helper and running the generated login entry remounted it. Steam's own launch then rendered
+the substituted texture, and the native process's mount namespace served the probe bytes.
+Purging removed the mount, and SHA-256 comparisons of every game file before and after matched.
+This runtime check predates the subsequent failure-safety changes described above; those still
+need final packaged-runtime verification.
+
 What these found and fixed: tools a mod provides were not discovered (the walk view gave
 discovery walks the real disk only); a flush of a view of a served file failed (.NET's
 `MemoryMappedViewAccessor.Dispose`); 32-bit SteamStub and child injection by the shim's virtual
@@ -280,6 +329,14 @@ virtual method requires): released Vortex 2.8.0 deployed a mod over a game file 
 in a profile it created; this branch purged them, restored the file, switched and deployed
 virtually; 2.8.0 then deployed with hard links again; this branch purged those on its next start
 and deployed virtually, once. Tests: `mod_management/eventHandlers.vfsMigration.test.ts`.
+
+Migration switches the method and announces the upgrade only after the old method's preparation,
+purge, cleanup and manifest save all succeed. Cancellation or failure retains the configured
+method and its recovery manifest; the virtual view is restored even if purge preparation fails.
+Retrying activation completes the migration after the cause is resolved. The migration tests
+exercise each failure boundary and retry for both the first upgrade and links left by a downgrade.
+Canceling a full purge restores the existing Linux mount and retains its deployment state;
+a failure while restoring the mount is reported rather than treated as cancellation.
 
 The original plan follows. A core migration runs once, when this version first starts:
 

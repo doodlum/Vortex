@@ -69,6 +69,7 @@ import {
   getSupportedActivators,
 } from "./util/deploymentMethods";
 import { getDeploymentNormalizeFunc } from "./util/deploymentNormalize";
+import { withDeploymentPreparation } from "./util/deploymentPreparation";
 import { dropMissingMods } from "./util/dropMissingMods";
 import modName from "./util/modName";
 import queryGameId from "./util/queryGameId";
@@ -170,82 +171,92 @@ async function purgeOldMethod(
   gameId: string,
   instPath: string,
   modPaths: { [typeId: string]: string },
-) {
+): Promise<boolean> {
   const state = api.getState();
   const stagingPath = installPath(state);
   const manifests: { [typeId: string]: IDeploymentManifest } = {};
   const deployments: { [typeId: string]: IDeployedFile[] } = {};
 
   try {
-    await Promise.all(
-      Object.keys(modPaths).map((modType) =>
-        getManifest(api, modType, gameId, oldActivator.virtual === true).then((manifest) => {
-          manifests[modType] = manifest;
-          deployments[modType] = manifest.files;
-        }),
-      ),
-    );
-    await api.emitAndAwait("will-purge", profile.id, deployments);
-    // A link purge acts on the real files: a virtual deployment of the game (shown when an older
-    // Vortex left links behind) steps aside meanwhile.
-    const restoreView =
-      oldActivator.virtual === true ? undefined : setAside(gameOwnerPrefix(gameId));
-    await oldActivator.prePurge(instPath);
-    try {
-      // sequential: purge order matters per mod type
-      for (const typeId of Object.keys(modPaths)) {
-        const normalize = await getNormalizeFunc(modPaths[typeId]);
-        // test for the special case where the game has been moved since the deployment
-        // happened. Based on the assumption that this is the reason the deployment method
-        // changed, the regular purge is almost guaranteed to not work correctly and we're
-        // better off using the manifest-based fallback purge.
-        // For example: if the game directory with hard links was moved, those links were
-        // turned into real files, the regular purge op wouldn't clean up anything
-        if (
-          manifests[typeId].targetPath !== undefined &&
-          normalize(modPaths[typeId]) !== normalize(manifests[typeId].targetPath) &&
-          oldActivator.isFallbackPurgeSafe
-        ) {
-          log("warn", "using manifest-based purge because deployment path changed", {
-            from: manifests[typeId].targetPath,
-            to: modPaths[typeId],
-          });
-          await purgeDeployedFiles(modPaths[typeId], deployments[typeId]);
-        } else {
-          await oldActivator.purge(instPath, modPaths[typeId], profile.gameId);
-        }
-      }
-      // another instance's leftovers stay its own
-      await Promise.all(
-        Object.keys(modPaths).map((typeId) =>
-          savePurgeLeftovers(
-            gameId,
-            typeId,
-            state.app.instanceId,
-            modPaths[typeId],
-            stagingPath,
-            manifests[typeId].instance === state.app.instanceId ? deployments[typeId] : [],
-            oldActivator.id,
+    await withActivationLock(() =>
+      withDeploymentPreparation(gameId, "purge", async () => {
+        await Promise.all(
+          Object.keys(modPaths).map((modType) =>
+            getManifest(api, modType, gameId, oldActivator.virtual === true).then((manifest) => {
+              manifests[modType] = manifest;
+              deployments[modType] = manifest.files;
+            }),
           ),
-        ),
-      );
-    } finally {
-      restoreView?.();
-      await oldActivator.postPurge();
-    }
+        );
+        await api.emitAndAwait("will-purge", profile.id, deployments);
+        // A link purge acts on the real files: a virtual deployment of the game (shown when an older
+        // Vortex left links behind) steps aside meanwhile.
+        const restoreView =
+          oldActivator.virtual === true ? undefined : setAside(gameOwnerPrefix(gameId));
+        try {
+          try {
+            await oldActivator.prePurge(instPath);
+            // sequential: purge order matters per mod type
+            for (const typeId of Object.keys(modPaths)) {
+              const normalize = await getNormalizeFunc(modPaths[typeId]);
+              // test for the special case where the game has been moved since the deployment
+              // happened. Based on the assumption that this is the reason the deployment method
+              // changed, the regular purge is almost guaranteed to not work correctly and we're
+              // better off using the manifest-based fallback purge.
+              // For example: if the game directory with hard links was moved, those links were
+              // turned into real files, the regular purge op wouldn't clean up anything
+              if (
+                manifests[typeId].targetPath !== undefined &&
+                normalize(modPaths[typeId]) !== normalize(manifests[typeId].targetPath) &&
+                oldActivator.isFallbackPurgeSafe
+              ) {
+                log("warn", "using manifest-based purge because deployment path changed", {
+                  from: manifests[typeId].targetPath,
+                  to: modPaths[typeId],
+                });
+                await purgeDeployedFiles(modPaths[typeId], deployments[typeId]);
+              } else {
+                await oldActivator.purge(instPath, modPaths[typeId], profile.gameId);
+              }
+            }
+          } finally {
+            await oldActivator.postPurge();
+          }
+          // Keep the recovery manifest until the method has finished its cleanup too.
+          // another instance's leftovers stay its own
+          await Promise.all(
+            Object.keys(modPaths).map((typeId) =>
+              savePurgeLeftovers(
+                gameId,
+                typeId,
+                state.app.instanceId,
+                modPaths[typeId],
+                stagingPath,
+                manifests[typeId].instance === state.app.instanceId ? deployments[typeId] : [],
+                oldActivator.id,
+              ),
+            ),
+          );
+        } finally {
+          restoreView?.();
+        }
+      }),
+    );
+    return true;
   } catch (err) {
     if (err instanceof ProcessCanceled) {
-      return;
+      return false;
     }
     if (err instanceof TemporaryError) {
       api.showErrorNotification("Purge failed, please try again", err.message, {
         allowReport: false,
       });
-      return;
+      return false;
     }
     api.showErrorNotification("Purge failed", err, {
       allowReport: ["ENOENT", "ENOTFOUND"].indexOf(getErrorCode(err)) !== -1,
     });
+    return false;
   }
 }
 
@@ -275,7 +286,9 @@ async function purgeLinksLeftBehind(
     return;
   }
   log("info", "purging links an older Vortex deployed", { gameId, method: method.id });
-  await purgeOldMethod(api, method, profile, gameId, instPath, modPaths);
+  if (!(await purgeOldMethod(api, method, profile, gameId, instPath, modPaths))) {
+    throw new ProcessCanceled("The previous deployment could not be purged");
+  }
   api.store.dispatch(setDeploymentNecessary(gameId, true));
   api.sendNotification({
     type: "info",
@@ -456,16 +469,7 @@ export function onGameModeActivated(
           changeActivator = false;
         } else {
           if (successor !== undefined) {
-            // An upgrade, not a failure: the old method purges below, restoring the folder.
-            api.sendNotification({
-              type: "info",
-              id: METHOD_UPGRADED_NOTIFICATION_ID,
-              title: "Deployment method upgraded",
-              message:
-                "{{game}} now uses {{method}}. Vortex removed the files it had placed in the " +
-                "game folder and will deploy your mods again.",
-              replace: { game: game.name, method: successor.name },
-            });
+            // Announce the upgrade only after its link purge has succeeded below.
           } else if (safeFB !== undefined) {
             api.sendNotification({
               type: "info",
@@ -505,17 +509,14 @@ export function onGameModeActivated(
       if (oldActivator !== undefined) {
         const oldInit = initProm;
         initProm = () =>
-          oldInit()
-            .then(() =>
-              safeFB === undefined
-                ? purgeOldMethod(api, oldActivator, profile, gameId, instPath, modPaths)
-                : Promise.resolve(),
-            )
-            .catch((err) => {
-              if (!(err instanceof ProcessCanceled)) {
-                throw err;
-              }
-            });
+          oldInit().then(async () => {
+            if (
+              safeFB === undefined &&
+              !(await purgeOldMethod(api, oldActivator, profile, gameId, instPath, modPaths))
+            ) {
+              throw new ProcessCanceled("The previous deployment could not be purged");
+            }
+          });
       }
 
       {
@@ -528,6 +529,15 @@ export function onGameModeActivated(
                 api.store.dispatch(setActivator(gameId, successor.id));
                 api.store.dispatch(setDeploymentNecessary(gameId, true));
                 api.dismissNotification(METHOD_UNAVAILABLE_NOTIFICATION_ID);
+                api.sendNotification({
+                  type: "info",
+                  id: METHOD_UPGRADED_NOTIFICATION_ID,
+                  title: "Deployment method upgraded",
+                  message:
+                    "{{game}} now uses {{method}}. Vortex removed the files it had placed in the " +
+                    "game folder and will deploy your mods again.",
+                  replace: { game: game.name, method: successor.name },
+                });
               } else if (supported.length > 0) {
                 api.store.dispatch(setActivator(gameId, (safeFB ?? supported[0]).id));
                 api.dismissNotification(METHOD_UNAVAILABLE_NOTIFICATION_ID);

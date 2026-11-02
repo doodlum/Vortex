@@ -5,7 +5,7 @@ import { activeGameId } from "../../util/selectors";
 import { clearDeletions } from "../../util/vfsFsView";
 import type { IDeploymentMethod } from "../mod_management/types/IDeploymentMethod";
 import { onVirtualActivationSaved } from "../mod_management/util/activationStore";
-import { mountGame, mountIfIdle, mountsApply, setChanging, unmountGame } from "./mounts";
+import { mountIfIdle, mountsApply, registerMountPreparation } from "./mounts";
 import { isVirtualGame, showOverwriteDialog } from "./overwrite";
 import { cleanStaleSessions, launchesDirectly, makeLaunchRunner } from "./runner";
 import { vfsSupport } from "./support";
@@ -82,35 +82,14 @@ function init(context: IExtensionContextEx): boolean {
     if (mountsApply()) {
       // Linux: the game's folders are mounted by helpers that outlive Vortex (mounts.ts), so
       // that the mods stay visible to Steam's own Play button after Vortex closes.
-      const gameOf = (profileId: string): string | undefined =>
-        api.getState().persistent.profiles[profileId]?.gameId;
       const mount = (gameId: string | undefined) => {
         if (gameId !== undefined && isVirtualGame(api, gameId)) {
-          void mountIfIdle(api, gameId);
+          void mountIfIdle(api, gameId).catch(() => undefined); // mountGame reports its error.
         }
       };
-      api.onAsync("will-deploy", async (profileId: string) => {
-        const gameId = gameOf(profileId);
-        if (gameId === undefined) return;
-        setChanging(gameId, true);
-        await unmountGame(api, gameId);
-      });
-      api.onAsync("did-deploy", async (profileId: string) => {
-        const gameId = gameOf(profileId);
-        if (gameId === undefined) return;
-        setChanging(gameId, false);
-        if (isVirtualGame(api, gameId)) await mountGame(api, gameId);
-      });
-      api.onAsync("will-purge", async (profileId: string) => {
-        const gameId = gameOf(profileId);
-        if (gameId === undefined) return;
-        setChanging(gameId, true);
-        await unmountGame(api, gameId);
-      });
-      api.onAsync("did-purge", async (profileId: string) => {
-        const gameId = gameOf(profileId);
-        if (gameId !== undefined) setChanging(gameId, false);
-      });
+      // Notification events catch listener errors. Core awaits this preparation directly,
+      // before it reads originals, merges mods or changes a manifest, and always releases it.
+      registerMountPreparation(api, (gameId) => isVirtualGame(api, gameId));
       mount(activeGameId(api.getState()));
       api.events.on("gamemode-activated", mount);
     }

@@ -26,6 +26,16 @@ const { runCommand } = await import(
 );
 const roots: string[] = [];
 
+test.each(["deb", "rpm", "pacman"])(
+  "%s VFS package installs its FUSE mount helper",
+  async (format) => {
+    const config = JSON.parse(
+      await fs.readFile(new URL("./electron-builder.config.json", import.meta.url), "utf8"),
+    );
+    expect(config[format].depends).toContain("fuse3");
+  },
+);
+
 afterEach(async () => {
   for (const root of roots.splice(0)) {
     if (

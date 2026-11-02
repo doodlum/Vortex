@@ -124,6 +124,11 @@ import {
   wrapExtCBSync,
 } from "./util/util";
 import { webpackRequireHack } from "./util/webpack-hacks";
+import {
+  isWindowsCommandInterpreter,
+  mergeLaunchEnvironment,
+  windowsVerbatimArguments,
+} from "./util/windowsCommandLine";
 import { isToastSystemDisabled } from "./views/layout/ToastContainer";
 
 const modmeta = lazyRequire<typeof modmetaT>(() => require("modmeta-db"));
@@ -2447,11 +2452,11 @@ class ExtensionManager {
     // I think the key is called "Path" on windows but I'm not willing to bet this is consistent
     // across all language variants and versions
     const pathEnvName = Object.keys(process.env).find((key) => key.toLowerCase() === "path");
-    const env = {
-      ...filteredEnvironment(),
-      [pathEnvName]: process.env["PATH_ORIG"] || process.env["PATH"],
-      ...options.env,
-    };
+    const env = mergeLaunchEnvironment(
+      filteredEnvironment(),
+      { [pathEnvName]: process.env["PATH_ORIG"] || process.env["PATH"] },
+      options.env ?? {},
+    );
 
     // TODO: we might want to be much more restrictive in what keys we allow in environment variables,
     //   based on a quick google I could only find rules for Linux which appears to not allow the equal
@@ -2498,12 +2503,17 @@ class ExtensionManager {
             );
           }
           return new PromiseBB<void>((resolve, reject) => {
-            const runExe = options.shell ? `"${executable}"` : executable;
+            // An explicitly selected cmd already interprets its command; a second cmd
+            // would consume its quotes and expose quoted shell characters again.
+            const useShell = options.shell === true && !isWindowsCommandInterpreter(executable);
+            const runExe = useShell ? `"${executable}"` : executable;
+            const verbatim = windowsVerbatimArguments(executable, options.shell === true);
             const spawnOptions: SpawnOptions = {
               cwd,
               env,
               detached: options.detach !== undefined ? options.detach : true,
-              shell: options.shell ?? false,
+              shell: useShell,
+              windowsVerbatimArguments: verbatim,
             };
 
             try {
@@ -2520,7 +2530,8 @@ class ExtensionManager {
 
               const child = childProcess.spawn(
                 runExe,
-                options.shell ||
+                verbatim ||
+                  options.shell ||
                   (process.platform === "linux" &&
                     (executable === "flatpak" ||
                       (executable === "flatpak-spawn" && args[0] === "--host")))

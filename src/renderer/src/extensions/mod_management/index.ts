@@ -142,6 +142,7 @@ import {
   registerDeploymentMethod,
 } from "./util/deploymentMethods";
 import { getDeploymentNormalizeFunc } from "./util/deploymentNormalize";
+import { withDeploymentPreparation } from "./util/deploymentPreparation";
 import { NoDeployment } from "./util/exceptions";
 import extendApi from "./util/extendAPI";
 import { dealWithExternalChanges } from "./util/externalChanges";
@@ -664,7 +665,7 @@ function deployableModTypes(modPaths: { [typeId: string]: string }) {
   return Object.keys(modPaths).filter((typeId) => truthy(modPaths[typeId]));
 }
 
-function genUpdateModDeployment(installManager: InstallManager) {
+export function genUpdateModDeployment(installManager: InstallManager) {
   return (
     api: IExtensionApi,
     manual: boolean,
@@ -801,115 +802,117 @@ function genUpdateModDeployment(installManager: InstallManager) {
           }
 
           try {
-            await withActivationLock(async () => {
-              log("debug", "deploying mods", {
-                game: gameId,
-                profile: profile?.id,
-                method: activator.name,
-              });
+            await withActivationLock(() =>
+              withDeploymentPreparation(gameId, "deploy", async () => {
+                log("debug", "deploying mods", {
+                  game: gameId,
+                  profile: profile?.id,
+                  method: activator.name,
+                });
 
-              // Wait for active mod installations to complete before deploying
-              // so we don't deploy half-installed mods.
-              if (installManager.getActiveInstallationCount() > 0) {
-                log("debug", "waiting for active installations before deploying");
-                await installManager.waitForIdle();
-              }
+                // Wait for active mod installations to complete before deploying
+                // so we don't deploy half-installed mods.
+                if (installManager.getActiveInstallationCount() > 0) {
+                  log("debug", "waiting for active installations before deploying");
+                  await installManager.waitForIdle();
+                }
 
-              // Consume the set of installation paths whose mods finished
-              // installing or were removed since the last deployment. Their
-              // external changes (refchange / srcdeleted) are expected and
-              // will be auto-resolved per-mod.
-              const recentChanges = installManager.consumeRecentChanges();
+                // Consume the set of installation paths whose mods finished
+                // installing or were removed since the last deployment. Their
+                // external changes (refchange / srcdeleted) are expected and
+                // will be auto-resolved per-mod.
+                const recentChanges = installManager.consumeRecentChanges();
 
-              let mergeResult: { [modType: string]: IMergeResultByType };
-              const lastDeployment: { [typeId: string]: IDeployedFile[] } = {};
-              const mods: Record<string, IMod> = state.persistent.mods?.[profile?.gameId] ?? {};
-              notification.message = t("Deploying mods");
-              if (showNotification) {
-                api.sendNotification(notification);
-              }
-              api.store.dispatch(startActivity("mods", "deployment"));
-              deployStartedAt = Date.now();
-              progress(t("Loading deployment manifest"), 0);
+                let mergeResult: { [modType: string]: IMergeResultByType };
+                const lastDeployment: { [typeId: string]: IDeployedFile[] } = {};
+                const mods: Record<string, IMod> = state.persistent.mods?.[profile?.gameId] ?? {};
+                notification.message = t("Deploying mods");
+                if (showNotification) {
+                  api.sendNotification(notification);
+                }
+                api.store.dispatch(startActivity("mods", "deployment"));
+                deployStartedAt = Date.now();
+                progress(t("Loading deployment manifest"), 0);
 
-              // sequential: load activation order matters per mod type
-              for (const typeId of deployableModTypes(modPaths)) {
-                const deployedFiles = await loadActivation(
+                // sequential: load activation order matters per mod type
+                for (const typeId of deployableModTypes(modPaths)) {
+                  const deployedFiles = await loadActivation(
+                    api,
+                    gameId,
+                    typeId,
+                    modPaths[typeId],
+                    stagingPath,
+                    activator,
+                  );
+                  lastDeployment[typeId] = deployedFiles;
+                }
+
+                progress(t("Running pre-deployment events"), 2);
+                await api.emitAndAwait("will-deploy", profile.id, lastDeployment, deployOptions);
+
+                // need to update the profile so that if a will-deploy handler disables a mod, that
+                // actually has an affect on this deployment
+                const updatedState = api.getState();
+                const updatedProfile = updatedState.persistent.profiles[profile.id];
+                if (updatedProfile !== undefined) {
+                  profile = updatedProfile;
+                } else {
+                  // I don't think this can happen
+                  log("warn", "profile no longer found?", profileId);
+                }
+
+                progress(t("Checking for external changes"), 5);
+                await dealWithExternalChanges(
                   api,
-                  gameId,
-                  typeId,
-                  modPaths[typeId],
-                  stagingPath,
                   activator,
+                  VortexProfileId(profile.id),
+                  VortexStagingFolder(stagingPath),
+                  modPaths,
+                  lastDeployment,
+                  recentChanges,
                 );
-                lastDeployment[typeId] = deployedFiles;
-              }
 
-              progress(t("Running pre-deployment events"), 2);
-              await api.emitAndAwait("will-deploy", profile.id, lastDeployment, deployOptions);
+                progress(t("Checking for mod incompatibilities"), 25);
+                await checkIncompatibilities(api, profile, mods);
 
-              // need to update the profile so that if a will-deploy handler disables a mod, that
-              // actually has an affect on this deployment
-              const updatedState = api.getState();
-              const updatedProfile = updatedState.persistent.profiles[profile.id];
-              if (updatedProfile !== undefined) {
-                profile = updatedProfile;
-              } else {
-                // I don't think this can happen
-                log("warn", "profile no longer found?", profileId);
-              }
+                progress(t("Sorting mods"), 30);
+                sortedModList = await doSortMods(api, profile, mods);
 
-              progress(t("Checking for external changes"), 5);
-              await dealWithExternalChanges(
-                api,
-                activator,
-                VortexProfileId(profile.id),
-                VortexStagingFolder(stagingPath),
-                modPaths,
-                lastDeployment,
-                recentChanges,
-              );
+                progress(t("Merging mods"), 35);
+                mergeResult = await doMergeMods(
+                  api,
+                  game,
+                  gameDiscovery,
+                  stagingPath,
+                  sortedModList,
+                  modPaths,
+                  lastDeployment,
+                );
 
-              progress(t("Checking for mod incompatibilities"), 25);
-              await checkIncompatibilities(api, profile, mods);
+                progress(t("Starting deployment"), 35);
+                resetDeploymentFailures(api, game.id);
+                const deployProgress = (name, percent) =>
+                  progress(t("Deploying: ") + name, 50 + percent / 2, name);
 
-              progress(t("Sorting mods"), 30);
-              sortedModList = await doSortMods(api, profile, mods);
-
-              progress(t("Merging mods"), 35);
-              mergeResult = await doMergeMods(
-                api,
-                game,
-                gameDiscovery,
-                stagingPath,
-                sortedModList,
-                modPaths,
-                lastDeployment,
-              );
-
-              progress(t("Starting deployment"), 35);
-              resetDeploymentFailures(api, game.id);
-              const deployProgress = (name, percent) =>
-                progress(t("Deploying: ") + name, 50 + percent / 2, name);
-
-              const undiscovered = Object.keys(modPaths).filter(
-                (typeId) => !truthy(modPaths[typeId]),
-              );
-              await validateDeploymentTarget(api, undiscovered);
-              await deployAllModTypes(
-                api,
-                activator,
-                profile,
-                sortedModList,
-                stagingPath,
-                mergeResult,
-                modPaths,
-                lastDeployment,
-                newDeployment,
-                deployProgress,
-              );
-              api.store.dispatch(setDeploymentPurged(gameId, false));
-            });
+                const undiscovered = Object.keys(modPaths).filter(
+                  (typeId) => !truthy(modPaths[typeId]),
+                );
+                await validateDeploymentTarget(api, undiscovered);
+                await deployAllModTypes(
+                  api,
+                  activator,
+                  profile,
+                  sortedModList,
+                  stagingPath,
+                  mergeResult,
+                  modPaths,
+                  lastDeployment,
+                  newDeployment,
+                  deployProgress,
+                );
+                api.store.dispatch(setDeploymentPurged(gameId, false));
+              }),
+            );
 
             // at this point the deployment lock gets released so another deployment
             // can be started during post-deployment
@@ -1272,7 +1275,7 @@ function onModsEnabled(api: IExtensionApi, deploymentTimer: Debouncer) {
   };
 }
 
-function onDeploySingleMod(api: IExtensionApi) {
+export function onDeploySingleMod(api: IExtensionApi) {
   return async (gameId: string, modId: string, enable?: boolean) => {
     const state: IState = api.store.getState();
     const game = getGame(gameId);
@@ -1310,70 +1313,72 @@ function onDeploySingleMod(api: IExtensionApi) {
     }
 
     const subdir = genSubDirFunc(game, getModType(mod.type));
-    await withActivationLock(async () => {
-      try {
-        const normalize = await getDeploymentNormalizeFunc(api.getState(), gameId, dataPath);
-        const lastActivation = await loadActivation(
-          api,
-          gameId,
-          mod.type,
-          dataPath,
-          stagingPath,
-          activator,
-        );
-        resetDeploymentFailures(api, gameId);
-        if (enable !== false) {
-          const profile = profileById(state, lastActiveProfileForGame(state, gameId));
-          const sorted =
-            profile !== undefined
-              ? await doSortMods(api, profile, state.persistent.mods[gameId], VortexModId(mod.id))
-              : [];
-          await activateSingleMod({
-            method: activator,
-            game,
+    await withActivationLock(() =>
+      withDeploymentPreparation(gameId, "deploy", async () => {
+        try {
+          const normalize = await getDeploymentNormalizeFunc(api.getState(), gameId, dataPath);
+          const lastActivation = await loadActivation(
+            api,
+            gameId,
+            mod.type,
             dataPath,
-            normalize,
-            lastActivation,
-            mod,
-            modPath,
-            subDir: subdir(mod),
-            laterSources: laterStagingFolders(sorted, mod),
-          });
-        } else {
-          await activator.prepare(dataPath, false, lastActivation, normalize);
-          await activator.deactivate(modPath, subdir(mod), mod.installationPath);
+            stagingPath,
+            activator,
+          );
+          resetDeploymentFailures(api, gameId);
+          if (enable !== false) {
+            const profile = profileById(state, lastActiveProfileForGame(state, gameId));
+            const sorted =
+              profile !== undefined
+                ? await doSortMods(api, profile, state.persistent.mods[gameId], VortexModId(mod.id))
+                : [];
+            await activateSingleMod({
+              method: activator,
+              game,
+              dataPath,
+              normalize,
+              lastActivation,
+              mod,
+              modPath,
+              subDir: subdir(mod),
+              laterSources: laterStagingFolders(sorted, mod),
+            });
+          } else {
+            await activator.prepare(dataPath, false, lastActivation, normalize);
+            await activator.deactivate(modPath, subdir(mod), mod.installationPath);
+          }
+          const newActivation = await activator.finalize(gameId, dataPath, stagingPath);
+          await doSaveActivation(
+            api,
+            gameId,
+            mod.type,
+            dataPath,
+            stagingPath,
+            newActivation,
+            activator.id,
+          );
+          reportRecordedFailures(api, gameId);
+        } catch (unknownErr) {
+          if (activator.cancel !== undefined) {
+            activator.cancel(gameId, dataPath, stagingPath);
+          }
+          const err = unknownToError(unknownErr);
+          if (err instanceof ProcessCanceled) {
+            api.sendNotification({
+              type: "warning",
+              title: "Deployment interrupted",
+              message: err.message,
+            });
+          } else {
+            const userCanceled = err instanceof UserCanceled;
+            api.showErrorNotification("Failed to deploy mod", err, {
+              message: modId,
+              allowReport: !userCanceled,
+            });
+          }
         }
-        const newActivation = await activator.finalize(gameId, dataPath, stagingPath);
-        await doSaveActivation(
-          api,
-          gameId,
-          mod.type,
-          dataPath,
-          stagingPath,
-          newActivation,
-          activator.id,
-        );
-        reportRecordedFailures(api, gameId);
-      } catch (unknownErr) {
-        if (activator.cancel !== undefined) {
-          activator.cancel(gameId, dataPath, stagingPath);
-        }
-        const err = unknownToError(unknownErr);
-        if (err instanceof ProcessCanceled) {
-          api.sendNotification({
-            type: "warning",
-            title: "Deployment interrupted",
-            message: err.message,
-          });
-        } else {
-          const userCanceled = err instanceof UserCanceled;
-          api.showErrorNotification("Failed to deploy mod", err, {
-            message: modId,
-            allowReport: !userCanceled,
-          });
-        }
-      }
-    });
+      }),
+    );
   };
 }
 

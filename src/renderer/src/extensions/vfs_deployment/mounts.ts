@@ -6,9 +6,11 @@ import * as path from "path";
 
 import type { IExtensionApi } from "../../types/IExtensionContext";
 import { getApplication } from "../../util/application";
+import { TemporaryError } from "../../util/CustomErrors";
 import getVortexPath from "../../util/getVortexPath";
 import { log } from "../../util/log";
 import { getGame } from "../gamemode_management/util/getGame";
+import { registerDeploymentPreparation } from "../mod_management/util/deploymentPreparation";
 import { loadAether } from "./aether";
 import { MOUNT_HELPER_SOURCE } from "./mountHelper";
 import { deploymentForGame, gameRoots } from "./roots";
@@ -45,6 +47,7 @@ interface IHelperStatus {
   mounted: boolean;
   /** The Vortex version whose addon the helper loaded: a native addon cannot be swapped. */
   version?: string;
+  runtime?: string;
   error?: string;
 }
 
@@ -199,20 +202,62 @@ function writeLoginEntry(dir: string, gameName: string): void {
 }
 
 /** Remove `dir`'s spec, which unmounts, and wait for its helper to end. */
-async function stopHelper(gameId: string, dir: string): Promise<void> {
-  const running = liveStatus(dir) !== undefined;
-  fs.rmSync(path.join(dir, "spec.json"), { force: true });
-  fs.rmSync(loginEntry(dir), { force: true });
-  if (!running) {
-    return;
+async function stopHelper(gameId: string, dir: string, locations: string[]): Promise<void> {
+  const roots = new Set<string>();
+  const addRoot = (location: string) => {
+    roots.add(path.resolve(location));
+    // The kernel records the resolved mountpoint, even when discovery used a symlink.
+    try {
+      roots.add(fs.realpathSync.native(location));
+    } catch {
+      /* Retain recorded identities if the path is gone. */
+    }
+  };
+  locations.forEach(addRoot);
+  const pendingRoots = path.join(dir, "unmount-roots.json");
+  try {
+    for (const root of JSON.parse(fs.readFileSync(pendingRoots, "utf8"))) addRoot(root);
+  } catch {
+    /* No earlier interrupted stop. */
   }
-  for (let waited = 0; liveStatus(dir) !== undefined; waited += 100) {
+  try {
+    const spec = JSON.parse(fs.readFileSync(path.join(dir, "spec.json"), "utf8"));
+    for (const root of spec.roots ?? []) addRoot(root.location);
+  } catch {
+    /* A previous stop may already have removed the spec. */
+  }
+  const mounted = () => {
+    // A stale heartbeat is not evidence of unmount: a synchronous close can block the
+    // helper's heartbeat too. The kernel must also have stopped serving every root.
+    const table = fs.readFileSync("/proc/self/mountinfo", "utf8");
+    return table.split("\n").some((line) => {
+      const [mount, type] = line.split(" - ");
+      if (type?.split(" ")[0] !== "fuse.aether-vfs") return false;
+      const location = mount
+        .split(" ")[4]
+        ?.replace(/\\([0-7]{3})/g, (_match, octal) => String.fromCharCode(parseInt(octal, 8)));
+      return location !== undefined && roots.has(path.resolve(location));
+    });
+  };
+  const running = liveStatus(dir) !== undefined;
+  if (running || mounted()) {
+    fs.mkdirSync(dir, { recursive: true });
+    // Removing the spec requests shutdown. Keep every prior root independently until
+    // the kernel confirms unmount, including external targets on a later retry.
+    fs.writeFileSync(pendingRoots, JSON.stringify([...roots]));
+  }
+  fs.rmSync(path.join(dir, "spec.json"), { force: true });
+  for (let waited = 0; (running && liveStatus(dir) !== undefined) || mounted(); waited += 100) {
     if (waited >= 15000) {
       log("error", "the mount helper did not unmount", { gameId });
-      return;
+      throw new TemporaryError(
+        "The virtual file system did not unmount. Close the game and its tools, then try again.",
+      );
     }
     await delay(100);
   }
+  fs.rmSync(loginEntry(dir), { force: true });
+  fs.rmSync(pendingRoots, { force: true });
   log("info", "unmounted the virtual file system", { gameId });
 }
 
@@ -247,10 +292,31 @@ export function setChanging(gameId: string, value: boolean): void {
  * the purged deployment again.
  */
 export function mountIfIdle(api: IExtensionApi, gameId: string): Promise<void> {
-  if (changing.has(gameId) || isMounted(api, gameId)) {
+  if (changing.has(gameId)) {
     return Promise.resolve();
   }
   return mountGame(api, gameId);
+}
+
+/** Direct core prerequisite: events catch errors and cannot enforce an unmount barrier. */
+export function registerMountPreparation(
+  api: IExtensionApi,
+  shouldMount: (gameId: string) => boolean,
+): () => void {
+  return registerDeploymentPreparation(async (gameId, operation) => {
+    setChanging(gameId, true);
+    try {
+      await unmountGame(api, gameId);
+    } catch (err) {
+      setChanging(gameId, false);
+      throw err;
+    }
+    return async (succeeded) => {
+      setChanging(gameId, false);
+      if ((operation !== "purge" || !succeeded) && shouldMount(gameId))
+        await mountGame(api, gameId);
+    };
+  });
 }
 
 /** Mount `gameId`'s deployment as its manifests describe it, or update the mount it has. */
@@ -275,10 +341,23 @@ async function mountInTurn(api: IExtensionApi, gameId: string, mine: number): Pr
     return;
   }
   const version = getApplication().version;
+  const addonBytes = fs.readFileSync(aether.addon);
+  const addonHash = createHash("sha256").update(addonBytes).digest("hex");
+  // The same app version may be installed twice or use a different local addon. Native
+  // addons stay loaded for the helper's lifetime, so a version alone cannot identify it.
+  const runtime = createHash("sha256")
+    .update(process.env.APPIMAGE ?? process.execPath)
+    .update(aether.addon)
+    .update(addonBytes)
+    .digest("hex");
   const running = liveStatus(dir);
-  if (running !== undefined && running.version !== version) {
+  if (running !== undefined && (running.version !== version || running.runtime !== runtime)) {
     // Mounted by another Vortex version, whose addon stays loaded in its helper.
-    await stopHelper(gameId, dir);
+    await stopHelper(
+      gameId,
+      dir,
+      gameRoots(game).map((root) => root.location),
+    );
     if (superseded()) {
       return;
     }
@@ -289,7 +368,9 @@ async function mountInTurn(api: IExtensionApi, gameId: string, mine: number): Pr
   const spec = {
     owner: owner(),
     version,
+    runtime,
     addon: aether.addon,
+    addonHash,
     stateDir: path.join(dir, "state"),
     roots: gameRoots(game),
     generation,
@@ -316,12 +397,17 @@ async function mountInTurn(api: IExtensionApi, gameId: string, mine: number): Pr
           allowReport: false,
           message: "Mounting the virtual file system failed.",
         });
+        throw new TemporaryError(status.error ?? "Mounting the virtual file system failed.");
       }
       return;
     }
     await delay(100);
   }
   log("error", "the mount helper did not answer", { gameId });
+  const error =
+    "The virtual file system mount helper did not answer. Check its helper.log and try deploying again.";
+  api.showErrorNotification("The game cannot see its mods", error, { allowReport: false });
+  throw new TemporaryError(error);
 }
 
 /**
@@ -333,7 +419,13 @@ export function unmountGame(api: IExtensionApi, gameId: string): Promise<void> {
   return inTurn(gameId, async () => {
     const dir = helperDir(api, gameId);
     if (dir !== undefined && generations.get(gameId) === mine) {
-      await stopHelper(gameId, dir);
+      await stopHelper(
+        gameId,
+        dir,
+        [api.getState().settings.gameMode.discovered[gameId]?.path].filter(
+          (location): location is string => location !== undefined,
+        ),
+      );
     }
   });
 }

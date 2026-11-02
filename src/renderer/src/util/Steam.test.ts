@@ -25,6 +25,12 @@ const steam = vi.hoisted(() => ({ installed: true, baseFolder: "C:\\Steam" }));
 const proton = vi.hoisted(() => ({ info: vi.fn(), installed: vi.fn() }));
 const steamHome = vi.hoisted(() => ({ find: vi.fn().mockResolvedValue("/steam-home") }));
 const preparation = vi.hoisted(() => ({ run: vi.fn(), register: vi.fn() }));
+const containerRuntime = vi.hoisted(() => ({ resolve: vi.fn() }));
+const containerMounts = vi.hoisted(() => ({ environment: vi.fn() }));
+vi.mock("./linux/protonMetadata", () => ({ resolveProtonRuntime: containerRuntime.resolve }));
+vi.mock("./linux/steamRuntimeLaunch", () => ({
+  steamRuntimeLaunchEnvironment: containerMounts.environment,
+}));
 vi.mock("@/extensions/proton_management/orchestration", () => ({
   prepareProtonLaunch: preparation.run,
   setProtonPrefixPreparer: preparation.register,
@@ -345,6 +351,12 @@ describe("Steam Proton launches", () => {
   beforeEach(() => {
     preparation.run.mockReset().mockResolvedValue(undefined);
     steamHome.find.mockReset().mockResolvedValue("/steam-home");
+    containerRuntime.resolve.mockReset().mockResolvedValue(undefined);
+    containerMounts.environment.mockReset().mockResolvedValue({
+      STEAM_COMPAT_TOOL_PATHS: "selected:runtime",
+      STEAM_COMPAT_LIBRARY_PATHS: "selected-library/steamapps",
+      PRESSURE_VESSEL_FILESYSTEMS_RW: "selected-tool-directory",
+    });
   });
 
   const gamePath = path.join(BASE_FOLDER, "steamapps", "common", "TestGame");
@@ -365,6 +377,149 @@ describe("Steam Proton launches", () => {
       runExecutable,
     };
   };
+
+  it("runs Proton inside its required Steam Runtime before applying shader isolation and literal game arguments", async () => {
+    containerRuntime.resolve.mockResolvedValue("/runtime with spaces");
+    preparation.run.mockResolvedValue({
+      protonPath: "/selected-proton",
+      appId: "42",
+      shaderWrapper: "/shader-wrapper",
+      assertCurrent: vi.fn(),
+    });
+    proton.info.mockResolvedValue({
+      usesProton: true,
+      protonPath: "/selected-proton",
+      compatDataPath: "/prefix",
+    });
+    const { api, runExecutable } = makeApi(gamePath);
+    await new Steam().runToolWithProton(
+      api,
+      "/outside/tool.exe",
+      ["literal & argument", 'quote"value'],
+      { cwd: "/working directory" },
+      entry,
+    );
+    expect(containerRuntime.resolve).toHaveBeenCalledExactlyOnceWith(
+      BASE_FOLDER,
+      "/selected-proton",
+      [gamePath, "/prefix"],
+    );
+    expect(containerMounts.environment).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        protonPath: "/selected-proton",
+        runtimePath: "/runtime with spaces",
+        gamePath,
+        compatDataPath: "/prefix",
+        executable: "/outside/tool.exe",
+        cwd: path.resolve("/working directory"),
+      }),
+    );
+    expect(runExecutable).toHaveBeenCalledWith(
+      "/shader-wrapper",
+      [
+        "42",
+        path.join("/runtime with spaces", "_v2-entry-point"),
+        "--verb=run",
+        "--",
+        path.join("/selected-proton", "proton"),
+        "run",
+        "/outside/tool.exe",
+        "literal & argument",
+        'quote"value',
+      ],
+      expect.objectContaining({ cwd: "/working directory", shell: false }),
+    );
+  });
+
+  it("does not fall back to bare Proton when its required Steam Runtime is unavailable", async () => {
+    containerRuntime.resolve.mockRejectedValue(new Error("Required Steam Runtime unavailable"));
+    proton.info.mockResolvedValue({
+      usesProton: true,
+      protonPath: "/selected-proton",
+      compatDataPath: "/prefix",
+    });
+    const { api, runExecutable } = makeApi(gamePath);
+    await expect(
+      new Steam().runToolWithProton(api, "/outside/tool.exe", [], {}, entry),
+    ).rejects.toThrow("Required Steam Runtime unavailable");
+    expect(runExecutable).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "/private/cache-wrapper"])(
+    "keeps the previous default cwd with outer container and shader wrapper %s",
+    async (shaderWrapper) => {
+      containerRuntime.resolve.mockResolvedValue("/runtime");
+      preparation.run.mockResolvedValue({
+        protonPath: "/library/common/Proton",
+        appId: "42",
+        shaderWrapper,
+        assertCurrent: vi.fn(),
+      });
+      proton.info.mockResolvedValue({ usesProton: true, compatDataPath: "/prefix" });
+      const { api, runExecutable } = makeApi(gamePath);
+      await new Steam().runToolWithProton(api, "/outside/tool.exe", [], {}, entry);
+      expect(runExecutable.mock.calls[0][2].cwd).toBe(
+        path.dirname(shaderWrapper ?? path.join("/library/common/Proton", "proton")),
+      );
+      expect(runExecutable.mock.calls[0][2].env).toEqual(
+        expect.objectContaining({
+          STEAM_COMPAT_TOOL_PATHS: "selected:runtime",
+          STEAM_COMPAT_LIBRARY_PATHS: "selected-library/steamapps",
+          PRESSURE_VESSEL_FILESYSTEMS_RW: "selected-tool-directory",
+        }),
+      );
+    },
+  );
+
+  it.each([false, true])(
+    "treats an empty cwd as omitted with a runtime and Flatpak %s",
+    async (flatpak) => {
+      const original = process;
+      vi.stubGlobal("process", { ...original, platform: "linux" });
+      vi.stubEnv("IS_FLATPAK", String(flatpak));
+      try {
+        containerRuntime.resolve.mockResolvedValue("/runtime");
+        proton.info.mockResolvedValue({
+          usesProton: true,
+          protonPath: "/library/common/Proton",
+          compatDataPath: "/prefix",
+        });
+        const { api, runExecutable } = makeApi(gamePath);
+        await new Steam().runToolWithProton(api, "/outside/tool.exe", [], { cwd: "" }, entry);
+        const expected = path.dirname(path.join("/library/common/Proton", "proton"));
+        if (flatpak) expect(runExecutable.mock.calls[0][1]).toContain("--directory=" + expected);
+        else expect(runExecutable.mock.calls[0][2].cwd).toBe(expected);
+      } finally {
+        vi.stubGlobal("process", original);
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  it.each([undefined, "/caller-data"])(
+    "passes deliberate writable mount requests into validated container setup: %s",
+    async (caller) => {
+      containerRuntime.resolve.mockResolvedValue("/runtime");
+      preparation.run.mockResolvedValue({
+        protonPath: "/selected-proton",
+        appId: "42",
+        assertCurrent: vi.fn(),
+        launchOptions: { env: { PRESSURE_VESSEL_FILESYSTEMS_RW: "/steam-data" } },
+      });
+      proton.info.mockResolvedValue({ usesProton: true, compatDataPath: "/prefix" });
+      const { api } = makeApi(gamePath);
+      await new Steam().runToolWithProton(
+        api,
+        "/outside/tool.exe",
+        [],
+        { env: caller === undefined ? {} : { PRESSURE_VESSEL_FILESYSTEMS_RW: caller } },
+        entry,
+      );
+      expect(containerMounts.environment).toHaveBeenCalledWith(
+        expect.objectContaining({ extraWritePaths: [caller ?? "/steam-data"] }),
+      );
+    },
+  );
 
   it("prepares dependencies before runtime conversion and protects the actual direct child without replacing the chosen utility", async () => {
     const assertCurrent = vi.fn();
@@ -451,6 +606,7 @@ describe("Steam Proton launches", () => {
 
   for (const protectedCache of [false, true]) {
     it("launches Flatpak Proton on the host with cache protection " + protectedCache, async () => {
+      containerRuntime.resolve.mockResolvedValue('/host/runtime "four"');
       const original = process;
       vi.stubGlobal("process", { ...original, platform: "linux" });
       vi.stubEnv("IS_FLATPAK", "true");
@@ -494,6 +650,9 @@ describe("Steam Proton launches", () => {
           "--env=PROTON_LOG=1",
           '--env=CUSTOM=literal "value"',
           "--env=EMPTY=",
+          "--env=STEAM_COMPAT_TOOL_PATHS=selected:runtime",
+          "--env=STEAM_COMPAT_LIBRARY_PATHS=selected-library/steamapps",
+          "--env=PRESSURE_VESSEL_FILESYSTEMS_RW=selected-tool-directory",
           "--env=HOME=/steam-home",
           "--env=SteamAppId=42",
           "--env=SteamGameId=42",
@@ -504,6 +663,9 @@ describe("Steam Proton launches", () => {
           "--env=STEAM_COMPAT_CLIENT_INSTALL_PATH=" + BASE_FOLDER,
           "--env=WINEPREFIX=" + path.join("/prefix", "pfx"),
           ...(protectedCache ? ["/host/bin/cache-run", "42"] : []),
+          path.join('/host/runtime "four"', "_v2-entry-point"),
+          "--verb=run",
+          "--",
           path.join("/chosen-proton", "proton"),
           "run",
           '/outside/quoted "tool".exe',

@@ -37,6 +37,35 @@ Don't hand-fix them; let the formatter win.
 
 ## Committing
 
+Custom Proton discovery and dependency setup share manifest parsing and root selection.
+Run proton/protonMetadata plus proton_management tests when changing those boundaries.
+Cover standalone manifests, extra roots, canonical registry/tool aliases, recorded prefix
+aliases, file-manifest aliases, duplicate-name refusal, native-name collisions and literal
+helper root forwarding with canonical manifest-file grants. Official identities must come
+from registered Steam manifests; cover custom targets inside steamapps/common and renamed
+official installations. Keep discovery best-effort
+per manifest while dependency setup validates every library strictly, independent of its
+position. Configured and newest choices refuse tied AppIDs even when their names differ;
+preserve an unambiguous physical prefix choice. Real Flatpak metadata visibility and
+packaged launches remain separate from unit results; keep system-path limits explicit.
+
+For official Proton metadata, preserve Protontricks' newest `LastUpdated` selection per
+AppID while refusing tied records at different paths. Runtime duplicates remain refused:
+Protontricks links required runtimes before deduplicating apps. Keep missing-runtime AppID
+and conflicting-path diagnostics covered by `protonMetadata.test.ts` on both hosts.
+
+Direct Proton launches must use the container declared by `require_tool_appid`, preserving
+the user's wrapper, shader isolation, selected prefix, cwd and literal arguments. Run
+Steam, linux/proton and linux/protonMetadata tests on both hosts. Verify an actual packaged
+32-bit game separately; a host with no 32-bit loader must not fall back to bare Proton.
+Also run linux/steamRuntimeLaunch tests; preserve selected tool/library and narrow external
+tool/cwd mounts, symlink targets, prior default cwd and explicit unsupported-path guidance.
+
+VFS Linux packaging must declare `fuse3` for DEB, RPM and Arch. Run main
+`package-linux.test.ts` and `package-nosign.test.ts` on both hosts, and inspect a real
+generated package's dependency metadata. Portable, Snap and Flatpak builds need host
+FUSE prerequisites; metadata checks do not establish an enabled device or runtime support.
+
 Don't commit, push, or open a PR unless asked. Leave changes in the working tree
 for review. If you're on `master`, branch first.
 
@@ -86,6 +115,10 @@ Read the doc for the area you're touching rather than the whole tree.
 - Linux desktop/URI changes: read `docs/linux-desktop-integration.md`. Run `src/cli.test.ts` from `src/main` on Windows and Linux; retain real Electron cold/second-instance argv and additionalData controls, including raw URI before valued options on Linux and malformed/missing-payload fallback. Parser tests do not establish desktop registration, autostart or a completed network request. Keep the initial main and forwarded Application consumers covered.
 - Linux, Proton and deployment parity: `docs/linux-filesystem-compatibility.md`
 - Virtual (aether-vfs) deployment: read `docs/aether-vfs-deployment.md`. Run renderer `extensions/vfs_deployment`, `util/vfsFsView`, `util/vfsWalkView` and `mod_management/eventHandlers.vfsMigration` tests. Keep game folders untouched, manifests in staging, Vortex's own reads going through the fs and walk views, and runner-started programs (games, tools, the LOOT worker) in the game's session. Fakes prove none of the injection: launches, plugin lists and LOOT sorts need a real game with the addon from `VORTEX_AETHER_VFS_DIR`. Isolated user folders protect the real Plugins.txt and inis from Vortex only; a launched game writes its real Documents and LocalAppData folders, so back those up and restore them around a launch. On Linux a mount outlives Vortex: a helper per game folder (`~/.local/state/vortex/vfs-mounts`) and a login entry (`~/.config/autostart/vortex-vfs-*`) keep it; a purge, or removing its `spec.json`, ends it. Verify a real migration from a released Vortex, not only the unit test: the sandbox game needs a real x64 `game.exe` for the virtual method to apply.
+- Windows VFS working-directory changes require runner.test.ts plus the aether Node smoke suite with real injected relative-file reads. Keep explicit, root-relative, external, virtual-only and executable-default directories, missing-directory errors and unchanged game bytes. An addon build under a local override does not update the packaged release pin.
+- Windows VFS shell launches also require an actual command script reading virtual files and quoted paths with spaces/shell characters through Vortex's runner. Preserve ordinary executable argument quoting and the caller's explicit shell setting. The addon smoke covers its verbatim-argument boundary; a runner mock alone does not prove interpreter injection.
+- Windows command-interpreter changes also run renderer `util/windowsCommandLine.test.ts` and `ExtensionManager.proton.test.ts`, and `pnpm exec vitest run` from `extensions/common-interpreters`. The extension's real command-process matrix covers `.cmd`/`.bat` with shell unset, true and false; preserve quoted spaces/shell characters and avoid nesting an explicitly selected command interpreter. PATH lookup uses the launch environment and working directory, including virtual programs; explicit relative paths must not search PATH. Preserve bare shell commands for the interpreter's PATH/PATHEXT fallback, and verify a real PATH-only script against ordinary spawning.
+- VFS lifecycle failure changes also run `mod_management/index.vfsPreparation.test.ts`, `util/deploy.test.ts`, `util/activationStore.test.ts` and `util/deploymentPreparation.test.ts`. Preparation must abort before core deployment reads/writes; ordinary notification events swallow listener errors. Preserve retry after failure, view restoration and recovery manifests, and never report a completed migration on a failed purge. Cover actual hardlink unlink/backup-cancellation faults, partial/fallback/single-mod paths, kernel mount checks (stale heartbeat, external-root retry and symlink identities), and startup replacement with a changed addon at the same application version on both hosts. A native Steam Stardew runtime probe is recorded in the VFS guide; it predates subsequent failure-safety changes.
 - Staging-folder suggestions: run renderer `discovery.stagingVolume.test.ts` and `mod_management/views/Settings.suggest.test.ts` on Windows and Linux. The real Linux cross-device symlink case needs writable `/dev/shm` on a different device from the temporary directory; a skip is not verification. Keep Windows drive-root behavior and report inaccessible paths or symlink loops.
 - INI backend or consumer changes: `packages/ini-parser/README.md`; run native Windows/portable fixtures and affected FOMOD/INI-baking contracts, preserving encoding and staged hardlinks. Run the renderer `test:integration` target for bundled settings writers and explicit per-game prefix paths; its supplied Steam snapshot is not a real-game launch proof.
 - Installers, release pipeline: `docs/packaging/windows.md`

@@ -175,6 +175,33 @@ remains in effect. Start Steam once and initialise the game prefix before using 
 Proton launches use the same cancellation, error notification, exit recording and
 hide-and-recover window handling as ordinary executable launches.
 
+When Proton's tool manifest declares a required Steam Runtime AppID, direct game and
+tool launches run Proton inside that exact installed container. This supplies the Linux
+libraries and 32-bit loader that a host distribution may omit. Vortex does not substitute
+a different runtime or fall back to bare Proton when the declared runtime is missing,
+ambiguous or uninitialized. Launch the game once through Steam to install and initialize
+its required runtime. Legacy/custom tools with no declared container run directly.
+User launch wrappers remain outside shader-cache isolation, then the runtime, then Proton;
+working directories and literal arguments are preserved, including Flatpak host launches.
+The selected Proton/runtime and their Steam libraries are exposed to the container, along
+with the launched tool's folder and working directory when outside those installations.
+Symlink targets are included. Unrelated volumes are not added. Colon/control characters
+cannot be represented in these path lists; host paths below the container's reserved
+`/usr`, `/bin`, `/lib*`, `/etc`, `/proc`, `/sys`, `/dev` and `/run/host` trees require relocating
+the game/tool to a Steam library or a user-owned directory. An omitted working directory
+keeps the previous launcher default.
+Explicit additional writable folders requested through `PRESSURE_VESSEL_FILESYSTEMS_RW`
+are validated and retained alongside those generated mounts; caller environment overrides
+Steam launch options, then the inherited environment. Empty cwd keeps the omitted-cwd default.
+
+From `src/renderer`, run `pnpm exec vitest run src/util/Steam.test.ts
+src/util/linux/proton.test.ts src/util/linux/protonMetadata.test.ts
+src/util/linux/steamRuntimeLaunch.test.ts` on Windows and Linux.
+These account-free fixtures verify container selection, missing/duplicate/redirected
+runtime errors, wrapper order and argument forwarding. Separately verify a real packaged
+32-bit Windows game on Linux with its selected official Proton and runtime; unit tests
+and a successful spawn receipt do not establish that the game renders.
+
 A Windows executable is never passed directly to Linux after an unavailable or
 failed Steam scan. Missing game identity, ambiguous app IDs and a native-build
 Steam entry produce an explanatory launch error. Refresh Games after Steam
@@ -190,6 +217,29 @@ Installed Proton discovery scans the client and configured libraries, checks for
 `proton` launcher, and supports custom compatibility tools. Missing libraries do not
 prevent scanning others. Launches that the page's preparation doesn't cover use the same
 order as the page.
+Official tools use their registered Steam app-manifest identity, including the newest
+`LastUpdated` for duplicate AppIDs. An unregistered folder under `steamapps/common` does
+not become an official Proton installation. A renamed registered installation keeps its
+official identity. Malformed unrelated manifests are skipped during discovery; dependency
+setup validates metadata strictly in every library. Configured and automatic newest choices
+refuse tied AppIDs at different physical paths even when their registered names differ.
+A prefix record that identifies one physical tool still takes precedence over defaults.
+
+Custom tools are read from Steam's `compatibilitytools.d`, the Linux system roots
+`/usr/share/steam/compatibilitytools.d` and `/usr/local/share/steam/compatibilitytools.d`,
+and `STEAM_EXTRA_COMPAT_TOOLS_PATHS` in Vortex's environment. Start Vortex with that variable
+when Steam uses additional roots. Both tool subdirectories and standalone `.vdf` manifests
+can identify an installation outside the registry directory, as described by
+[Valve's manifest template](https://github.com/ValveSoftware/Proton/blob/proton_11.0/compatibilitytool.vdf.template).
+Vortex uses the manifest's internal name instead of its folder name, resolves registry,
+tool and manifest-file aliases, and recognizes
+logical tool paths recorded in the prefix. Different installations sharing the selected
+custom name are refused; remove the duplicate instead of relying on directory order.
+An invalid manifest is skipped during discovery; dependency setup retains strict validation.
+The helper receives existing registry roots and external canonical manifest files read-only,
+and the same explicit extra-root
+environment, including an empty value when none exist. Discovery does not establish sandbox
+access: the host-path restrictions above still apply to system tools and Flatpak setups.
 
 The original Proton header, compatibility card, mod requirements, shader cache controls
 and local feedback footer are restored from `local/linux-support`. Required-component
@@ -213,7 +263,13 @@ installs it per user, or system-wide when Flathub is only a system remote (as on
 and Fedora Atomic; a system install may ask for authorization). It updates that
 installation and invokes it with the exact Steam
 client, App ID, initialized prefix and selected Proton metadata name. Custom tools use
-their internal compatibility-tool key. Duplicate or mismatched installations are refused.
+their internal compatibility-tool key. For duplicate official Proton AppIDs, Vortex follows
+Protontricks' newest `LastUpdated` manifest; selecting an older installation is refused.
+Equal update times at different paths, conflicting names and mismatched installations are
+still refused. A missing Steam Runtime error identifies its required AppID; start the game
+once in Steam to let Steam install it. Conflicting runtime errors list the installation
+paths to repair in Steam. **Install requirements** installs Windows components into the
+game's prefix; it requires Steam's own Proton and runtime installations to be ready first.
 Both manual and automatic setup use this same serialized preparation. A one-shot sandbox
 grant makes the selected prefix writable and the required client/library/runtime roots
 readable. The exact required Steam Runtime also receives writable access to its own

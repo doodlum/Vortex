@@ -148,12 +148,218 @@ describe.runIf(process.platform === "win32")("a running program's view", () => {
     getState: () => ({
       settings: {
         gameMode: { discovered: { plain: { path: gamePath } } },
-        profiles: { activeProfileId: undefined },
+        profiles: { activeProfileId: "plainProfile" },
       },
-      persistent: { profiles: {} },
+      persistent: { profiles: { plainProfile: { gameId: "plain" } } },
     }),
   } as unknown as IExtensionApi;
   const state = api.getState();
+
+  it("associates a cwd-local PATHEXT script with the active game and its virtual input", async () => {
+    fs.mkdirSync(dataPath, { recursive: true });
+    const script = path.join(dataPath, "LocalProbe.cmd");
+    fs.writeFileSync(script, "fixture script");
+    fakes.deployment = {
+      gamePath,
+      stagingPath,
+      deployments: [{ targetPath: dataPath, files: [file("virtual-input.txt")] }],
+    };
+    const started = await makeLaunchRunner(api)({
+      executable: "LocalProbe",
+      args: ['"virtual-input.txt"'],
+      cwd: dataPath,
+      options: { shell: true, env: { PATHEXT: ".cmd;.exe" } },
+    });
+    expect(started).toBeDefined();
+    const session = fakes.sessions.at(-1)!;
+    expect(session.launches).toContainEqual(
+      expect.objectContaining({
+        args: ["/d", "/s", "/c", `""${script}" "virtual-input.txt""`],
+      }),
+    );
+    expect((session.given[0] as IAetherRoot).files).toContainEqual({
+      path: path.join("Data", "virtual-input.txt"),
+      source: path.join(stagingPath, "Mod", "virtual-input.txt"),
+    });
+    session.end();
+    await started!.exited;
+  });
+
+  it("keeps Steam identity beside a resolved cwd-local script", async () => {
+    fs.mkdirSync(dataPath, { recursive: true });
+    fs.writeFileSync(path.join(dataPath, "SteamProbe.cmd"), "fixture script");
+    fakes.deployment = { gamePath, stagingPath, deployments: [] };
+    const steamApi = {
+      getState: () => ({
+        settings: {
+          gameMode: { discovered: { steamgame: { path: gamePath } } },
+          profiles: { activeProfileId: "steamProfile" },
+        },
+        persistent: { profiles: { steamProfile: { gameId: "steamgame" } } },
+      }),
+    } as unknown as IExtensionApi;
+    const started = await makeLaunchRunner(steamApi)({
+      executable: "SteamProbe",
+      args: [],
+      cwd: dataPath,
+      options: { shell: true, env: { PATHEXT: ".cmd" } },
+    });
+    const session = fakes.sessions.at(-1)!;
+    expect(session.launches).toContainEqual(
+      expect.objectContaining({
+        env: { PATHEXT: ".cmd", SteamAppId: "489830", SteamGameId: "489830" },
+      }),
+    );
+    expect((session.given[0] as IAetherRoot).files).toContainEqual(
+      expect.objectContaining({
+        path: path.join("Data", "steam_appid.txt"),
+      }),
+    );
+    session.end();
+    await started!.exited;
+  });
+
+  it("leaves a bare shell command available for the interpreter's PATHEXT lookup", async () => {
+    fakes.deployment = { gamePath, stagingPath, deployments: [] };
+    const started = await makeLaunchRunner(api)({
+      executable: "PathOnlyProbe",
+      args: ['"output & file.txt"'],
+      cwd: dataPath,
+      options: { gameId: "plain", shell: true, env: { PATH: path.join(dir, "script tools") } },
+    });
+    const session = fakes.sessions.at(-1)!;
+    expect(session.launches).toContainEqual(
+      expect.objectContaining({
+        args: ["/d", "/s", "/c", '""PathOnlyProbe" "output & file.txt""'],
+        windowsVerbatimArguments: true,
+      }),
+    );
+    session.end();
+    await started!.exited;
+  });
+
+  for (const shell of [false, true]) {
+    it(`runs an explicit command interpreter once with verbatim arguments (shell=${shell})`, async () => {
+      fakes.deployment = { gamePath, stagingPath, deployments: [] };
+      const executable = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe");
+      const args = ["/D", "/S", "/K", '""script & tool.cmd" "input & file.txt""'];
+      const started = await makeLaunchRunner(api)({
+        executable,
+        args,
+        cwd: dataPath,
+        options: { gameId: "plain", shell },
+      });
+      const session = fakes.sessions.at(-1)!;
+      expect(session.launches).toContainEqual(
+        expect.objectContaining({
+          image: executable,
+          args,
+          windowsVerbatimArguments: true,
+        }),
+      );
+      session.end();
+      await started!.exited;
+    });
+  }
+
+  it("finds an interpreter on the launch environment's PATH rather than inside the game", async () => {
+    fakes.deployment = { gamePath, stagingPath, deployments: [] };
+    const tools = path.join(dir, "path tools");
+    fs.mkdirSync(tools, { recursive: true });
+    const interpreter = path.join(tools, "interpreter.exe");
+    fs.writeFileSync(interpreter, "fixture");
+    const started = await makeLaunchRunner(api)({
+      executable: "interpreter.exe",
+      args: ["script.cmd"],
+      cwd: dataPath,
+      options: { gameId: "plain", env: { Path: `\"${tools}\"` }, shell: false },
+    });
+    const session = fakes.sessions.at(-1)!;
+    expect(session.launches).toContainEqual(
+      expect.objectContaining({
+        image: interpreter,
+        args: ["script.cmd"],
+        windowsVerbatimArguments: false,
+      }),
+    );
+    session.end();
+    await started!.exited;
+  });
+
+  it("uses a differently cased caller PATH override for lookup and the injected environment", async () => {
+    fakes.deployment = { gamePath, stagingPath, deployments: [] };
+    const inherited = path.join(dir, "inherited tools");
+    const requested = path.join(dir, "requested tools");
+    for (const folder of [inherited, requested]) {
+      fs.mkdirSync(folder, { recursive: true });
+      fs.writeFileSync(path.join(folder, "override.exe"), "fixture");
+    }
+    const started = await makeLaunchRunner(api)({
+      executable: "override.exe",
+      args: [],
+      cwd: dataPath,
+      options: { gameId: "plain", env: { Path: inherited, PATH: requested } },
+    });
+    const session = fakes.sessions.at(-1)!;
+    expect(session.launches).toContainEqual(
+      expect.objectContaining({
+        image: path.join(requested, "override.exe"),
+        env: { PATH: requested },
+      }),
+    );
+    session.end();
+    await started!.exited;
+  });
+
+  for (const name of ["local-tool", ".\\local-tool"]) {
+    it(`resolves ${name} in the requested working directory and supplies its executable suffix`, async () => {
+      fakes.deployment = { gamePath, stagingPath, deployments: [] };
+      fs.mkdirSync(dataPath, { recursive: true });
+      const executable = path.join(dataPath, "local-tool.exe");
+      fs.writeFileSync(executable, "fixture");
+      const started = await makeLaunchRunner(api)({
+        executable: name,
+        args: [],
+        cwd: dataPath,
+        options: { gameId: "plain", shell: false },
+      });
+      expect(started).toBeDefined();
+      const session = fakes.sessions.at(-1)!;
+      expect(session.launches).toContainEqual(expect.objectContaining({ image: executable }));
+      session.end();
+      await started!.exited;
+    });
+  }
+
+  it("routes a game's shell script through an injected command interpreter without losing shell quoting", async () => {
+    fakes.deployment = {
+      gamePath,
+      stagingPath,
+      deployments: [{ targetPath: dataPath, files: [file("a.esp")] }],
+    };
+    const script = path.join(gamePath, "script with spaces.cmd");
+    const args = ['"argument with spaces"', '"quoted & literal"'];
+    const started = await makeLaunchRunner(api)({
+      executable: script,
+      args,
+      cwd: dataPath,
+      options: { gameId: "plain", shell: true },
+    });
+    expect(started).toBeDefined();
+    const session = fakes.sessions.at(-1)!;
+    expect(session.launches).toContainEqual(
+      expect.objectContaining({
+        image:
+          process.env.comspec ??
+          path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe"),
+        cwd: dataPath,
+        args: ["/d", "/s", "/c", `""${script}" ${args.join(" ")}"`],
+        windowsVerbatimArguments: true,
+      }),
+    );
+    session.end();
+    await started!.exited;
+  });
 
   it("runs a helper named for the game in its session and follows later deploys", async () => {
     fakes.deployment = {
@@ -176,7 +382,7 @@ describe.runIf(process.platform === "win32")("a running program's view", () => {
     const session = fakes.sessions.at(-1)!;
     expect(started.pid).toBe(42);
     expect(session.launches).toEqual([
-      expect.objectContaining({ image: helper, args: ["worker.js"] }),
+      expect.objectContaining({ image: helper, args: ["worker.js"], cwd: dir }),
     ]);
     expect((session.given[0] as IAetherRoot).files).toEqual([
       { path: path.join("Data", "a.esp"), source: path.join(stagingPath, "Mod", "a.esp") },

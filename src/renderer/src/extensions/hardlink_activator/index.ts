@@ -282,27 +282,42 @@ class DeploymentMethod extends LinkingDeployment {
       if (inos.size === 0) {
         return PromiseBB.resolve();
       }
-      return turbowalk(
-        dataPath,
-        (entries) => {
-          queue = queue.then(() =>
-            PromiseBB.map(entries, (entry) => {
-              if (entry.linkCount > 1 && entry.idStr !== undefined && inos.has(entry.idStr)) {
-                ++purged;
-                if (purged % 1000 === 0) {
-                  onProgress?.(purged, total);
+      return PromiseBB.resolve(
+        turbowalk(
+          dataPath,
+          (entries) => {
+            queue = queue.then(() =>
+              PromiseBB.map(entries, (entry) => {
+                if (entry.linkCount > 1 && entry.idStr !== undefined && inos.has(entry.idStr)) {
+                  ++purged;
+                  if (purged % 1000 === 0) {
+                    onProgress?.(purged, total);
+                  }
+                  return fs.unlinkAsync(entry.filePath).reflect();
+                } else {
+                  return PromiseBB.resolve().reflect();
                 }
-                return fs
-                  .unlinkAsync(entry.filePath)
-                  .catch((err) => log("warn", "failed to remove", entry.filePath));
-              } else {
-                return PromiseBB.resolve();
-              }
-            }).then(() => undefined),
-          );
-        },
-        { details: true, skipHidden: false },
-      ).then(() => queue);
+              }).then((outcomes) => {
+                const errors = outcomes
+                  .filter((outcome) => outcome.isRejected())
+                  .map((outcome) => outcome.reason());
+                if (errors.length > 0)
+                  throw new AggregateError(errors, "Failed to purge hardlinked files");
+              }),
+            );
+            // The walker can still be running when this batch fails. Handle the rejection
+            // immediately, but retain it for the final drained result below.
+            queue.catch(() => undefined);
+          },
+          { details: true, skipHidden: false },
+        ),
+      )
+        .reflect()
+        .then(async (walked) => {
+          const purged = await queue.reflect();
+          if (walked.isRejected()) throw walked.reason();
+          if (purged.isRejected()) throw purged.reason();
+        });
     });
   }
 

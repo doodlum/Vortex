@@ -2,7 +2,7 @@ import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   detectRuntimeDependencies,
@@ -11,6 +11,7 @@ import {
   listInstalledProton,
   protonConfigName,
   resolveProtonPath,
+  resolveSteamProton,
   findLatestProton,
   getProtonInfo,
   buildProtonEnvironment,
@@ -23,25 +24,377 @@ import {
 const temporaryPaths: string[] = [];
 
 async function temporaryDirectory(): Promise<string> {
-  const result = await fs.mkdtemp(path.join(os.tmpdir(), "vortex-proton-test-"));
+  const result = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "vortex-proton-test-")));
   temporaryPaths.push(result);
   return result;
 }
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(
     temporaryPaths.splice(0).map((entry) => fs.rm(entry, { force: true, recursive: true })),
   );
 });
 
+let registeredId = 1000;
+async function officialTool(
+  steam: string,
+  name: string,
+  folder = name,
+  appId = String(++registeredId),
+  lastUpdated = "1",
+) {
+  const install = path.join(steam, "steamapps", "common", folder);
+  await fs.mkdir(install, { recursive: true });
+  await fs.writeFile(path.join(install, "proton"), "");
+  await fs.writeFile(
+    path.join(steam, "steamapps", `appmanifest_${appId}.acf`),
+    `"AppState" { "appid" "${appId}" "name" "${name}" "installdir" "${folder}" "LastUpdated" "${lastUpdated}" }`,
+  );
+  return fs.realpath(install);
+}
+
 describe("Proton management", () => {
+  async function customTool(root: string, key: string, installPath: string) {
+    await fs.mkdir(path.dirname(root), { recursive: true });
+    await fs.mkdir(installPath, { recursive: true });
+    await fs.writeFile(path.join(installPath, "proton"), "");
+    await fs.writeFile(
+      root,
+      `"compatibilitytools" { "compat_tools" { "${key}" { "install_path" "${installPath.replaceAll("\\", "\\\\")}" "from_oslist" "windows" "to_oslist" "linux" } } }`,
+    );
+  }
+
+  it("discovers a standalone custom manifest targeting an external installation", async () => {
+    const steam = await temporaryDirectory();
+    const tool = await temporaryDirectory();
+    await customTool(
+      path.join(steam, "compatibilitytools.d", "external.vdf"),
+      "External-Key",
+      tool,
+    );
+    const found = (await listInstalledProton(steam)).find(
+      (entry) => protonConfigName(entry) === "External-Key",
+    );
+    expect(found).toMatchObject({ path: await fs.realpath(tool), source: "custom" });
+    await expect(resolveProtonPath(steam, [steam], "External-Key")).resolves.toBe(
+      await fs.realpath(tool),
+    );
+  });
+
+  it("discovers extra compatibility-tool roots once and uses their internal names", async () => {
+    const steam = await temporaryDirectory();
+    const extra = await temporaryDirectory();
+    const tool = path.join(extra, "Different-Folder");
+    await customTool(path.join(tool, "compatibilitytool.vdf"), "Exact-Extra-Key", tool);
+    vi.stubEnv("STEAM_EXTRA_COMPAT_TOOLS_PATHS", [extra, extra].join(path.delimiter));
+    const found = (await listInstalledProton(steam)).filter(
+      (entry) => protonConfigName(entry) === "Exact-Extra-Key",
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0].path).toBe(await fs.realpath(tool));
+    await expect(resolveProtonPath(steam, [steam], "Exact-Extra-Key")).resolves.toBe(
+      await fs.realpath(tool),
+    );
+  });
+
+  it("keeps valid standalone tools discoverable beside a malformed manifest", async () => {
+    const steam = await temporaryDirectory();
+    const tool = await temporaryDirectory();
+    const root = path.join(steam, "compatibilitytools.d");
+    await customTool(path.join(root, "z-valid.vdf"), "Valid-Key", tool);
+    await fs.writeFile(path.join(root, "a-malformed.vdf"), "not a valid manifest");
+    expect((await listInstalledProton(steam)).map(protonConfigName)).toContain("Valid-Key");
+  });
+
+  it("refuses different custom installations with the same configured internal name", async () => {
+    const steam = await temporaryDirectory();
+    for (const folder of ["one", "two"]) {
+      const tool = path.join(steam, "compatibilitytools.d", folder);
+      await customTool(path.join(tool, "compatibilitytool.vdf"), "Duplicate-Key", tool);
+    }
+    await expect(resolveProtonPath(steam, [steam], "Duplicate-Key")).rejects.toThrow(
+      /Duplicate-Key.*multiple installations/,
+    );
+  });
+
+  it("never resolves a custom installation by its folder instead of its internal key", async () => {
+    const steam = await temporaryDirectory();
+    const tool = path.join(steam, "compatibilitytools.d", "Missing-Key");
+    await customTool(path.join(tool, "compatibilitytool.vdf"), "Different-Key", tool);
+    await expect(resolveProtonPath(steam, [steam], "Missing-Key")).resolves.toBeUndefined();
+  });
+
+  it("keeps an explicit native mapping when a custom installation has the same folder name", async () => {
+    const steam = await temporaryDirectory();
+    const tool = path.join(steam, "compatibilitytools.d", "Native-Key");
+    await customTool(path.join(tool, "compatibilitytool.vdf"), "Different-Key", tool);
+    await fs.mkdir(path.join(steam, "config"));
+    await fs.writeFile(
+      path.join(steam, "config", "config.vdf"),
+      '"InstallConfigStore" { "Software" { "Valve" { "Steam" { "CompatToolMapping" { "22380" { "name" "Native-Key" } } } } } }',
+    );
+    await fs.mkdir(path.join(steam, "steamapps", "compatdata", "22380", "pfx"), {
+      recursive: true,
+    });
+    await expect(
+      getProtonInfo(steam, [steam], path.join(steam, "steamapps"), "22380"),
+    ).resolves.toEqual({ usesProton: false });
+  });
+
+  it.each([
+    ["Native-Key", "Native-Key"],
+    ["Proton 11.0", "proton_11"],
+  ])(
+    "never invents an official identity for an external custom target at %s",
+    async (folder, key) => {
+      const steam = await temporaryDirectory();
+      const tool = path.join(steam, "steamapps", "common", folder);
+      await customTool(
+        path.join(steam, "compatibilitytools.d", "external.vdf"),
+        "Different-Key",
+        tool,
+      );
+      await expect(resolveProtonPath(steam, [steam], key)).resolves.toBeUndefined();
+      await expect(resolveProtonPath(steam, [steam], "Different-Key")).resolves.toBe(
+        await fs.realpath(tool),
+      );
+    },
+  );
+
+  it("uses an official manifest's identity when its installation folder has another name", async () => {
+    const steam = await temporaryDirectory();
+    const tool = await officialTool(steam, "Proton 11.0", "Official Install Folder");
+    await expect(resolveProtonPath(steam, [steam], "proton_11")).resolves.toBe(tool);
+  });
+
+  it("chooses the newest registered AppID and refuses tied physical installations", async () => {
+    const steam = await temporaryDirectory();
+    const other = await temporaryDirectory();
+    await officialTool(steam, "Proton - Experimental", "Old Experimental", "1493710", "10");
+    const newest = await officialTool(
+      other,
+      "Proton - Experimental",
+      "New Experimental",
+      "1493710",
+      "20",
+    );
+    await expect(resolveProtonPath(steam, [steam, other], "proton_experimental")).resolves.toBe(
+      newest,
+    );
+    await officialTool(steam, "Proton - Experimental", "Old Experimental", "1493710", "20");
+    await expect(resolveProtonPath(steam, [steam, other], "proton_experimental")).rejects.toThrow(
+      /multiple installations/,
+    );
+  });
+
+  it("keeps registered official discovery working beside a malformed app manifest", async () => {
+    const steam = await temporaryDirectory();
+    const tool = await officialTool(steam, "Proton 11.0");
+    await fs.writeFile(path.join(steam, "steamapps", "appmanifest_1.acf"), "not a manifest");
+    await expect(resolveProtonPath(steam, [steam], "proton_11")).resolves.toBe(tool);
+  });
+
+  it.each([
+    ["Proton 10.0", "configured"],
+    ["Proton 10.0", "automatic"],
+    ["Proton 10.0", "latest path"],
+    ["Proton 10.0", "latest name"],
+    ["Unrecognized Metadata", "configured"],
+    ["Unrecognized Metadata", "automatic"],
+    ["Unrecognized Metadata", "latest path"],
+    ["Unrecognized Metadata", "latest name"],
+  ])("refuses tied AppID with %s through %s selection", async (otherName, consumer) => {
+    const steam = await temporaryDirectory();
+    const other = await temporaryDirectory();
+    await officialTool(steam, "Proton 11.0", "Selected Tool", "1493710", "20");
+    await officialTool(other, otherName, "Conflicting Tool", "1493710", "20");
+    await fs.mkdir(path.join(steam, "config"));
+    await fs.writeFile(
+      path.join(steam, "config", "libraryfolders.vdf"),
+      `"libraryfolders" { "1" { "path" "${other.replaceAll("\\", "/")}" } }`,
+    );
+    await fs.mkdir(path.join(steam, "steamapps", "compatdata", "22380", "pfx"), {
+      recursive: true,
+    });
+    const operation =
+      consumer === "configured"
+        ? resolveProtonPath(steam, [steam, other], "proton_11")
+        : consumer === "automatic"
+          ? getProtonInfo(steam, [steam, other], path.join(steam, "steamapps"), "22380")
+          : consumer === "latest path"
+            ? findLatestProton([steam, other])
+            : findLatestStableProtonName(steam);
+    await expect(operation).rejects.toThrow(/AppID 1493710.*multiple installations/);
+  });
+
+  it("preserves a physical prefix choice despite differently named tied AppID records", async () => {
+    const steam = await temporaryDirectory();
+    const other = await temporaryDirectory();
+    const selected = await officialTool(steam, "Proton 10.0", "Selected Tool", "1493710", "20");
+    await officialTool(other, "Proton 11.0", "Conflicting Tool", "1493710", "20");
+    const compat = path.join(steam, "steamapps", "compatdata", "22380");
+    await fs.mkdir(path.join(compat, "pfx"), { recursive: true });
+    await fs.writeFile(
+      path.join(compat, "config_info"),
+      path.join(selected, "files").replaceAll("\\", "/"),
+    );
+    await expect(
+      getProtonInfo(steam, [steam, other], path.join(steam, "steamapps"), "22380"),
+    ).resolves.toMatchObject({ usesProton: true, protonPath: selected });
+  });
+
+  it("deduplicates tied official AppID aliases to one physical installation", async () => {
+    const steam = await temporaryDirectory();
+    const other = await temporaryDirectory();
+    const selected = await officialTool(steam, "Proton 11.0", "Selected Tool", "1493710", "20");
+    const alias = await officialTool(other, "Proton 11.0", "Alias", "1493710", "20");
+    await fs.rm(path.join(alias, "proton"));
+    await fs.rmdir(alias);
+    await fs.symlink(selected, alias, "junction");
+    await expect(resolveProtonPath(steam, [steam, other], "proton_11")).resolves.toBe(selected);
+  });
+
+  it.each([
+    ["Proton - Experimental", undefined],
+    ["Proton - Experimental", "unusable prefix identity\n"],
+    ["Proton 11.0", undefined],
+    ["Proton 11.0", "unusable prefix identity\n"],
+  ])(
+    "refuses ambiguous newest %s without configured selection and prefix identity %s",
+    async (name, recorded) => {
+      const steam = await temporaryDirectory();
+      const other = await temporaryDirectory();
+      await officialTool(steam, name, "First Tool", "1493710", "20");
+      await officialTool(other, name, "Second Tool", "1493710", "20");
+      const compatData = path.join(steam, "steamapps", "compatdata", "22380");
+      await fs.mkdir(path.join(compatData, "pfx"), { recursive: true });
+      if (recorded !== undefined)
+        await fs.writeFile(path.join(compatData, "config_info"), recorded);
+      await expect(
+        getProtonInfo(steam, [steam, other], path.join(steam, "steamapps"), "22380"),
+      ).rejects.toThrow(/multiple installations/);
+    },
+  );
+
+  it.each(["Proton - Experimental", "Proton 11.0"])(
+    "refuses ambiguous newest %s before a prefix exists",
+    async (name) => {
+      const steam = await temporaryDirectory();
+      const other = await temporaryDirectory();
+      await officialTool(steam, name, "First Tool", "1493710", "20");
+      await officialTool(other, name, "Second Tool", "1493710", "20");
+      const tools = await listInstalledProton(steam, [steam, other]);
+      await expect(resolveSteamProton(steam, "22380", undefined, tools)).rejects.toThrow(
+        /multiple installations/,
+      );
+    },
+  );
+
+  it.each(["Proton - Experimental", "Proton 11.0"])(
+    "refuses ambiguous newest %s in the latest-path helper",
+    async (name) => {
+      const steam = await temporaryDirectory();
+      const other = await temporaryDirectory();
+      await officialTool(steam, name, "First Tool", "1493710", "20");
+      await officialTool(other, name, "Second Tool", "1493710", "20");
+      await expect(findLatestProton([steam, other])).rejects.toThrow(/multiple installations/);
+    },
+  );
+
+  it("refuses ambiguous newest stable names across registered libraries", async () => {
+    const steam = await temporaryDirectory();
+    const other = await temporaryDirectory();
+    await officialTool(steam, "Proton 11.0", "First Tool", "1493710", "20");
+    await officialTool(other, "Proton 11.0", "Second Tool", "1493710", "20");
+    await fs.mkdir(path.join(steam, "config"));
+    await fs.writeFile(
+      path.join(steam, "config", "libraryfolders.vdf"),
+      `"libraryfolders" { "1" { "path" "${other.replaceAll("\\", "/")}" } }`,
+    );
+    await expect(findLatestStableProtonName(steam)).rejects.toThrow(/multiple installations/);
+  });
+
+  it.each(["Proton - Experimental", "Proton 11.0"])(
+    "preserves an unambiguous physical prefix selection among duplicate %s installations",
+    async (name) => {
+      const steam = await temporaryDirectory();
+      const other = await temporaryDirectory();
+      await officialTool(steam, name, "First Tool", "1493710", "20");
+      const selected = await officialTool(other, name, "Second Tool", "1493710", "20");
+      const compatData = path.join(steam, "steamapps", "compatdata", "22380");
+      await fs.mkdir(path.join(compatData, "pfx"), { recursive: true });
+      await fs.writeFile(
+        path.join(compatData, "config_info"),
+        path.join(selected, "files").replaceAll("\\", "/"),
+      );
+      await expect(
+        getProtonInfo(steam, [steam, other], path.join(steam, "steamapps"), "22380"),
+      ).resolves.toMatchObject({ usesProton: true, protonPath: selected });
+    },
+  );
+
+  it.runIf(process.platform === "linux")("discovers a standalone manifest file alias", async () => {
+    const steam = await temporaryDirectory();
+    const tool = await temporaryDirectory();
+    await customTool(path.join(tool, "compatibilitytool.vdf"), "File-Alias-Key", tool);
+    await fs.mkdir(path.join(steam, "compatibilitytools.d"));
+    await fs.symlink(
+      path.join(tool, "missing.vdf"),
+      path.join(steam, "compatibilitytools.d", "a-dangling.vdf"),
+    );
+    await fs.symlink(
+      path.join(tool, "compatibilitytool.vdf"),
+      path.join(steam, "compatibilitytools.d", "external.vdf"),
+    );
+    await expect(resolveProtonPath(steam, [steam], "File-Alias-Key")).resolves.toBe(
+      await fs.realpath(tool),
+    );
+  });
+
+  it("resolves relative standalone manifests against an aliased root's physical directory", async () => {
+    const steam = await temporaryDirectory();
+    const external = await temporaryDirectory();
+    const registry = path.join(external, "registry");
+    const tool = path.join(external, "External-Proton");
+    await customTool(path.join(registry, "external.vdf"), "Relative-Key", tool);
+    await fs.writeFile(
+      path.join(registry, "external.vdf"),
+      '"compatibilitytools" { "compat_tools" { "Relative-Key" { "install_path" "../External-Proton" "from_oslist" "windows" "to_oslist" "linux" } } }',
+    );
+    await fs.symlink(registry, path.join(steam, "compatibilitytools.d"), "junction");
+    expect(await fs.realpath(path.join(steam, "compatibilitytools.d"))).toBe(
+      await fs.realpath(registry),
+    );
+    await expect(resolveProtonPath(steam, [steam], "Relative-Key")).resolves.toBe(
+      await fs.realpath(tool),
+    );
+  });
+
+  it("recognizes the prefix's logical custom-tool alias after canonical discovery", async () => {
+    const steam = await temporaryDirectory();
+    const tool = await temporaryDirectory();
+    const root = path.join(steam, "compatibilitytools.d");
+    await fs.mkdir(root);
+    await customTool(path.join(tool, "compatibilitytool.vdf"), "Prefix-Key", tool);
+    await fs.mkdir(path.join(tool, "files", "share", "default_pfx"), { recursive: true });
+    const alias = path.join(root, "Logical-Alias");
+    await fs.symlink(tool, alias, "junction");
+    expect(await fs.realpath(alias)).toBe(await fs.realpath(tool));
+    const template = path.join(alias, "files", "share", "default_pfx");
+    const compatdata = path.join(steam, "steamapps", "compatdata", "22380");
+    await fs.mkdir(path.join(compatdata, "pfx"), { recursive: true });
+    await fs.writeFile(path.join(compatdata, "config_info"), template.replaceAll("\\", "/"));
+    await expect(
+      getProtonInfo(steam, [steam], path.join(steam, "steamapps"), "22380"),
+    ).resolves.toMatchObject({ usesProton: true, protonPath: await fs.realpath(tool) });
+  });
+
   it("discovers official and custom Proton installations by capability", async () => {
     const steamPath = await temporaryDirectory();
-    const official = path.join(steamPath, "steamapps", "common", "Proton 11.0");
+    await officialTool(steamPath, "Proton 11.0");
     const custom = path.join(steamPath, "compatibilitytools.d", "GE-Proton11-3");
-    await fs.mkdir(official, { recursive: true });
     await fs.mkdir(custom, { recursive: true });
-    await fs.writeFile(path.join(official, "proton"), "");
     await fs.writeFile(path.join(custom, "proton"), "");
     await fs.writeFile(
       path.join(custom, "compatibilitytool.vdf"),
@@ -82,7 +435,6 @@ describe("Proton management", () => {
 
   it("defaults to the newest installed official stable Proton", async () => {
     const steamPath = await temporaryDirectory();
-    const common = path.join(steamPath, "steamapps", "common");
     await Promise.all(
       [
         "Proton 9.0 (Beta)",
@@ -90,10 +442,7 @@ describe("Proton management", () => {
         "Proton Hotfix",
         "Proton 9.0",
         "Proton 11.0",
-      ].map(async (name) => {
-        await fs.mkdir(path.join(common, name), { recursive: true });
-        await fs.writeFile(path.join(common, name, "proton"), "");
-      }),
+      ].map((name) => officialTool(steamPath, name)),
     );
 
     await expect(findLatestStableProtonName(steamPath)).resolves.toBe("proton_11");
@@ -101,9 +450,7 @@ describe("Proton management", () => {
 
   it("scans remaining libraries when the first is missing and retains the Experimental path", async () => {
     const library = await temporaryDirectory();
-    const experimental = path.join(library, "steamapps", "common", "Proton - Experimental");
-    await fs.mkdir(experimental, { recursive: true });
-    await fs.writeFile(path.join(experimental, "proton"), "");
+    const experimental = await officialTool(library, "Proton - Experimental");
     await expect(findLatestProton([path.join(library, "missing"), library])).resolves.toBe(
       experimental,
     );
@@ -115,9 +462,7 @@ describe("Proton management", () => {
   it("handles absent default configuration and selects numeric versions", async () => {
     const steam = await temporaryDirectory();
     for (const version of ["9.0", "10.0", "19.0"]) {
-      const folder = path.join(steam, "steamapps", "common", `Proton ${version}`);
-      await fs.mkdir(folder, { recursive: true });
-      await fs.writeFile(path.join(folder, "proton"), "");
+      await officialTool(steam, `Proton ${version}`);
     }
     await fs.mkdir(path.join(steam, "steamapps", "compatdata", "413150", "pfx"), {
       recursive: true,
@@ -328,8 +673,7 @@ describe("Steam's Proton for a game", () => {
     const steam = await temporaryDirectory();
     const common = path.join(steam, "steamapps", "common");
     for (const name of ["Proton 9.0", "Proton - Experimental"]) {
-      await fs.mkdir(path.join(common, name), { recursive: true });
-      await fs.writeFile(path.join(common, name, "proton"), "");
+      await officialTool(steam, name);
     }
     const compatData = path.join(steam, "steamapps", "compatdata", "42");
     await fs.mkdir(path.join(compatData, "pfx"), { recursive: true });

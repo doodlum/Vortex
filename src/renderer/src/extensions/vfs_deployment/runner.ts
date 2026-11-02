@@ -6,6 +6,11 @@ import getVortexPath from "../../util/getVortexPath";
 import { log } from "../../util/log";
 import { activeGameId } from "../../util/selectors";
 import { rescanOverwrites } from "../../util/vfsFsView";
+import {
+  isWindowsCommandInterpreter,
+  mergeLaunchEnvironment,
+  windowsVerbatimArguments,
+} from "../../util/windowsCommandLine";
 import { getGame } from "../gamemode_management/util/getGame";
 import { getCurrentActivator } from "../mod_management/util/deploymentMethods";
 import { loadAether, type IAetherFile, type IAetherRoot, type IAetherSession } from "./aether";
@@ -148,6 +153,60 @@ export function launchesDirectly(api: IExtensionApi, gameId: string): boolean {
   return executable !== undefined && vfsGameForLaunch(api, executable, gameId) !== undefined;
 }
 
+/** Resolve bare interpreter names using the launch directory and environment, not Vortex's cwd. */
+function windowsExecutable(
+  executable: string,
+  cwd: string,
+  env: Record<string, string>,
+  shell: boolean,
+): string {
+  const resolved = path.resolve(cwd, executable);
+  const environmentValue = (values: NodeJS.ProcessEnv, name: string) =>
+    Object.entries(values).find(([key]) => key.toLowerCase() === name)?.[1];
+  const extensions = shell
+    ? (
+        environmentValue(env, "pathext") ??
+        environmentValue(process.env, "pathext") ??
+        ".COM;.EXE;.BAT;.CMD"
+      )
+        .split(";")
+        .filter(Boolean)
+    : [".exe", ".com"];
+  const names =
+    path.extname(executable) === ""
+      ? extensions.map((extension) => `${executable}${extension}`)
+      : [executable];
+  if (/[\\/:]/.test(executable)) {
+    for (const name of names) {
+      const candidate = path.resolve(cwd, name);
+      try {
+        if (fs.statSync(candidate).isFile()) return candidate;
+      } catch {
+        // Explicit paths never fall back to another program on PATH.
+      }
+    }
+    return resolved;
+  }
+  const searchPath = environmentValue(env, "path") ?? environmentValue(process.env, "path") ?? "";
+  for (const directory of [cwd, ...searchPath.split(";")]) {
+    const unquoted = directory.replace(/^"(.*)"$/, "$1");
+    for (const name of names) {
+      const candidate = path.resolve(cwd, unquoted, name);
+      try {
+        // The fs view also finds programs provided only by the virtual deployment.
+        if (fs.statSync(candidate).isFile()) {
+          return candidate;
+        }
+      } catch {
+        // An absent or inaccessible PATH entry does not prevent trying the next one.
+      }
+    }
+  }
+  // A shell may still find a script through PATHEXT. Keep a bare command bare,
+  // rather than restricting that final lookup to the game's working directory.
+  return executable;
+}
+
 /**
  * Starts every Windows program of a game deployed through the virtual file system inside a
  * session composed from the game's current deployment, so it sees the game folder with the
@@ -159,15 +218,29 @@ export function makeLaunchRunner(api: IExtensionApi): LaunchRunner {
     if (process.platform !== "win32") {
       return undefined;
     }
-    const executable = path.resolve(call.cwd, call.executable);
-    if (!WINDOWS_PROGRAM.test(executable)) {
+    const env = mergeLaunchEnvironment(call.options.env ?? {});
+    const executable = windowsExecutable(
+      call.executable,
+      call.cwd,
+      env,
+      call.options.shell === true,
+    );
+    if (!WINDOWS_PROGRAM.test(executable) && call.options.shell !== true) {
       return undefined;
     }
     const gameId = vfsGameForLaunch(api, executable, call.options.vfsGameId ?? call.options.gameId);
     if (gameId === undefined) {
       return undefined;
     }
-    return startInSession(api, gameId, executable, call.args, call.options.env ?? {});
+    return startInSession(
+      api,
+      gameId,
+      executable,
+      call.args,
+      call.cwd,
+      env,
+      call.options.shell === true,
+    );
   };
 }
 
@@ -212,7 +285,9 @@ async function startInSession(
   gameId: string,
   executable: string,
   args: string[],
+  cwd: string,
   env: Record<string, string>,
+  shell: boolean,
 ) {
   const aether = loadAether();
   if (aether === undefined) {
@@ -250,10 +325,21 @@ async function startInSession(
       !fs.existsSync(executable) && gameExe !== undefined && gameExe !== executable
         ? [gameExe]
         : [];
+    const verbatim = windowsVerbatimArguments(executable, shell);
+    const useShell = shell && !isWindowsCommandInterpreter(executable);
     const launch = await session.launch({
-      image: executable,
-      // As for a spawned process without a shell: literal arguments.
-      args: args.map((arg) => arg.replace(/"/g, "")),
+      image: useShell
+        ? (process.env.comspec ??
+          path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe"))
+        : executable,
+      cwd,
+      // Match Node's Windows shell launch: cmd receives its command line verbatim.
+      args: useShell
+        ? ["/d", "/s", "/c", `"${[`"${executable}"`, ...args].join(" ")}"`]
+        : verbatim
+          ? args
+          : args.map((arg) => arg.replace(/"/g, "")),
+      windowsVerbatimArguments: verbatim,
       env: { ...env, ...steam },
       stageAlso,
     });

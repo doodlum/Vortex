@@ -69,6 +69,14 @@ hook is `scripts/linux-after-remove.sh`; electron-builder's default removed the
 command alternative by its link path, which failed RPM uninstallation, and also
 ran during upgrades.
 
+The VFS build declares `fuse3` for DEB, RPM and Arch so the package manager installs
+`fusermount3` with Vortex. AppImage, tar.gz, Snap and Flatpak users must install the
+host's `fuse3` package themselves. Before using virtual deployment, check that
+`command -v fusermount3` succeeds and `/dev/fuse` exists, then restart Vortex after
+installing the prerequisite. Package dependencies do not enable a disabled kernel
+FUSE device or grant access to restricted game paths; see the
+[VFS mounting requirements](../aether-vfs-deployment.md#4-linux-a-fuse-mount).
+
 Allow disk space for a common snapshot and temporary package copies. The driver
 places TMPDIR below its unique output run, avoiding per-user tmpfs quotas on /tmp.
 The input and output/tool-cache trees must be separate. A first run may download

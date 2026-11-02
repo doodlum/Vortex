@@ -13,6 +13,7 @@ import hardlinkInit from "../../hardlink_activator";
 import moveInit from "../../move_activator";
 import { fallbackPurge, filesStillDeployed } from "./activationStore";
 import { registerDeploymentMethod } from "./deploymentMethods";
+import { registerDeploymentPreparation } from "./deploymentPreparation";
 
 const MOVE_METHOD = "move_activator";
 const HARDLINK_METHOD = "hardlink_activator";
@@ -32,6 +33,22 @@ test("the fallback purge restores a damaged manifest from its staging backup", a
   await fallbackPurge(game.api, game.gameId);
 
   expect(game.isDeployed(file)).toBe(false);
+});
+
+test("fallback cannot bypass a failed deployment prerequisite", async () => {
+  const game = await makeDeployedGame();
+  const file = await game.deployFile("plugin.esp");
+  await game.saveManifest([file], HARDLINK_METHOD);
+  const unregister = registerDeploymentPreparation(async () => {
+    throw new Error("still mounted");
+  });
+  try {
+    await expect(fallbackPurge(game.api, game.gameId)).rejects.toThrow("still mounted");
+    expect(game.isDeployed(file)).toBe(true);
+    expect(await game.recordedFiles()).toEqual(["plugin.esp"]);
+  } finally {
+    unregister();
+  }
 });
 
 test("declining the staging backup reports the damaged manifest and how to recover", async () => {

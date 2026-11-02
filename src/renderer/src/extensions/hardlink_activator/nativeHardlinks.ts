@@ -31,11 +31,18 @@ async function linkedFileIdentity(file: string): Promise<string | undefined> {
 async function visitFiles(root: string, visit: (file: string) => Promise<void>): Promise<void> {
   const pending: string[] = [];
   const settle = async () => {
-    const results = await Promise.allSettled(pending.splice(0).map(visit));
     const errors: unknown[] = [];
-    for (const result of results) {
-      if (result.status === "rejected") errors.push(result.reason);
-    }
+    // turbowalk replaces global Promise with Bluebird, whose allSettled has a different
+    // result shape. Normalize failures ourselves and drain every pending operation.
+    await Promise.all(
+      pending.splice(0).map(async (file) => {
+        try {
+          await visit(file);
+        } catch (err) {
+          errors.push(err);
+        }
+      }),
+    );
     if (errors.length > 0)
       throw new AggregateError(errors, "Failed to inspect or purge hardlinked files");
   };

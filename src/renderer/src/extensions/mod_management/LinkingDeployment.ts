@@ -1014,18 +1014,11 @@ abstract class LinkingActivator implements IDeploymentMethod {
           if (files.length > 0) {
             empty = false;
             if (restoreBackups) {
-              try {
-                await Promise.all(
-                  files
-                    .filter((entry) => path.extname(entry.filePath) === BACKUP_TAG)
-                    .map((entry) => this.restoreBackup(entry.filePath)),
-                );
-              } catch (err) {
-                if (err instanceof UserCanceled) {
-                  return undefined;
-                }
-                throw err;
-              }
+              await Promise.all(
+                files
+                  .filter((entry) => path.extname(entry.filePath) === BACKUP_TAG)
+                  .map((entry) => this.restoreBackup(entry.filePath)),
+              );
             }
           }
         });

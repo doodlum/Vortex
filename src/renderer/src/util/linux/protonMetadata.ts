@@ -17,6 +17,7 @@ export interface IDependencyTarget {
   protonPath: string;
   compatDataPath: string;
   protonName: string;
+  customToolRoots: string[];
   readOnlyRoots: string[];
   runtimePath?: string;
   runtimeWritePaths: string[];
@@ -27,8 +28,14 @@ export interface ICustomProtonName {
   path: string;
 }
 
+export interface ISteamToolMetadata extends ICustomProtonName {
+  appId: string;
+}
+
 interface IRuntimeMetadata extends ICustomProtonName {
   appId?: string;
+  manifestPath?: string;
+  lastUpdated?: bigint;
   compatDataPath?: string;
   commonPath?: string;
 }
@@ -156,33 +163,67 @@ async function helperLibraries(steamPath: string): Promise<string[]> {
   return [...roots].sort();
 }
 
-async function officialMetadata(library: string): Promise<IRuntimeMetadata[]> {
+async function officialMetadata(
+  library: string,
+  bestEffort = false,
+): Promise<Array<IRuntimeMetadata & ISteamToolMetadata>> {
   const apps = await steamApps(library);
-  const result: IRuntimeMetadata[] = [];
+  const result: Array<IRuntimeMetadata & ISteamToolMetadata> = [];
   for (const name of (await fs.readdir(apps)).sort()) {
     if (!/^appmanifest_\d+\.acf$/.test(name)) continue;
-    const data = await document(path.join(apps, name), "AppState");
-    const appId = required(data, "appid");
-    if (!/^[1-9][0-9]*$/.test(appId)) fail(`Invalid AppID in ${name}.`);
-    const stateFlags = leaf(data, "stateflags");
-    if (stateFlags !== undefined && (Number(stateFlags) & 1) !== 0) continue;
-    const installDir = required(data, "installdir");
-    // Refuse traversal instead of allowing a manifest to expand the eventual filesystem grant.
-    if (installDir === "." || installDir === ".." || /[\\/]/.test(installDir)) {
-      fail(`Unsupported install directory in ${name}. Repair its Steam app manifest.`);
+    try {
+      const data = await document(path.join(apps, name), "AppState");
+      const appId = required(data, "appid");
+      if (!/^[1-9][0-9]*$/.test(appId)) fail(`Invalid AppID in ${name}.`);
+      const stateFlags = leaf(data, "stateflags");
+      if (stateFlags !== undefined && (Number(stateFlags) & 1) !== 0) continue;
+      const installDir = required(data, "installdir");
+      // Refuse traversal instead of allowing a manifest to expand the eventual filesystem grant.
+      if (installDir === "." || installDir === ".." || /[\\/]/.test(installDir)) {
+        fail(`Unsupported install directory in ${name}. Repair its Steam app manifest.`);
+      }
+      result.push({
+        appId,
+        lastUpdated: BigInt(leaf(data, "lastupdated") ?? "0"),
+        commonPath: await existingOrResolved(path.join(apps, "common")),
+        compatDataPath: await existingOrResolved(path.join(apps, "compatdata", appId)),
+        name: required(data, "name"),
+        path: await existingOrResolved(path.join(apps, "common", installDir)),
+      });
+    } catch (error) {
+      if (!bestEffort) throw error;
     }
-    result.push({
-      appId,
-      commonPath: await existingOrResolved(path.join(apps, "common")),
-      compatDataPath: await existingOrResolved(path.join(apps, "compatdata", appId)),
-      name: required(data, "name"),
-      path: await existingOrResolved(path.join(apps, "common", installDir)),
-    });
   }
   return result;
 }
 
-async function customManifest(file: string, root: string): Promise<ICustomProtonName | undefined> {
+/** Discovery uses installed app identities; a directory name cannot register an official tool. */
+export async function readSteamToolMetadata(libraries: string[]): Promise<ISteamToolMetadata[]> {
+  const records = (
+    await Promise.all(libraries.map((library) => officialMetadata(library, true).catch(() => [])))
+  ).flat();
+  return newestOfficialMetadata(records).map(({ appId, name, path }) => ({ appId, name, path }));
+}
+
+/** Protontricks discards older official AppID records before choosing PROTON_VERSION. */
+function newestOfficialMetadata<T extends IRuntimeMetadata>(records: T[]): T[] {
+  const newest = new Map<string, bigint>();
+  for (const entry of records) {
+    if (entry.appId === undefined) continue;
+    const updated = entry.lastUpdated ?? 0n;
+    if (!newest.has(entry.appId) || updated > newest.get(entry.appId))
+      newest.set(entry.appId, updated);
+  }
+  // Keep ties: the helper's library order is unspecified, so different paths remain ambiguous.
+  return records.filter(
+    (entry) => entry.appId === undefined || entry.lastUpdated === newest.get(entry.appId),
+  );
+}
+
+export async function readCustomProtonManifest(
+  file: string,
+  root: string,
+): Promise<ICustomProtonName | undefined> {
   const data = await document(file, "compatibilitytools");
   const tools = block(data, "compat_tools");
   // Protontricks takes only the first internal key, preserving its case.
@@ -206,7 +247,7 @@ async function customManifest(file: string, root: string): Promise<ICustomProton
 /** Use this metadata name for custom compatibility config keys; never guess from the folder. */
 export async function readCustomProtonName(root: string): Promise<ICustomProtonName> {
   const canonical = await directory(root, "Custom Proton installation");
-  const result = await customManifest(
+  const result = await readCustomProtonManifest(
     path.join(canonical, "compatibilitytool.vdf"),
     path.dirname(canonical),
   );
@@ -221,20 +262,35 @@ async function customMetadata(root: string): Promise<IRuntimeMetadata[]> {
   for (const entry of (await fs.readdir(canonical, { withFileTypes: true })).sort((a, b) =>
     a.name.localeCompare(b.name),
   )) {
-    if (entry.name.endsWith(".vdf") && entry.isFile()) {
-      const item = await customManifest(path.join(canonical, entry.name), canonical);
-      if (item !== undefined) result.push(item);
-    } else if (entry.isDirectory() || entry.isSymbolicLink()) {
-      const file = path.join(canonical, entry.name, "compatibilitytool.vdf");
-      try {
-        const item = await customManifest(file, canonical);
-        if (item !== undefined) result.push(item);
-      } catch (error) {
-        if (!missing(error)) throw error;
-      }
+    const file =
+      entry.name.endsWith(".vdf") && (entry.isFile() || entry.isSymbolicLink())
+        ? path.join(canonical, entry.name)
+        : entry.isDirectory() || entry.isSymbolicLink()
+          ? path.join(canonical, entry.name, "compatibilitytool.vdf")
+          : undefined;
+    if (file === undefined) continue;
+    try {
+      const item = await readCustomProtonManifest(file, canonical);
+      if (item !== undefined) result.push({ ...item, manifestPath: await fs.realpath(file) });
+    } catch (error) {
+      if (!missing(error)) throw error;
     }
   }
   return result;
+}
+
+/** Keep discovery and the dependency helper's custom-tool search roots identical. */
+export function customProtonRoots(
+  steamPath: string,
+  options: IDependencyMetadataOptions = {},
+): string[] {
+  const extra = options.customToolRoots ?? [
+    ...(process.platform === "linux"
+      ? ["/usr/share/steam/compatibilitytools.d", "/usr/local/share/steam/compatibilitytools.d"]
+      : []),
+    ...(process.env.STEAM_EXTRA_COMPAT_TOOLS_PATHS?.split(path.delimiter).filter(Boolean) ?? []),
+  ];
+  return [...new Set([...extra, path.join(steamPath, "compatibilitytools.d")])];
 }
 
 async function metadata(
@@ -242,19 +298,9 @@ async function metadata(
   libraries: string[],
   options: IDependencyMetadataOptions,
 ) {
-  const extra = options.customToolRoots ?? [
-    ...(process.platform === "linux"
-      ? ["/usr/share/steam/compatibilitytools.d", "/usr/local/share/steam/compatibilitytools.d"]
-      : []),
-    ...(process.env.STEAM_EXTRA_COMPAT_TOOLS_PATHS?.split(path.delimiter).filter(Boolean) ?? []),
-  ];
   return [
-    ...(await Promise.all(libraries.map(officialMetadata))).flat(),
-    ...(
-      await Promise.all(
-        [...new Set([...extra, path.join(steamPath, "compatibilitytools.d")])].map(customMetadata),
-      )
-    ).flat(),
+    ...(await Promise.all(libraries.map((library) => officialMetadata(library)))).flat(),
+    ...(await Promise.all(customProtonRoots(steamPath, options).map(customMetadata))).flat(),
   ];
 }
 
@@ -267,7 +313,9 @@ export async function resolveExactRuntimeName(
   const steam = await directory(steamPath, "Steam client");
   const selected = await directory(protonPath, "Selected Proton");
   await requireFile(path.join(selected, "proton"), "Selected Proton launcher");
-  const records = await metadata(steam, await helperLibraries(steam), options);
+  const records = newestOfficialMetadata(
+    await metadata(steam, await helperLibraries(steam), options),
+  );
   const matching = records.filter((entry) => entry.path === selected);
   const names = [...new Set(matching.map((entry) => entry.name))];
   if (names.length !== 1)
@@ -314,11 +362,20 @@ async function runtimeAccess(protonPath: string, libraries: string[], protectedP
   const appId = leaf(manifest, "require_tool_appid");
   if (appId === undefined) return { runtimeWritePaths: [] as string[] };
   if (!/^[1-9][0-9]*$/.test(appId)) fail("Selected Proton has an invalid Steam Runtime AppID.");
-  const matches = (await Promise.all(libraries.map(officialMetadata)))
+  const matches = (await Promise.all(libraries.map((library) => officialMetadata(library))))
     .flat()
     .filter((entry) => entry.appId === appId);
   const paths = [...new Set(matches.map((entry) => entry.path))];
-  if (paths.length !== 1) fail("Selected Proton needs one initialized Steam Runtime installation.");
+  if (paths.length === 0) {
+    fail(
+      `Selected Proton requires Steam Runtime AppID ${appId}, but it is missing from Steam's library manifests. Launch the game once from Steam to install its runtime.`,
+    );
+  }
+  if (paths.length !== 1) {
+    fail(
+      `Selected Proton needs one initialized Steam Runtime installation for AppID ${appId}. Conflicting installations: ${paths.join(", ")}. Repair the runtime's library entries in Steam.`,
+    );
+  }
   const runtimePath = await directory(paths[0], "Required Steam Runtime");
   if (
     matches.some(
@@ -353,6 +410,24 @@ async function runtimeAccess(protonPath: string, libraries: string[], protectedP
   return { runtimePath, runtimeWritePaths: [...new Set(runtimeWritePaths)].sort() };
 }
 
+/** Resolve the container required by Proton even when no mod dependencies are needed. */
+export async function resolveProtonRuntime(
+  steamPath: string,
+  protonPath: string,
+  protectedPaths: string[],
+): Promise<string | undefined> {
+  const steam = await directory(steamPath, "Steam client");
+  const proton = await directory(protonPath, "Selected Proton");
+  const protectedRoots = await Promise.all(protectedPaths.map(existingOrResolved));
+  const { runtimePath } = await runtimeAccess(proton, await helperLibraries(steam), [
+    proton,
+    ...protectedRoots,
+  ]);
+  if (runtimePath !== undefined)
+    await requireFile(path.join(runtimePath, "_v2-entry-point"), "Steam Runtime entry point");
+  return runtimePath;
+}
+
 export async function resolveDependencyTarget(
   input: IDependencyTargetInput,
   options: IDependencyMetadataOptions = {},
@@ -368,7 +443,7 @@ export async function resolveDependencyTarget(
     fail("The game prefix is redirected by a symlink. Select an unambiguous initialized prefix.");
   await requireFile(path.join(compatDataPath, "pfx.lock"), "Initialized game prefix lock");
   const libraries = await helperLibraries(steamPath);
-  const games = (await Promise.all(libraries.map(officialMetadata)))
+  const games = (await Promise.all(libraries.map((library) => officialMetadata(library))))
     .flat()
     .filter((entry) => entry.appId === input.appId);
   if (
@@ -379,7 +454,23 @@ export async function resolveDependencyTarget(
       "The game AppID does not identify exactly the selected installation in the helper's libraries.",
     );
   }
-  const readOnlyRoots = [...new Set([steamPath, ...libraries, protonPath])].sort();
+  const customToolRoots = [
+    ...new Set(
+      (await Promise.all(customProtonRoots(steamPath, options).map(optionalDirectory))).filter(
+        (root): root is string => root !== undefined,
+      ),
+    ),
+  ].sort();
+  const directories = [...new Set([steamPath, ...libraries, protonPath, ...customToolRoots])];
+  const customManifests = (await Promise.all(customToolRoots.map(customMetadata)))
+    .flat()
+    .flatMap((tool) => (tool.manifestPath === undefined ? [] : [tool.manifestPath]));
+  const readOnlyRoots = [
+    ...new Set([
+      ...directories,
+      ...customManifests.filter((file) => !directories.some((root) => contains(root, file))),
+    ]),
+  ].sort();
   if ([gamePath, ...readOnlyRoots].some((root) => contains(compatDataPath, root))) {
     fail(
       "The requested writable prefix overlaps a Steam/game/runtime root. Correct the prefix path before retrying.",
@@ -391,6 +482,7 @@ export async function resolveDependencyTarget(
     protonPath,
     compatDataPath,
     protonName: await resolveExactRuntimeName(steamPath, protonPath, options),
+    customToolRoots,
     readOnlyRoots,
     ...(await runtimeAccess(protonPath, libraries, [gamePath, compatDataPath, protonPath])),
   };
