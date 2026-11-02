@@ -68,8 +68,9 @@ pnpm exec vitest run src/cli.test.ts src/main.startup.test.ts
 ```
 
 The fixtures in `src/main/src/__fixtures__/protocolArguments.json` derive from
-actual cold and `second-instance` events in the pinned Electron44.2.0 on both
-hosts, for packaged and development runtimes. Paths are normalized and an inert
+actual cold and `second-instance` events recorded with Electron44.2.0 on both
+hosts, for packaged and development runtimes. Repeat these runtime observations
+after Electron upgrades. Paths are normalized and an inert
 probe marker is removed. Tests exercise the real Vortex parser without launching
 Vortex, making a download, reading an account or running a mod script. They cover
 raw/short/long URL forms, install requests, boolean and value options, repeated
