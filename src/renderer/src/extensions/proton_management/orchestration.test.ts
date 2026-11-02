@@ -106,6 +106,7 @@ function fixture(initial = target()) {
       protonName: "Proton 11.0",
       readOnlyRoots: ["/steam"],
       runtimeWritePaths: [],
+      customToolRoots: [],
     })),
     getLaunchOptions: vi.fn(async () => "%command%"),
     configureCache: vi.fn(async () => undefined),
@@ -317,6 +318,36 @@ describe("Proton orchestration consumer contracts", () => {
     expect(f.ports.install).not.toHaveBeenCalled();
     expect(f.ports.write).not.toHaveBeenCalled();
   });
+
+  it.each([true, false])(
+    "refuses tied official AppID before launch with automatic setup %s and no recipes",
+    async (automatic) => {
+      const f = fixture(target("10", { automatic }));
+      f.ports.configured.mockResolvedValue("proton_11");
+      const paths = [path.resolve("/steam/first"), path.resolve("/steam/second")];
+      f.ports.tools.mockResolvedValue([
+        {
+          id: paths[0],
+          path: paths[0],
+          name: "Proton 10.0",
+          source: "steam",
+          appId: "1493710",
+          conflictingAppPaths: paths,
+        },
+        {
+          id: paths[1],
+          path: paths[1],
+          name: "Proton 11.0",
+          source: "steam",
+          appId: "1493710",
+          conflictingAppPaths: paths,
+        },
+      ]);
+      await expect(f.prepare()).rejects.toThrow(/AppID 1493710.*multiple installations/);
+      expect(f.ports.resolveDependency).not.toHaveBeenCalled();
+      expect(f.ports.install).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not treat Wine runtime file indicators as a verified recipe installation", async () => {
     const f = fixture();

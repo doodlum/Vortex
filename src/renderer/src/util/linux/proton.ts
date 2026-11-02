@@ -6,7 +6,11 @@ import { parse, type KVBlock } from "@nexusmods/steam-kv-parser";
 
 import * as fs from "../fs";
 import { log } from "../log";
-import { readCustomProtonName } from "./protonMetadata";
+import {
+  customProtonRoots,
+  readCustomProtonManifest,
+  readSteamToolMetadata,
+} from "./protonMetadata";
 
 export interface IProtonInfo {
   usesProton: boolean;
@@ -30,6 +34,10 @@ export interface IInstalledProton {
   path: string;
   source: "steam" | "custom";
   compatibilityName?: string;
+  /** Registered Steam identity, retained independently of the tool's display/config name. */
+  appId?: string;
+  /** Newest tied records, including records with an unrecognized Proton name. */
+  conflictingAppPaths?: string[];
 }
 
 /** Convert an installed Proton folder to the compatibility-tool key Steam stores for a game. */
@@ -162,41 +170,80 @@ export async function listInstalledProton(
   steamPath: string,
   libraryPaths?: string[],
 ): Promise<IInstalledProton[]> {
-  const roots: Array<{ path: string; source: IInstalledProton["source"] }> = [
-    ...(libraryPaths ?? (await getSteamLibraryPaths(steamPath))).map((library) => ({
-      path: path.join(library, "steamapps", "common"),
-      source: "steam" as const,
-    })),
-    { path: path.join(steamPath, "compatibilitytools.d"), source: "custom" },
-  ];
+  const libraries = libraryPaths ?? (await getSteamLibraryPaths(steamPath));
   const result: IInstalledProton[] = [];
   const seen = new Set<string>();
 
-  for (const root of roots) {
+  const official = await readSteamToolMetadata(libraries);
+  const installations = new Map<string, Set<string>>();
+  for (const entry of official) {
+    const paths = installations.get(entry.appId) ?? new Set<string>();
+    paths.add(entry.path);
+    installations.set(entry.appId, paths);
+  }
+  for (const entry of official) {
     try {
-      const entries = await fs.readdirAsync(root.path);
-      for (const name of entries) {
-        const installPath = path.join(root.path, name);
-        if ((await pathExists(path.join(installPath, "proton"))) === false) {
-          continue;
-        }
-        const resolved = await fsPromises.realpath(installPath);
-        if (seen.has(resolved)) continue;
-        seen.add(resolved);
-        const custom =
-          root.source === "custom"
-            ? await readCustomProtonName(installPath).catch(() => undefined)
+      const resolved = await fsPromises.realpath(entry.path);
+      const registeredPaths = [...(installations.get(entry.appId) ?? [])].sort();
+      const tool: IInstalledProton = {
+        id: resolved,
+        name: entry.name,
+        path: resolved,
+        source: "steam",
+        appId: entry.appId,
+        conflictingAppPaths: registeredPaths.length > 1 ? registeredPaths : undefined,
+      };
+      if (
+        protonConfigName(tool) === undefined ||
+        !(await fsPromises.stat(path.join(resolved, "proton"))).isFile() ||
+        seen.has(resolved)
+      )
+        continue;
+      seen.add(resolved);
+      result.push(tool);
+    } catch {
+      // A registered tool can be removed or unavailable while Steam's manifests are read.
+    }
+  }
+
+  for (const requestedRoot of customProtonRoots(steamPath)) {
+    let root: string;
+    let entries: Dirent[];
+    try {
+      root = await fsPromises.realpath(requestedRoot);
+      entries = await fsPromises.readdir(root, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const manifest =
+        (entry.isFile() || entry.isSymbolicLink()) && entry.name.endsWith(".vdf")
+          ? path.join(root, entry.name)
+          : entry.isDirectory() || entry.isSymbolicLink()
+            ? path.join(root, entry.name, "compatibilitytool.vdf")
             : undefined;
+      if (manifest === undefined) continue;
+      try {
+        const custom = await readCustomProtonManifest(manifest, root);
+        if (
+          custom === undefined ||
+          !(await fsPromises.stat(path.join(custom.path, "proton"))).isFile()
+        )
+          continue;
+        const resolved = await fsPromises.realpath(custom.path);
+        const identity = `custom:${resolved}:${custom.name}`;
+        if (seen.has(identity)) continue;
+        seen.add(identity);
         result.push({
           id: resolved,
-          name,
-          path: installPath,
-          source: root.source,
-          compatibilityName: custom?.path === resolved ? custom.name : undefined,
+          name: path.basename(custom.path),
+          path: resolved,
+          source: "custom",
+          compatibilityName: custom.name,
         });
+      } catch {
+        // Discovery is best-effort per manifest; dependency setup still validates strictly.
       }
-    } catch {
-      // An absent custom-tools directory is normal.
     }
   }
 
@@ -266,7 +313,44 @@ export interface ISteamProtonReaders {
 }
 
 function findProtonTool(tools: IInstalledProton[], name: string): IInstalledProton | undefined {
-  return tools.find((tool) => protonConfigName(tool) === name || tool.name === name);
+  const keyed = tools.filter((tool) => protonConfigName(tool) === name);
+  const matches =
+    keyed.length > 0
+      ? keyed
+      : tools.filter((tool) => tool.source === "steam" && tool.name === name);
+  if (new Set(matches.map((tool) => tool.id)).size > 1) {
+    throw new Error(
+      `Steam compatibility-tool name ${name} identifies multiple installations. Repair the duplicate Steam or custom tool entries before retrying.`,
+    );
+  }
+  for (const match of matches) {
+    if (match.source !== "steam" || match.appId === undefined) continue;
+    const paths = new Set([
+      match.id,
+      ...(match.conflictingAppPaths ?? []),
+      ...tools
+        .filter((tool) => tool.source === "steam" && tool.appId === match.appId)
+        .map((tool) => tool.id),
+    ]);
+    if (paths.size > 1) {
+      throw new Error(
+        `Steam Proton AppID ${match.appId} identifies multiple installations: ${[...paths].join(", ")}. Repair its duplicate library entries before retrying.`,
+      );
+    }
+  }
+  return matches[0];
+}
+
+function latestOfficialProton(
+  tools: IInstalledProton[],
+  stableOnly = false,
+): IInstalledProton | undefined {
+  const official = tools.filter((tool) => tool.source === "steam");
+  const newest =
+    (!stableOnly && official.find((tool) => protonConfigName(tool) === "proton_experimental")) ||
+    official.filter((tool) => /^Proton \d+(?:\.\d+)?$/i.test(tool.name)).at(-1);
+  const name = newest === undefined ? undefined : protonConfigName(newest);
+  return name === undefined ? undefined : findProtonTool(tools, name);
 }
 
 /**
@@ -281,12 +365,23 @@ async function prefixProtonTool(
   read: ISteamProtonReaders["read"],
 ): Promise<IInstalledProton | undefined> {
   const lines = (await read(path.join(compatDataPath, "config_info")).catch(() => "")).split("\n");
-  for (const line of lines) {
-    const exact = tools.find((tool) => line.startsWith(tool.path + "/"));
+  const withinTool = (tool: IInstalledProton, file: string) => {
+    const relative = path.relative(tool.path, file);
+    return !path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`);
+  };
+  for (const raw of lines) {
+    const line = raw.replace(/\r$/, "");
+    const exact = path.isAbsolute(line) ? tools.find((tool) => withinTool(tool, line)) : undefined;
     if (exact !== undefined) return exact;
+    if (path.isAbsolute(line)) {
+      const physical = await fsPromises.realpath(line).catch(() => undefined);
+      const canonical =
+        physical === undefined ? undefined : tools.find((tool) => withinTool(tool, physical));
+      if (canonical !== undefined) return canonical;
+    }
     const folder = /\/(?:steamapps\/common|compatibilitytools\.d)\/([^/]+)\//.exec(line)?.[1];
-    const named = tools.find((tool) => path.basename(tool.path) === folder);
-    if (named !== undefined) return named;
+    const named = tools.filter((tool) => path.basename(tool.path) === folder);
+    if (new Set(named.map((tool) => tool.id)).size === 1) return named[0];
   }
   return undefined;
 }
@@ -316,10 +411,7 @@ export async function resolveSteamProton(
   const steamDefault = await readers.configured(steamPath, "0");
   if (steamDefault)
     return { name: steamDefault, tool: findProtonTool(tools, steamDefault), source: "default" };
-  const official = tools.filter((tool) => tool.source === "steam");
-  const newest =
-    official.find((tool) => protonConfigName(tool) === "proton_experimental") ??
-    official.filter((tool) => /^Proton \d+(?:\.\d+)?$/i.test(tool.name)).at(-1);
+  const newest = latestOfficialProton(tools);
   return {
     name: newest === undefined ? undefined : protonConfigName(newest),
     tool: newest,
@@ -375,26 +467,17 @@ export async function resolveProtonPath(
 ): Promise<string | undefined> {
   if (!protonName) return undefined;
   const tools = await listInstalledProton(steamBasePath, steamLibraryPaths);
-  return tools.find((tool) => tool.name === protonName || protonConfigName(tool) === protonName)
-    ?.path;
+  return findProtonTool(tools, protonName)?.path;
 }
 
 export async function findLatestProton(steamLibraryPaths: string[]): Promise<string | undefined> {
   if (steamLibraryPaths.length === 0) return undefined;
-  const tools = (await listInstalledProton(steamLibraryPaths[0], steamLibraryPaths)).filter(
-    (tool) => tool.source === "steam" && protonConfigName(tool) !== undefined,
-  );
-  return (
-    tools.find((tool) => protonConfigName(tool) === "proton_experimental")?.path ??
-    tools.filter((tool) => /^Proton \d+(?:\.\d+)?$/i.test(tool.name)).at(-1)?.path
-  );
+  const tools = await listInstalledProton(steamLibraryPaths[0], steamLibraryPaths);
+  return latestOfficialProton(tools)?.path;
 }
 
 export async function findLatestStableProtonName(steamPath: string): Promise<string | undefined> {
-  const stable = (await listInstalledProton(steamPath)).filter(
-    (tool) => tool.source === "steam" && /^Proton \d+(?:\.\d+)?$/i.test(tool.name),
-  );
-  const latest = stable.at(-1);
+  const latest = latestOfficialProton(await listInstalledProton(steamPath), true);
   return latest === undefined ? undefined : protonConfigName(latest);
 }
 
@@ -408,19 +491,20 @@ export async function getProtonInfo(
   appId: string,
 ): Promise<IProtonInfo> {
   const confProtonName = await getConfiguredProtonName(steamBasePath, appId);
-  const configuredPath = await resolveProtonPath(steamBasePath, steamLibraryPaths, confProtonName);
+  if (!confProtonName && !(await detectProtonUsage(steamAppsPath, appId))) {
+    return { usesProton: false };
+  }
+  const tools = await listInstalledProton(steamBasePath, steamLibraryPaths);
+  const configuredPath =
+    confProtonName === undefined ? undefined : findProtonTool(tools, confProtonName)?.path;
   const configuredProton =
     configuredPath !== undefined || /^(?:proton_|GE-Proton)/i.test(confProtonName ?? "");
-  const usesProton = confProtonName
-    ? configuredProton
-    : await detectProtonUsage(steamAppsPath, appId);
-  if (!usesProton) {
+  if (confProtonName && !configuredProton) {
     return { usesProton: false };
   }
 
   const compatDataPath = getCompatDataPath(steamAppsPath, appId);
 
-  const tools = await listInstalledProton(steamBasePath, steamLibraryPaths);
   const protonPath = (await resolveSteamProton(steamBasePath, appId, compatDataPath, tools)).tool
     ?.path;
   return { usesProton: true, compatDataPath, protonPath };
@@ -563,7 +647,14 @@ export function buildProtonCommand(
   protonPath: string,
   exePath: string,
   args: string[],
+  runtimePath?: string,
 ): { executable: string; args: string[] } {
+  if (runtimePath !== undefined) {
+    return {
+      executable: path.join(runtimePath, "_v2-entry-point"),
+      args: ["--verb=run", "--", path.join(protonPath, "proton"), "run", exePath, ...args],
+    };
+  }
   return {
     executable: path.join(protonPath, "proton"),
     args: ["run", exePath, ...args],

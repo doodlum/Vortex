@@ -37,6 +37,30 @@ Don't hand-fix them; let the formatter win.
 
 ## Committing
 
+Custom Proton discovery and dependency setup share manifest parsing and root selection.
+Run proton/protonMetadata plus proton_management tests when changing those boundaries.
+Cover standalone manifests, extra roots, canonical registry/tool aliases, recorded prefix
+aliases, file-manifest aliases, duplicate-name refusal, native-name collisions and literal
+helper root forwarding with canonical manifest-file grants. Official identities must come
+from registered Steam manifests; cover custom targets inside steamapps/common and renamed
+official installations. Keep discovery best-effort
+per manifest while dependency setup validates every library strictly, independent of its
+position. Configured and newest choices refuse tied AppIDs even when their names differ;
+preserve an unambiguous physical prefix choice. Real Flatpak metadata visibility and
+packaged launches remain separate from unit results; keep system-path limits explicit.
+
+For official Proton metadata, preserve Protontricks' newest `LastUpdated` selection per
+AppID while refusing tied records at different paths. Runtime duplicates remain refused:
+Protontricks links required runtimes before deduplicating apps. Keep missing-runtime AppID
+and conflicting-path diagnostics covered by `protonMetadata.test.ts` on both hosts.
+
+Direct Proton launches must use the container declared by `require_tool_appid`, preserving
+the user's wrapper, shader isolation, selected prefix, cwd and literal arguments. Run
+Steam, linux/proton and linux/protonMetadata tests on both hosts. Verify an actual packaged
+32-bit game separately; a host with no 32-bit loader must not fall back to bare Proton.
+Also run linux/steamRuntimeLaunch tests; preserve selected tool/library and narrow external
+tool/cwd mounts, symlink targets, prior default cwd and explicit unsupported-path guidance.
+
 Don't commit, push, or open a PR unless asked. Leave changes in the working tree
 for review. If you're on `master`, branch first.
 

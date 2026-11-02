@@ -9,6 +9,7 @@ import {
   readCustomProtonName,
   resolveDependencyTarget,
   resolveExactRuntimeName,
+  resolveProtonRuntime,
 } from "./protonMetadata";
 
 // Every test builds and resolves a real Steam tree in a temporary directory. Each takes well
@@ -53,7 +54,13 @@ function object(key: string, values: Record<string, string>): KVBlock {
   };
 }
 
-async function app(library: string, appId: string, installDir: string, name: string) {
+async function app(
+  library: string,
+  appId: string,
+  installDir: string,
+  name: string,
+  lastUpdated = "10",
+) {
   const install = path.join(library, "steamapps", "common", installDir);
   await fs.mkdir(install, { recursive: true });
   await write(
@@ -64,7 +71,7 @@ async function app(library: string, appId: string, installDir: string, name: str
         name,
         installdir: installDir,
         StateFlags: "4",
-        LastUpdated: "10",
+        LastUpdated: lastUpdated,
       }),
     ),
   );
@@ -157,13 +164,59 @@ async function runtimeFixture() {
   return { ...f, runtime, variable, lock };
 }
 
+it("resolves the selected Proton container without dependency-helper bridge or prefix requirements", async () => {
+  const f = await runtimeFixture();
+  await write(path.join(f.runtime, "_v2-entry-point"), "inert runtime entry point");
+  await removeFixtureTree(f.root, path.join(f.steam, "ubuntu12_32"));
+  await removeFixtureTree(f.root, f.compat);
+  await expect(resolveProtonRuntime(f.steam, f.proton, [f.game, f.compat])).resolves.toBe(
+    await fs.realpath(f.runtime),
+  );
+});
+
+it("requires the selected container entry point and rejects an overlapping game root", async () => {
+  const f = await runtimeFixture();
+  await expect(resolveProtonRuntime(f.steam, f.proton, [f.game])).rejects.toThrow(
+    "Steam Runtime entry point",
+  );
+  await write(path.join(f.runtime, "_v2-entry-point"), "inert runtime entry point");
+  await expect(resolveProtonRuntime(f.steam, f.proton, [f.runtime])).rejects.toThrow(
+    "overlaps the game, prefix or Proton",
+  );
+});
+
+it("preserves direct execution for a legacy/custom Proton with no required container", async () => {
+  const f = await fixture();
+  await expect(
+    resolveProtonRuntime(f.steam, f.proton, [f.game, f.compat]),
+  ).resolves.toBeUndefined();
+});
+
 it("refuses duplicate installations of the exact required runtime AppID", async () => {
   const f = await runtimeFixture();
   const other = path.join(f.root, "other-library");
-  await app(other, "1628350", "Another runtime", "Steam Linux Runtime 3.0 (sniper)");
+  await app(other, "1628350", "Another runtime", "Steam Linux Runtime 3.0 (sniper)", "9");
   await libraries(f.steam, [f.steam, other]);
+  const operation = resolveDependencyTarget(f.input, { customToolRoots: [] });
+  await expect(operation).rejects.toThrow(
+    "one initialized Steam Runtime installation for AppID 1628350",
+  );
+  await expect(operation).rejects.toThrow(
+    await fs.realpath(path.join(other, "steamapps", "common", "Another runtime")),
+  );
+  await expect(resolveProtonRuntime(f.steam, f.proton, [f.game, f.compat])).rejects.toThrow(
+    "one initialized Steam Runtime installation for AppID 1628350",
+  );
+});
+
+it("identifies the missing required runtime AppID instead of suggesting a Proton reinstall", async () => {
+  const f = await fixture();
+  await write(
+    path.join(f.proton, "toolmanifest.vdf"),
+    stringify(object("manifest", { require_tool_appid: "4183110" })),
+  );
   await expect(resolveDependencyTarget(f.input, { customToolRoots: [] })).rejects.toThrow(
-    "one initialized Steam Runtime",
+    "Steam Runtime AppID 4183110, but it is missing from Steam's library manifests",
   );
 });
 
@@ -201,6 +254,7 @@ it("uses official appmanifest name instead of folder basename, and emits canonic
     protonPath: await fs.realpath(f.proton),
     compatDataPath: await fs.realpath(f.compat),
     protonName: "Proton 11.0",
+    customToolRoots: [],
     readOnlyRoots: [await fs.realpath(f.steam), await fs.realpath(f.proton)].sort(),
     runtimeWritePaths: [],
   });
@@ -279,6 +333,55 @@ it("reads first custom internal key with original case, even when folder/display
   );
 });
 
+it("exports external custom registry roots for the dependency helper's sandbox", async () => {
+  const f = await fixture();
+  const registry = path.join(f.root, "external tool registry");
+  const tool = path.join(registry, "Custom-Proton");
+  await custom(tool, "External-Custom-Key");
+  const target = await resolveDependencyTarget(
+    { ...f.input, protonPath: tool },
+    { customToolRoots: [registry, path.join(f.root, "missing registry")] },
+  );
+  expect(target.readOnlyRoots).toContain(await fs.realpath(registry));
+  expect(target).toMatchObject({ customToolRoots: [await fs.realpath(registry)] });
+});
+
+it("grants a canonical manifest file reached through an external registry alias", async () => {
+  const f = await fixture();
+  const registry = path.join(f.root, "registry");
+  const metadata = path.join(f.root, "external metadata");
+  const tool = path.join(f.root, "separate tool");
+  await custom(metadata, "Aliased-Registry-Key", tool);
+  await write(path.join(tool, "proton"), "inert launcher");
+  await fs.mkdir(registry);
+  await fs.symlink(metadata, path.join(registry, "Linked-Registry"), "junction");
+  const target = await resolveDependencyTarget(
+    { ...f.input, protonPath: tool },
+    { customToolRoots: [registry] },
+  );
+  expect(target.readOnlyRoots).toContain(
+    await fs.realpath(path.join(metadata, "compatibilitytool.vdf")),
+  );
+});
+
+it.runIf(process.platform === "linux")("resolves a standalone manifest file alias", async () => {
+  const f = await fixture();
+  const tool = path.join(f.root, "external tool");
+  await custom(tool, "File-Alias-Key", tool);
+  await fs.mkdir(path.join(f.steam, "compatibilitytools.d"));
+  await fs.symlink(
+    path.join(f.root, "missing.vdf"),
+    path.join(f.steam, "compatibilitytools.d", "a-dangling.vdf"),
+  );
+  await fs.symlink(
+    path.join(tool, "compatibilitytool.vdf"),
+    path.join(f.steam, "compatibilitytools.d", "external.vdf"),
+  );
+  await expect(resolveExactRuntimeName(f.steam, tool, { customToolRoots: [] })).resolves.toBe(
+    "File-Alias-Key",
+  );
+});
+
 it("rejects two exact names mapped to different real installations", async () => {
   const f = await fixture();
   const alternate = path.join(f.root, "other");
@@ -299,6 +402,20 @@ it("rejects same Proton AppID at another path even if metadata name differs", as
   await expect(resolveDependencyTarget(f.input, { customToolRoots: [] })).rejects.toThrow(
     "AppID has multiple installations",
   );
+});
+
+it("accepts the newer official Proton installation that Protontricks selects", async () => {
+  const f = await fixture();
+  const alternate = path.join(f.root, "old-library");
+  const duplicate = await app(alternate, "1493710", "Old Proton", "Proton 11.0", "9");
+  await write(path.join(duplicate, "proton"), "");
+  await libraries(f.steam, [f.steam, alternate]);
+  expect(await resolveExactRuntimeName(f.steam, f.proton, { customToolRoots: [] })).toBe(
+    "Proton 11.0",
+  );
+  await expect(
+    resolveExactRuntimeName(f.steam, duplicate, { customToolRoots: [] }),
+  ).rejects.toThrow("missing or ambiguous helper metadata");
 });
 
 it("rejects collision with custom metadata instead of guessing official precedence", async () => {
@@ -373,4 +490,27 @@ it("fails closed on malformed metadata instead of falling back to a folder name"
   const f = await fixture();
   await write(path.join(f.steam, "steamapps", "appmanifest_1493710.acf"), '"AppState" {');
   await expect(resolveDependencyTarget(f.input, { customToolRoots: [] })).rejects.toThrow();
+});
+
+it.each([
+  ["a-before-client", "dependency"],
+  ["z-after-client", "dependency"],
+  ["a-before-client", "exact name"],
+  ["z-after-client", "exact name"],
+  ["a-before-client", "runtime"],
+  ["z-after-client", "runtime"],
+])("validates malformed %s metadata strictly for %s", async (folder, consumer) => {
+  const f = await runtimeFixture();
+  await write(path.join(f.runtime, "_v2-entry-point"), "inert runtime entry point");
+  const other = path.join(f.root, folder);
+  await app(other, "7", "Other Game", "Other Game");
+  await write(path.join(other, "steamapps", "appmanifest_99999.acf"), '"AppState" {');
+  await libraries(f.steam, [f.steam, other]);
+  const operation =
+    consumer === "dependency"
+      ? resolveDependencyTarget(f.input, { customToolRoots: [] })
+      : consumer === "exact name"
+        ? resolveExactRuntimeName(f.steam, f.proton, { customToolRoots: [] })
+        : resolveProtonRuntime(f.steam, f.proton, [f.game, f.compat]);
+  await expect(operation).rejects.toThrow();
 });

@@ -21,6 +21,7 @@ const TARGET = {
   protonPath: "/Steam/steamapps/common/Proton",
   compatDataPath: "/Steam/steamapps/compatdata/22380",
   protonName: "Proton 11.0",
+  customToolRoots: [],
   readOnlyRoots: ["/Steam", "/External library"],
   runtimeWritePaths: ["/Runtime/var", "/Runtime/platform/files/.ref"],
 };
@@ -40,6 +41,7 @@ function expectedRun(appId: string, recipes: string[]) {
     "--env=STEAM_DIR=/Steam",
     `--env=STEAM_COMPAT_DATA_PATH=${TARGET.compatDataPath}`,
     "--env=PROTON_VERSION=Proton 11.0",
+    "--env=STEAM_EXTRA_COMPAT_TOOLS_PATHS=",
     `--env=VORTEX_DEPENDENCY_TARGET=${JSON.stringify(TARGET)}`,
     `--env=VORTEX_DEPENDENCY_RECIPES=${JSON.stringify(["-q", ...recipes])}`,
     "com.github.Matoking.protontricks",
@@ -56,6 +58,29 @@ afterEach(() => {
 });
 
 describe("Proton dependency installer", () => {
+  it.each([false, true])(
+    "forwards external custom registry roots into the helper, Flatpak host=%s",
+    async (flatpak) => {
+      process.env.IS_FLATPAK = String(flatpak);
+      const runExecutable = vi.fn<IExtensionApi["runExecutable"]>(() => PromiseBB.resolve());
+      const target = {
+        ...TARGET,
+        customToolRoots: ["/External registry", "/Second registry"],
+        readOnlyRoots: [...TARGET.readOnlyRoots, "/External registry", "/Second registry"],
+      };
+      await installDependencies(
+        { runExecutable } as unknown as IExtensionApi,
+        "22380",
+        ["xact"],
+        undefined,
+        { target },
+      );
+      expect(runExecutable.mock.calls.at(-1)?.[1]).toContain(
+        "--env=STEAM_EXTRA_COMPAT_TOOLS_PATHS=/External registry:/Second registry",
+      );
+    },
+  );
+
   it.runIf(process.platform === "linux")(
     "checks the final sandbox environment before executing any recipe",
     async () => {

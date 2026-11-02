@@ -177,6 +177,7 @@ async function install(
         `--env=STEAM_DIR=${target.steamPath}`,
         `--env=STEAM_COMPAT_DATA_PATH=${target.compatDataPath}`,
         `--env=PROTON_VERSION=${target.protonName}`,
+        `--env=STEAM_EXTRA_COMPAT_TOOLS_PATHS=${target.customToolRoots.join(":")}`,
         `--env=VORTEX_DEPENDENCY_TARGET=${JSON.stringify(target)}`,
         `--env=VORTEX_DEPENDENCY_RECIPES=${JSON.stringify(["-q", ...(options.force ? ["--force"] : []), ...verbs])}`,
         PROTONTRICKS_APP_ID,

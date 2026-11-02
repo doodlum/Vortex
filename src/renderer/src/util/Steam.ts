@@ -23,11 +23,14 @@ import {
   buildProtonEnvironment,
   buildProtonCommand,
   inheritedProtonTuning,
+  protonScriptPath,
 } from "./linux/proton";
 import { getSteamLibraryPaths } from "./linux/proton";
+import { resolveProtonRuntime } from "./linux/protonMetadata";
 import { findSteamClientHome } from "./linux/steamClientHome";
 import { findLinuxSteamPath } from "./linux/steamPaths";
 import { notifySteamGamesChanged } from "./linux/steamRevision";
+import { steamRuntimeLaunchEnvironment } from "./linux/steamRuntimeLaunch";
 
 /** VDF leaves are plain strings, so only nested blocks can be indexed further. */
 const asBlock = (value: VDFValue | undefined): VDFObject | undefined =>
@@ -581,17 +584,51 @@ class Steam implements IGameStore {
     // their variables under the game's identity, their arguments after the program's own, and
     // their wrapper command around Vortex's.
     const userOptions = preparation?.launchOptions;
-    const { executable, args: protonArgs } = buildProtonCommand(protonPath, exePath, [
-      ...args,
-      ...(userOptions?.suffix ?? []),
+    const runtimePath = await resolveProtonRuntime(steamPath, protonPath, [
+      gameEntry.gamePath,
+      gameEntry.compatDataPath,
     ]);
+    // Preserve the former direct launcher's default cwd when adding the outer runtime.
+    const defaultLauncher =
+      (process.platform === "linux" && process.env.IS_FLATPAK === "true"
+        ? undefined
+        : userOptions?.prefix?.[0]) ??
+      preparation?.shaderWrapper ??
+      protonScriptPath(protonPath);
+    const cwd = options.cwd || path.dirname(defaultLauncher);
+    const runtimeEnv =
+      runtimePath === undefined
+        ? {}
+        : await steamRuntimeLaunchEnvironment({
+            protonPath,
+            runtimePath,
+            libraryPaths,
+            gamePath: gameEntry.gamePath,
+            compatDataPath: gameEntry.compatDataPath,
+            executable: exePath,
+            cwd: path.resolve(cwd),
+            extraWritePaths: (
+              options.env?.PRESSURE_VESSEL_FILESYSTEMS_RW ??
+              userOptions?.env?.PRESSURE_VESSEL_FILESYSTEMS_RW ??
+              process.env.PRESSURE_VESSEL_FILESYSTEMS_RW ??
+              ""
+            )
+              .split(":")
+              .filter(Boolean),
+          });
+    const { executable, args: protonArgs } = buildProtonCommand(
+      protonPath,
+      exePath,
+      [...args, ...(userOptions?.suffix ?? [])],
+      runtimePath,
+    );
     const protonEnv = buildProtonEnvironment({
       compatDataPath: gameEntry.compatDataPath,
       steamPath,
       appId: gameEntry.appid,
       installPath: gameEntry.gamePath,
       steamHome: options.env?.HOME === undefined ? await findSteamClientHome(steamPath) : undefined,
-      existingEnv: { ...userOptions?.env, ...options.env },
+      existingEnv: { ...userOptions?.env, ...options.env, ...runtimeEnv },
     });
 
     const wrapped =
@@ -609,7 +646,7 @@ class Steam implements IGameStore {
         "flatpak-spawn",
         [
           "--host",
-          "--directory=" + (options.cwd || path.dirname(wrapped[0])),
+          "--directory=" + cwd,
           ...Object.entries(hostEnv).map(([key, value]) => "--env=" + key + "=" + value),
           launchExecutable,
           ...launchArgs,
@@ -619,6 +656,7 @@ class Steam implements IGameStore {
     }
     return api.runExecutable(launchExecutable, launchArgs, {
       ...options,
+      ...(runtimePath === undefined ? {} : { cwd }),
       env: protonEnv,
       shell: false,
     });
