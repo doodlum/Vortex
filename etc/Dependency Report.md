@@ -20,6 +20,7 @@ This is a list of all modules leaked by Vortex to extensions. Any module listed 
 | @nexusmods/fomod-installer-native | 0.13.4-linux.3 |
 | @nexusmods/ini-parser | link:../../packages/ini-parser |
 | @nexusmods/nexus-api | 1.7.3 |
+| @nexusmods/paths | link:../../packages/paths |
 | @nexusmods/steam-kv-parser | link:../../packages/steam-kv-parser |
 | @nosferatu500/react-sortable-tree | 4.4.0 |
 | @nosferatu500/theme-file-explorer | 3.0.21 |
@@ -31,6 +32,7 @@ This is a list of all modules leaked by Vortex to extensions. Any module listed 
 | @opentelemetry/sdk-trace-base | 2.8.0 |
 | @opentelemetry/semantic-conventions | 1.40.0 |
 | @tailwindcss/cli | 4.3.2 |
+| @tanstack/react-query | 5.104.5 |
 | @tanstack/react-virtual | 3.13.23 |
 | @types/bluebird | 3.5.20 |
 | @types/uuid | 3.4.13 |
