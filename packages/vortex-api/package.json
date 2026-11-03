@@ -34,7 +34,8 @@
   ],
   "scripts": {
     "typecheck": "pnpm exec tsc -p tsconfig.lib.json",
-    "api:report": "pnpm exec api-extractor run --local"
+    "api:report": "pnpm exec api-extractor run --local",
+    "test": "pnpm exec tsc -p tsconfig.test.json && pnpm exec vitest run"
   },
   "nx": {
     "targets": {

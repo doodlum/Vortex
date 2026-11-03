@@ -114,6 +114,7 @@ Read the doc for the area you're touching rather than the whole tree.
 - Installers, release pipeline: `docs/packaging/windows.md`
 - The auto-updater: `docs/updater.md`
 - Writing documentation: `docs/writing-documentation.md`
+- Extension API declaration/report build changes: read `docs/extension-api-build.md`; run the API package maintainer tests on Windows and Linux, then full verify.
 - Code style: `CODESTYLE.md`
 
 - Native Linux C# runtime changes: read `docs/legacy-csharp-runtime.md`. The bundled Framework Mono/net48 helper is separate from the Windows Desktop Runtime helper and the native Basic/XML library. Run the bundle/cache, native launcher, platform strategy, consent/discovery and installer_dotnet platform tests on both hosts. Keep archive/manifest pins exact, preserve consent before preparation, and verify actual helper/package/dialog/deployment behavior separately; scoped tests do not prove the complete C# workflow.
