@@ -48,7 +48,7 @@ class LinkTag extends Tag {
       return this.getComponents();
     }
 
-    return (
+    return this.renderLinkedContent((children) => (
       <ErrorContext.Consumer>
         {(context) => (
           <a
@@ -60,11 +60,18 @@ class LinkTag extends Tag {
             )}
             title={title}
           >
-            {this.getComponents()}
+            {children}
           </a>
         )}
       </ErrorContext.Consumer>
-    );
+    ));
+  }
+
+  /** Lets safe content keep interactive placeholders outside the link. */
+  protected renderLinkedContent(
+    link: (children: React.ReactNode) => React.ReactNode,
+  ): React.ReactNode {
+    return link(this.getComponents());
   }
 
   /** The target the link points at. Subclasses can leave it off, so the text is not a link. */

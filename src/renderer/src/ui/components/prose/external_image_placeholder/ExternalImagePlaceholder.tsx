@@ -10,9 +10,6 @@ import { Typography } from "@/ui/components/typography/Typography";
 import { TypographyLink } from "@/ui/components/typography/TypographyLink";
 import { webHref } from "@/ui/utils/webHref";
 
-/** Where mod authors are told how to host media on Nexus Mods; a placeholder until that exists. */
-const HOSTING_HELP_URL = "https://www.youtube.com/watch?v=VnvfjWxhTD4";
-
 /** How many image hosts are named before the rest are counted. */
 const NAMED_HOSTS = 3;
 
@@ -188,12 +185,12 @@ export const ExternalImagePlaceholder = ({
             </Typography>
 
             <span className="flex flex-wrap gap-x-3 gap-y-1">
-              {links.map(({ href, label }) => (
+              {links.map(({ href, label }, index) => (
                 <Tooltip
                   className="break-all"
                   content={href}
                   delay={{ open: 0, close: 50 }}
-                  key={href}
+                  key={`${href}-${index}`}
                 >
                   <span className="inline-flex">
                     <TypographyLink
@@ -227,16 +224,6 @@ export const ExternalImagePlaceholder = ({
                 "Vortex only loads images stored on Nexus Mods. Images from other sites could be swapped for something harmful or used to track you, and an app doesn't have the same protections as your web browser.",
               )}
             </Typography>
-
-            <TypographyLink
-              appearance="moderate"
-              className="self-start"
-              typographyType="body-sm"
-              variant="primary"
-              onClick={() => window.api.shell.openUrl(HOSTING_HELP_URL)}
-            >
-              {t("Mod authors: how to host media on Nexus Mods")}
-            </TypographyLink>
 
             <div className="flex justify-end">
               <Button

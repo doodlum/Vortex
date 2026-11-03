@@ -3,6 +3,8 @@ import userEvent from "@testing-library/user-event";
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
 
+import renderBBCode from "@/controls/bbcode";
+
 import { BBCode } from "./BBCode";
 
 // The user's adult content setting is unknown, so adult images blur, as they do logged out.
@@ -10,6 +12,29 @@ vi.mock("react-redux", () => ({ useSelector: () => undefined }));
 vi.mock("@/extensions/nexus_integration/selectors", () => ({ userInfo: () => undefined }));
 
 describe("BBCode", () => {
+  it("preserves callbacks in formatted trusted links", async () => {
+    const callback = vi.fn();
+    render(
+      <>
+        {renderBBCode("[url=cb://example/value][b]Run callback[/b][/url]", {
+          callbacks: { example: callback },
+        })}
+      </>,
+    );
+    await userEvent.click(screen.getByRole("link", { name: "Run callback" }));
+    expect(callback).toHaveBeenCalledExactlyOnceWith("value");
+  });
+
+  it("preserves adult blurring on a Nexus image inside a link", () => {
+    const { container } = render(
+      <BBCode
+        isFromAdultContent
+        bbcode="[url=https://www.nexusmods.com][img]https://images.nexusmods.com/a.png[/img][/url]"
+      />,
+    );
+    expect(container.querySelector("a img")).toHaveClass("nxm-image-media-blurred");
+  });
+
   it("renders the tags in the app's prose styles", () => {
     const { container } = render(<BBCode bbcode="A [b]bold[/b] and [i]slanted[/i] word" />);
 
@@ -326,6 +351,42 @@ describe("BBCode", () => {
       );
 
       expect(placeholders()).toHaveLength(2);
+    });
+
+    it.each([
+      ["several images", imgur("a") + imgur("b")],
+      ["text and an image", "Read more " + imgur("a")],
+      ["formatted content", "[b]Read more " + imgur("a") + "[/b]"],
+      ["a spoiler", "[spoiler]" + imgur("a") + "[/spoiler]"],
+    ])("keeps placeholder actions outside a link wrapping %s", async (_, content) => {
+      const openUrl = vi.fn();
+      vi.stubGlobal("api", { ...window.api, shell: { openUrl } });
+      try {
+        const { container } = render(
+          <BBCode
+            bbcode={"[url=https://example.com/support]" + content + "[/url]"}
+            externalImagePlaceholders={externalImagePlaceholders}
+          />,
+        );
+        const spoiler = screen.queryByRole("button", { name: "Spoiler" });
+        if (spoiler) await userEvent.click(spoiler);
+        expect(openUrl).not.toHaveBeenCalled();
+        await userEvent.click(screen.getByRole("button", { name: "View on website" }));
+        expect(openUrl.mock.calls).toEqual([[externalImagePlaceholders.websiteUrl]]);
+        openUrl.mockClear();
+        await userEvent.click(screen.getAllByRole("button", { name: "example.com" })[0]);
+        expect(openUrl.mock.calls).toEqual([["https://example.com/support"]]);
+        openUrl.mockClear();
+        expect(container.querySelector("a button")).toBeNull();
+        const textLink = screen.queryByRole("link", { name: "Read more" });
+        if (content.includes("Read more"))
+          expect(textLink).toHaveAttribute("href", "https://example.com/support");
+        await userEvent.click(screen.getByRole("button", { name: "Why?" }));
+        expect(await screen.findByRole("dialog")).toBeInTheDocument();
+        expect(openUrl).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+      }
     });
 
     it("keeps where a linked image links to", () => {

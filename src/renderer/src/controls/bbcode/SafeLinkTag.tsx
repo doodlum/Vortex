@@ -1,6 +1,8 @@
+import type { ReactNode } from "react";
+
 import { webHref } from "@/ui/utils/webHref";
 
-import { externalImagePlaceholderFor } from "./externalImages";
+import { externalImagePlaceholderFor, linkAroundExternalImages } from "./externalImages";
 import LinkTag from "./LinkTag";
 
 /**
@@ -18,6 +20,13 @@ class SafeLinkTag extends LinkTag {
     }
 
     return super.toReact();
+  }
+
+  protected renderLinkedContent(link: (children: ReactNode) => ReactNode): ReactNode {
+    const children = this.getComponents();
+    return this.renderer.options.externalImagePlaceholders
+      ? linkAroundExternalImages(children, link)
+      : link(children);
   }
 
   protected href(linkUrl: string): string | undefined {

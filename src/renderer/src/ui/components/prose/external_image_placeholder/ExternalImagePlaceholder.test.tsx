@@ -140,6 +140,9 @@ describe("ExternalImagePlaceholder", () => {
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent("Why isn't this image shown?");
     expect(dialog).toHaveTextContent("Vortex only loads images stored on Nexus Mods.");
+    expect(
+      screen.queryByRole("button", { name: "Mod authors: how to host media on Nexus Mods" }),
+    ).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "View on website", hidden: false }));
 

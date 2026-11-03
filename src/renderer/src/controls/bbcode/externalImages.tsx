@@ -1,4 +1,10 @@
-import React, { type ReactElement, type ReactNode } from "react";
+import React, {
+  Children,
+  cloneElement,
+  isValidElement,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 
 import {
   ExternalImagePlaceholder,
@@ -49,7 +55,12 @@ const isGap = (tag: IParsedTag) =>
 const externalImageOf = (tag: IParsedTag): IExternalImage | undefined => {
   if (tag.name === "img") {
     const host = externalHostOf(tag.renderer.strip(tag.getContent(true)));
-    return host ? { host, alt: tag.params.alt || tag.params.title } : undefined;
+    let enclosingLink = tag.parent;
+    while (enclosingLink && (!enclosingLink.name || !LINK_TAGS.includes(enclosingLink.name))) {
+      enclosingLink = enclosingLink.parent;
+    }
+    const href = enclosingLink?.name ? enclosingLink.params[enclosingLink.name] : undefined;
+    return host ? { host, alt: tag.params.alt || tag.params.title, href } : undefined;
   }
 
   const [only, ...rest] = contentOf(tag);
@@ -120,4 +131,27 @@ export const externalImagePlaceholderFor = (tag: unknown): ReactElement | null |
   }
 
   return <ExternalImagePlaceholder images={runFrom(image, after)} {...externalImagePlaceholders} />;
+};
+
+/** Whether rendered content contains a placeholder, including inside formatting or a spoiler. */
+const containsExternalImage = (content: ReactNode): boolean =>
+  Children.toArray(content).some(
+    (node) =>
+      isValidElement<{ children?: ReactNode }>(node) &&
+      (node.type === ExternalImagePlaceholder || containsExternalImage(node.props.children)),
+  );
+
+/** Keep text linked while placing interactive placeholders outside every enclosing anchor. */
+export const linkAroundExternalImages = (
+  content: ReactNode,
+  link: (children: ReactNode) => ReactNode,
+): ReactNode => {
+  if (!containsExternalImage(content)) return link(content);
+  return Children.map(content, (node) => {
+    if (!isValidElement<{ children?: ReactNode }>(node)) return link(node);
+    if (node.type === ExternalImagePlaceholder) return node;
+    return containsExternalImage(node.props.children)
+      ? cloneElement(node, undefined, linkAroundExternalImages(node.props.children, link))
+      : link(node);
+  });
 };
