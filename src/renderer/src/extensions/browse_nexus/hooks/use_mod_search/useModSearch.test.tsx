@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { components } from "@vortex/nexus-api-v3";
 import React, { type ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type ModsSearchRequest = components["schemas"]["ModsSearchRequest"];
 
@@ -36,6 +36,11 @@ import { queryClient } from "@/util/queryClient";
 import { MODS_PER_PAGE, useModSearch } from "./useModSearch.hook";
 
 const api = {} as IExtensionApi;
+const now = Date.parse("2026-11-03T12:00:00.000Z");
+const range = (days: number) => ({
+  gte: new Date(now - days * 86400000).toISOString(),
+  lt: new Date(now).toISOString(),
+});
 
 /** Answers the request still waiting for a preset's mods, with one mod to show. */
 const respond = (sort: string, totalCount: number) =>
@@ -67,7 +72,10 @@ const render = (isEnabled = true) => {
 };
 
 describe("useModSearch", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
     mocks.gameDomainName = "skyrimspecialedition";
     mocks.pending = [];
     mocks.requestCount = 0;
@@ -78,9 +86,9 @@ describe("useModSearch", () => {
     await waitFor(() => expect(mocks.pending).toHaveLength(2));
 
     expect(mocks.pending.map((request) => request.search)).toContainEqual({
-      filters: { games: ["skyrimspecialedition"], time_range: "7" },
+      filters: { games: ["skyrimspecialedition"], created_at: range(7) },
       sort: { field: "endorsements", direction: "desc" },
-      pagination: { page: 1, page_size: MODS_PER_PAGE },
+      pagination: { type: "page", page: 1, page_size: MODS_PER_PAGE },
     });
 
     await respondToStart(45, 900);
@@ -96,7 +104,7 @@ describe("useModSearch", () => {
     await waitFor(() => expect(result.current.allModsTotal).toBe(900));
     act(() => result.current.selectPreset("popular"));
     await waitFor(() => expect(mocks.pending).toHaveLength(1));
-    await respond("popular", 12);
+    await respond("downloads", 12);
 
     await waitFor(() => expect(result.current.totalCount).toBe(12));
     expect(result.current.allModsTotal).toBe(900);
@@ -109,17 +117,17 @@ describe("useModSearch", () => {
     await waitFor(() => expect(mocks.pending).toHaveLength(1));
     await respond("endorsements", 45);
 
-    act(() => result.current.setSort({ field: "popular" }));
+    act(() => result.current.setSort({ field: "downloads" }));
 
     await waitFor(() => expect(mocks.pending).toHaveLength(1));
     expect(mocks.pending[0].search).toMatchObject({
-      filters: { time_range: "7" },
-      sort: { field: "popular", direction: "desc" },
+      filters: { created_at: range(7) },
+      sort: { field: "downloads", direction: "desc" },
       pagination: { page: 1 },
     });
     expect(result.current.currentPage).toBe(1);
     expect(result.current.canResetSort).toBe(true);
-    await respond("popular", 30);
+    await respond("downloads", 30);
     await waitFor(() => expect(result.current.totalCount).toBe(30));
     expect(result.current.allModsTotal).toBe(900);
   });
@@ -131,7 +139,7 @@ describe("useModSearch", () => {
 
     act(() => result.current.selectPreset("popular"));
 
-    expect(result.current.sort).toEqual({ field: "popular", direction: "desc" });
+    expect(result.current.sort).toEqual({ field: "downloads", direction: "desc" });
     expect(result.current.canResetSort).toBe(false);
 
     act(() => result.current.selectPreset("trending"));
@@ -155,7 +163,7 @@ describe("useModSearch", () => {
 
     await waitFor(() => expect(mocks.pending).toHaveLength(1));
     expect(mocks.pending[0].search).toMatchObject({
-      filters: { time_range: "28" },
+      filters: { created_at: range(28) },
       sort: { field: "endorsements", direction: "desc" },
       pagination: { page: 1 },
     });
@@ -243,7 +251,7 @@ describe("useModSearch", () => {
     act(() => result.current.setCurrentPage(2));
 
     await waitFor(() => expect(result.current.loading).toBe(true));
-    expect(mocks.pending[0].search.pagination.page).toBe(2);
+    expect(mocks.pending[0].search.pagination).toMatchObject({ type: "page", page: 2 });
     expect(result.current.totalCount).toBe(45);
   });
 
@@ -286,11 +294,27 @@ describe("useModSearch", () => {
 
     act(() => result.current.retry());
     await waitFor(() => expect(mocks.pending).toHaveLength(1));
-    expect(mocks.pending[0].search.pagination.page).toBe(2);
+    expect(mocks.pending[0].search.pagination).toMatchObject({ type: "page", page: 2 });
     await respond("endorsements", 45);
 
     await waitFor(() => expect(result.current.error).toBeNull());
     expect(result.current.mods).toEqual([{ id: "45" }]);
+  });
+
+  it("uses update dates for updated sorting, and no date filter for all time", async () => {
+    const { result } = render();
+    await respondToStart(45, 900);
+    act(() => result.current.setSort({ field: "updated" }));
+    await waitFor(() => expect(mocks.pending).toHaveLength(1));
+    expect(mocks.pending[0].search.filters).toEqual({
+      games: ["skyrimspecialedition"],
+      updated_at: range(7),
+    });
+    await respond("updated", 12);
+
+    act(() => result.current.setFilters({ timeRange: "all" }));
+    await waitFor(() => expect(mocks.pending).toHaveLength(1));
+    expect(mocks.pending[0].search.filters).toEqual({ games: ["skyrimspecialedition"] });
   });
 
   it("asks for nothing outside a game", async () => {

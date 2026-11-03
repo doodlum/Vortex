@@ -307,12 +307,12 @@ describe("searchMods", () => {
   // Every field with a default is required in the generated type, so the search is given whole.
   const search = {
     filters: { games: ["skyrimspecialedition"] },
-    sort: { field: "trending", direction: "desc" },
-    pagination: { page: 2, page_size: 20 },
+    sort: { field: "endorsements", direction: "desc" },
+    pagination: { type: "page", page: 2, page_size: 20 },
   } as const;
 
   it("POSTs the search to /mods/search and returns its mods and pagination", async () => {
-    const meta = { page: 2, page_size: 20, total_count: 41 };
+    const meta = { type: "page", page: 2, page_size: 20, total_count: 41 };
     fetchMocker.mockResponseOnce(JSON.stringify({ data: { mods: [{ id: "1" }] }, meta }));
 
     const result = await makeClient().searchMods(search);
@@ -321,6 +321,18 @@ describe("searchMods", () => {
     expect(lastRequest().url).toBe(`${BASE_URL}/mods/search`);
     expect(await lastBody()).toEqual(search);
     expect(result).toEqual({ mods: [{ id: "1" }], meta });
+  });
+
+  it("preserves cursor requests and their response metadata", async () => {
+    const cursorSearch = {
+      ...search,
+      pagination: { type: "cursor", cursor: "next-page", page_size: 20 },
+    } as const;
+    const meta = { type: "cursor", page_size: 20, total_count: 41, next_cursor: null };
+    fetchMocker.mockResponseOnce(JSON.stringify({ data: { mods: [] }, meta }));
+
+    expect(await makeClient().searchMods(cursorSearch)).toEqual({ mods: [], meta });
+    expect(await lastBody()).toEqual(cursorSearch);
   });
 
   it("throws V3ApiError on an error response", async () => {

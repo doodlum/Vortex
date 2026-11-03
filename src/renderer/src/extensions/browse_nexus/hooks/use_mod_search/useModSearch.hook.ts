@@ -3,7 +3,9 @@ import type { GameDomain } from "@vortex/shared";
 import { useState } from "react";
 
 import {
+  type IModSearchQuery,
   type ModsSearchRequest,
+  type ModTimeRange,
   modSearchQuery,
 } from "@/extensions/nexus_integration/queries/mod_search/modSearch.query";
 import type { IExtensionApi } from "@/types/IExtensionContext";
@@ -20,7 +22,7 @@ export type ModSortField = ModsSearchRequest["sort"]["field"];
 export type ModSortDirection = ModsSearchRequest["sort"]["direction"];
 
 /** How far back the mods go, in days or all time. */
-export type ModTimeRange = NonNullable<ModsSearchRequest["filters"]["time_range"]>;
+export type { ModTimeRange };
 
 /** How a preset sorts the mods. */
 export interface IModSort {
@@ -38,11 +40,11 @@ export interface IModFilters {
 
 /**
  * Each preset's sort as it comes, which resetting the sort goes back to. Trending is endorsements
- * over its 7 days, which is all the API's own `trending` sort is.
+ * over its 7 days; popular is downloads over its 7 days.
  */
 export const PRESET_SORTS: Record<ModPreset, IModSort> = {
   trending: { field: "endorsements", direction: "desc" },
-  popular: { field: "popular", direction: "desc" },
+  popular: { field: "downloads", direction: "desc" },
   new: { field: "new", direction: "desc" },
 };
 
@@ -84,15 +86,18 @@ const searchFor = ({
   sort,
   filters,
   page,
-}: IModsSearch): ModsSearchRequest | typeof skipToken => {
+}: IModsSearch): IModSearchQuery | typeof skipToken => {
   if (!gameDomainName) {
     return skipToken;
   }
 
   return {
-    filters: { games: [gameDomainName], time_range: filters.timeRange },
-    sort: { field: sort.field, direction: sort.direction },
-    pagination: { page, page_size: MODS_PER_PAGE },
+    request: {
+      filters: { games: [gameDomainName] },
+      sort: { field: sort.field, direction: sort.direction },
+      pagination: { type: "page", page, page_size: MODS_PER_PAGE },
+    },
+    timeRange: filters.timeRange,
   };
 };
 
