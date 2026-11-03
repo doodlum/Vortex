@@ -36,7 +36,7 @@ Project and coding documentation. To set up and build Vortex, start with
 
 ## Building and shipping
 
-- [extension-api-build.md](extension-api-build.md) - Generating extension API declarations and checking report formatting
+- [extension-api-build.md](extension-api-build.md) - Generating extension API declarations and checking report formatting and cache invalidation
 
 - [legacy-csharp-runtime.md](legacy-csharp-runtime.md) - Bundled native Linux C# installer runtime, automatic setup and verification limits
 - [packaging/windows.md](packaging/windows.md) - Local unsigned installers, the pipeline, signed CI builds

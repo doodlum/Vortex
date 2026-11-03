@@ -26,3 +26,18 @@ and symlink or junction support; no running Vortex, display, game or account is
 needed. The fixtures are removed when the check finishes.
 
 Run `pnpm run verify` for the complete repository gate after the focused checks.
+
+The API report and declaration typecheck cache inputs include the declaration as
+an output of their dependency tasks. A normal source-file glob omits this ignored
+generated file, so a declaration change can otherwise replay an old report or a
+cached successful typecheck.
+
+The same package test command also runs the installed Nx against disposable Git
+workspaces using the production API target inputs, dependencies and outputs. An
+inert producer replaces renderer declaration generation, and a copying consumer
+replaces report extraction; the typecheck uses the installed TypeScript compiler.
+The checks change generated declarations across successive builds, require a
+syntax-invalid declaration to fail typechecking, and verify cache reuse for an
+unchanged declaration, including report output restoration. They need Git on PATH
+and additional temporary space for a private Nx cache. This covers task-cache
+invalidation; it does not replace a real renderer build or API extraction.
