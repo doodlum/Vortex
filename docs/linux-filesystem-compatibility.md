@@ -279,7 +279,13 @@ prefix are checked before any recipe executes. Recipes run unattended and their
 installation records are checked afterward. From a Vortex Flatpak setup uses
 `flatpak-spawn --host`. Each helper step is capped at 30 minutes and each recipe run at
 20 minutes; a run that stops responding is ended (SIGTERM, then SIGKILL after ten
-seconds) and reported as a setup error, so it cannot block later launches.
+seconds) and reported as a setup error. The same-game queue stays reserved until
+the launch reports completion; sending a signal does not release it. Completion
+cancels the delayed kill, including when the helper exits during the grace period.
+Recipe sandboxes use Flatpak's `--die-with-parent`; host portal commands also use
+`--watch-bus`, so stopping their proxy does not leave the dependency sandbox running.
+An unconfirmed termination keeps the queue reserved rather than starting another
+writer in that prefix.
 Installation progress appears in Vortex's notification center and continues there when
 you leave the Proton page. The activity stays open while Vortex verifies installation
 records and the prefix version; completion is reported only after those checks pass.
@@ -292,6 +298,16 @@ an empty state instead of the settings. A refresh keeps the last result on scree
 until the same installation has been read again.
 Native Flatpak dependency commands and Flatpak host commands preserve literal quoted
 arguments and environment values without invoking a shell.
+
+From `src/renderer`, run `pnpm exec vitest run
+src/extensions/proton_management/dependencyInstaller.test.ts` on Windows and Linux.
+The API fixtures check timeout escalation, late spawn callbacks, completed-helper
+cleanup and same-game queue ownership. Linux additionally starts an owned Node helper
+that ignores SIGTERM, verifies SIGKILL and waits for its actual close before the next
+recipe starts. These tests need no game, account, Flatpak or redistributable download;
+Windows skips the Linux process and Python environment fixtures. Real native/portal
+Flatpak controls must inspect the helper's host process after proxy termination;
+a proxy exit alone does not establish sandbox cleanup or installed components.
 
 Install Flatpak using your distribution's package manager and, if no Flathub remote
 exists yet, add the user remote with:

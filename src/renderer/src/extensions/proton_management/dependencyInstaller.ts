@@ -53,7 +53,7 @@ export const RECIPE_TIMEOUT_MS = 20 * 60 * 1000;
 const KILL_GRACE_MS = 10 * 1000;
 
 function stopProcess(pid: number | undefined) {
-  if (pid === undefined) return;
+  if (pid === undefined || !Number.isInteger(pid) || pid <= 0) return;
   const signal = (name: NodeJS.Signals) => {
     try {
       process.kill(pid, name);
@@ -62,8 +62,11 @@ function stopProcess(pid: number | undefined) {
       return false;
     }
   };
-  // `flatpak run` and `flatpak-spawn` pass the signal on and take their sandboxes down with them.
-  if (signal("SIGTERM")) setTimeout(() => signal("SIGKILL"), KILL_GRACE_MS).unref?.();
+  if (signal("SIGTERM")) {
+    const timer = setTimeout(() => signal("SIGKILL"), KILL_GRACE_MS);
+    timer.unref?.();
+    return timer;
+  }
 }
 
 function runHost(
@@ -72,38 +75,55 @@ function runHost(
   args: string[],
   timeoutMs: number,
 ): Promise<void> {
-  let pid: number | undefined;
-  const run = api.runExecutable(
-    process.env.IS_FLATPAK === "true" ? "flatpak-spawn" : command,
-    process.env.IS_FLATPAK === "true" ? ["--host", command, ...args] : args,
-    {
-      cwd: "/",
-      expectSuccess: true,
-      shell: false,
-      onSpawned: (spawned) => {
-        pid = spawned;
-      },
-    },
-  );
   return new Promise<void>((resolve, reject) => {
+    let pid: number | undefined;
+    let timeoutError: Error | undefined;
+    let termination: ReturnType<typeof setTimeout> | undefined;
+    const stop = () => {
+      termination ??= stopProcess(pid);
+    };
     const timer = setTimeout(() => {
-      stopProcess(pid);
-      reject(
-        new Error(
-          `${command} ${args[0] ?? ""} stopped responding and was ended after ${Math.round(timeoutMs / 60000)} minutes`,
-        ),
+      timeoutError = new Error(
+        `${command} ${args[0] ?? ""} stopped responding and was ended after ${Math.round(timeoutMs / 60000)} minutes`,
       );
+      stop();
+      // Keep the same-game queue reserved until the launch actually finishes.
+      // Sending a signal alone is not evidence that its prefix is no longer in use.
     }, timeoutMs);
-    run.then(
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
+    const finish = (failed: boolean, error?: unknown) => {
+      clearTimeout(timer);
+      clearTimeout(termination);
+      if (timeoutError !== undefined) reject(timeoutError);
+      else if (failed) reject(error);
+      else resolve();
+    };
+    try {
+      api
+        .runExecutable(
+          process.env.IS_FLATPAK === "true" ? "flatpak-spawn" : command,
+          process.env.IS_FLATPAK === "true" ? ["--host", "--watch-bus", command, ...args] : args,
+          {
+            cwd: "/",
+            expectSuccess: true,
+            shell: false,
+            onSpawned: (spawned) => {
+              pid = spawned;
+              if (timeoutError !== undefined) stop();
+            },
+            onExit: () => {
+              pid = undefined;
+              clearTimeout(timer);
+              clearTimeout(termination);
+            },
+          },
+        )
+        .then(
+          () => finish(false),
+          (error: unknown) => finish(true, error),
+        );
+    } catch (error) {
+      finish(true, error);
+    }
   });
 }
 
@@ -167,6 +187,8 @@ async function install(
       [
         "run",
         scope,
+        // The recipe sandbox must not outlive the launcher killed by a timeout.
+        "--die-with-parent",
         "--unset-env=WINE",
         "--unset-env=WINESERVER",
         "--unset-env=WINETRICKS",
