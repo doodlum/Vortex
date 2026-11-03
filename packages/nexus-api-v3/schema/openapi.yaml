@@ -979,6 +979,11 @@ paths:
 
         A file manually verified by staff is never overridden (409 is returned instead) —
         staff re-verification is also the route for reversing a quarantine.
+
+        With `place_mod_under_review`, the file's mod is also placed under moderator review and
+        reported to the moderation team; `mod_review` says what happened. This is best-effort: if
+        it fails, the file stays quarantined, the call still succeeds and `mod_review` is `failed`.
+        Reversing the quarantine does not release the mod, nor the reverse.
       operationId: quarantineModFileVersion
       x-badges:
         - name: Experimental
@@ -2427,6 +2432,7 @@ components:
         - tags
         - primary_image
         - gallery_images
+        - primary_file_version
       properties:
         id:
           type: string
@@ -2485,6 +2491,13 @@ components:
             moderation or removed by staff.
           items:
             "$ref": "#/components/schemas/ModGalleryImage"
+        primary_file_version:
+          allOf:
+            - "$ref": "#/components/schemas/MinimalModFileVersion"
+          nullable: true
+          description: |
+            The mod's primary file version, which is its default download. Null when the mod has no
+            primary file version, or when it has been removed or quarantined.
     ModUploader:
       type: object
       description: The user who uploaded a mod.
@@ -2753,6 +2766,19 @@ components:
           type: boolean
           nullable: true
           description: Whether the mod is marked as adult content.
+    MinimalModFileVersion:
+      type: object
+      description: A minimal representation of a mod file version.
+      required:
+        - id
+        - game_scoped_id
+      properties:
+        id:
+          type: string
+          description: The unique identifier for the mod file version.
+        game_scoped_id:
+          type: string
+          description: The game-scoped identifier for the mod file version.
     ModStatus:
       type: string
       description: The effective visibility status of a mod.
@@ -3077,12 +3103,21 @@ components:
           description: Why the file is being quarantined (recorded in service logs).
           minLength: 1
           maxLength: 1000
+        place_mod_under_review:
+          type: boolean
+          description: |
+            Also place the file's mod under moderator review once the file is quarantined (or was
+            already). The mod is hidden from the public and its authors cannot edit it until a moderator
+            has reviewed it. A mod already under review is left as it is.
+          default: false
     QuarantineModFileVersionSuccess:
       type: object
       required:
         - id
         - status
         - already_quarantined
+        - mod_review
+        - mod_review_reported
       properties:
         id:
           type: string
@@ -3093,6 +3128,25 @@ components:
         already_quarantined:
           type: boolean
           description: True when the file was already quarantined and nothing changed.
+        mod_review:
+          "$ref": "#/components/schemas/ModReviewOutcome"
+        mod_review_reported:
+          type: boolean
+          description: True when this call reported the mod to the moderation team.
+            Only a call that places the mod under review reports it.
+    ModReviewOutcome:
+      type: string
+      description: |
+        What happened to the file's mod when the caller asked for it to be placed under moderator review.
+        `not_requested`: the caller did not ask. `placed_under_review`: the mod is now hidden from the
+        public and locked for moderator review. `already_under_review`: the mod was already under review,
+        so nothing changed. `failed`: the mod could not be placed under review; the file is still
+        quarantined.
+      enum:
+        - not_requested
+        - placed_under_review
+        - already_under_review
+        - failed
     DownloadRepackedModFileVersionResponse:
       type: object
       required:

@@ -277,8 +277,9 @@ export function createNexusV3Client(options: NexusV3ClientOptions) {
     },
 
     /**
-     * Search published mods, sorted, filtered and a page at a time. Every field of the search
-     * is optional; the API defaults to endorsements and a first cursor page of 20.
+     * Search published mods, sorted, filtered and a page at a time, by number or by cursor.
+     * Every field of the search is optional; the API defaults to endorsements, by cursor, 20 a
+     * page. `meta` pages the same way as the request.
      */
     async searchMods(search: components["schemas"]["ModsSearchRequest"]): Promise<{
       mods: components["schemas"]["ModSummary"][];

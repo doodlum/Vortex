@@ -33,14 +33,17 @@ vi.mock("@/extensions/nexus_integration/nexusV3Client", () => ({
 import type { IExtensionApi } from "@/types/IExtensionContext";
 import { queryClient } from "@/util/queryClient";
 
-import { MODS_PER_PAGE, useModSearch } from "./useModSearch.hook";
+import { MODS_PER_PAGE, timeRangeFilter, useModSearch } from "./useModSearch.hook";
+
+/** The time the tests start at, which the first time range counts back from. */
+const NOW = Date.parse("2026-11-03T14:35:00Z");
+
+const HOUR_MS = 60 * 60 * 1000;
+
+/** The start of a range of so many days back from a time, `NOW` unless given. */
+const daysBack = (days: number, from = NOW) => new Date(from - days * 24 * HOUR_MS).toISOString();
 
 const api = {} as IExtensionApi;
-const now = Date.parse("2026-11-03T12:00:00.000Z");
-const range = (days: number) => ({
-  gte: new Date(now - days * 86400000).toISOString(),
-  lt: new Date(now).toISOString(),
-});
 
 /** Answers the request still waiting for a preset's mods, with one mod to show. */
 const respond = (sort: string, totalCount: number) =>
@@ -49,6 +52,10 @@ const respond = (sort: string, totalCount: number) =>
     const [request] = mocks.pending.splice(index, 1);
     request.resolve({ mods: [{ id: `${totalCount}` }], meta: { total_count: totalCount } });
   });
+
+/** The page a request asks for, by number as Browse pages. */
+const pageOf = (search: ModsSearchRequest) =>
+  search.pagination.type === "page" ? search.pagination.page : undefined;
 
 /** Fails the oldest request still waiting. */
 const fail = (message: string) =>
@@ -72,13 +79,15 @@ const render = (isEnabled = true) => {
 };
 
 describe("useModSearch", () => {
-  afterEach(() => vi.restoreAllMocks());
-
   beforeEach(() => {
-    vi.spyOn(Date, "now").mockReturnValue(now);
+    vi.useFakeTimers({ toFake: ["Date"], now: NOW });
     mocks.gameDomainName = "skyrimspecialedition";
     mocks.pending = [];
     mocks.requestCount = 0;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("asks for the game's trending mods, a page at a time", async () => {
@@ -86,7 +95,7 @@ describe("useModSearch", () => {
     await waitFor(() => expect(mocks.pending).toHaveLength(2));
 
     expect(mocks.pending.map((request) => request.search)).toContainEqual({
-      filters: { games: ["skyrimspecialedition"], created_at: range(7) },
+      filters: { games: ["skyrimspecialedition"], created_at: { gte: daysBack(7) } },
       sort: { field: "endorsements", direction: "desc" },
       pagination: { type: "page", page: 1, page_size: MODS_PER_PAGE },
     });
@@ -121,7 +130,7 @@ describe("useModSearch", () => {
 
     await waitFor(() => expect(mocks.pending).toHaveLength(1));
     expect(mocks.pending[0].search).toMatchObject({
-      filters: { created_at: range(7) },
+      filters: { created_at: { gte: daysBack(7) } },
       sort: { field: "downloads", direction: "desc" },
       pagination: { page: 1 },
     });
@@ -163,7 +172,7 @@ describe("useModSearch", () => {
 
     await waitFor(() => expect(mocks.pending).toHaveLength(1));
     expect(mocks.pending[0].search).toMatchObject({
-      filters: { created_at: range(28) },
+      filters: { created_at: { gte: daysBack(28) } },
       sort: { field: "endorsements", direction: "desc" },
       pagination: { page: 1 },
     });
@@ -244,6 +253,32 @@ describe("useModSearch", () => {
     expect(result.current.filters).toEqual({ timeRange: "7" });
   });
 
+  it("keeps a page's search as time passes, so it isn't fetched again", async () => {
+    const { result, rerender } = render();
+    await respondToStart(45, 900);
+    const requests = mocks.requestCount;
+
+    vi.setSystemTime(NOW + 2 * HOUR_MS);
+    rerender();
+
+    expect(mocks.requestCount).toBe(requests);
+    expect(result.current.totalCount).toBe(45);
+  });
+
+  it("counts a range back from when it's picked", async () => {
+    const { result } = render();
+    await respondToStart(45, 900);
+    const later = NOW + 2 * HOUR_MS;
+    vi.setSystemTime(later);
+
+    act(() => result.current.setFilters({ timeRange: "28" }));
+
+    await waitFor(() => expect(mocks.pending).toHaveLength(1));
+    expect(mocks.pending[0].search.filters).toMatchObject({
+      created_at: { gte: daysBack(28, later) },
+    });
+  });
+
   it("keeps the last total while the next page loads", async () => {
     const { result } = render();
     await respondToStart(45, 900);
@@ -251,7 +286,7 @@ describe("useModSearch", () => {
     act(() => result.current.setCurrentPage(2));
 
     await waitFor(() => expect(result.current.loading).toBe(true));
-    expect(mocks.pending[0].search.pagination).toMatchObject({ type: "page", page: 2 });
+    expect(pageOf(mocks.pending[0].search)).toBe(2);
     expect(result.current.totalCount).toBe(45);
   });
 
@@ -294,27 +329,11 @@ describe("useModSearch", () => {
 
     act(() => result.current.retry());
     await waitFor(() => expect(mocks.pending).toHaveLength(1));
-    expect(mocks.pending[0].search.pagination).toMatchObject({ type: "page", page: 2 });
+    expect(pageOf(mocks.pending[0].search)).toBe(2);
     await respond("endorsements", 45);
 
     await waitFor(() => expect(result.current.error).toBeNull());
     expect(result.current.mods).toEqual([{ id: "45" }]);
-  });
-
-  it("uses update dates for updated sorting, and no date filter for all time", async () => {
-    const { result } = render();
-    await respondToStart(45, 900);
-    act(() => result.current.setSort({ field: "updated" }));
-    await waitFor(() => expect(mocks.pending).toHaveLength(1));
-    expect(mocks.pending[0].search.filters).toEqual({
-      games: ["skyrimspecialedition"],
-      updated_at: range(7),
-    });
-    await respond("updated", 12);
-
-    act(() => result.current.setFilters({ timeRange: "all" }));
-    await waitFor(() => expect(mocks.pending).toHaveLength(1));
-    expect(mocks.pending[0].search.filters).toEqual({ games: ["skyrimspecialedition"] });
   });
 
   it("asks for nothing outside a game", async () => {
@@ -333,5 +352,21 @@ describe("useModSearch", () => {
 
     expect(mocks.requestCount).toBe(0);
     expect(result.current.allModsTotal).toBe(0);
+  });
+});
+
+describe("timeRangeFilter", () => {
+  it("filters by when mods were created, exactly a range of days back", () => {
+    expect(timeRangeFilter("1", "endorsements", NOW)).toEqual({
+      created_at: { gte: daysBack(1) },
+    });
+  });
+
+  it("filters by when they were updated for the Date updated sort", () => {
+    expect(timeRangeFilter("28", "updated", NOW)).toEqual({ updated_at: { gte: daysBack(28) } });
+  });
+
+  it("doesn't filter for all time", () => {
+    expect(timeRangeFilter("all", "updated", NOW)).toEqual({});
   });
 });

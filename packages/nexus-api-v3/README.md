@@ -25,8 +25,10 @@ metadata, which `searchMods` preserves. Download sorting uses `downloads`.
 Sorting does not filter dates: `created_at` and `updated_at` filters take UTC
 date ranges with an inclusive `gte` and exclusive `lt`.
 
-Browse keeps its relative day choices in query options, outside the wire request
-and with stable cache keys. At fetch time it converts them to `created_at`
-ranges, or `updated_at` when sorting by update time. All time adds no date range.
-The query, hook and Browse toolbar tests in the renderer cover those consumers;
-run their owning project's tests separately from this package's tests.
+Browse resolves each relative day choice when it is picked and reuses that UTC
+`gte` bound while paging. Updated sorting applies it to `updated_at`; other sorts
+use `created_at`. All time adds no date range. Choosing a different time range,
+re-picking a preset or resetting filters advances the bound without changing it on
+every render. Re-selecting the current time range does nothing. The hook and query
+tests in the renderer cover those consumers; run their owning project's tests
+separately from this package's tests.
