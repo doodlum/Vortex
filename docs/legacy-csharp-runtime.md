@@ -74,17 +74,16 @@ The runtime is Framework Mono 6.14.1 with its compiler and private native librar
 stored as content-addressed objects (objects/<sha256>) plus a manifest of paths,
 modes, sizes and hashes. It lives on the mono-runtime branch of
 [doodlum/fomod-installer](https://github.com/doodlum/fomod-installer). On Linux x64,
-src/main/copy-assets.mjs downloads both files from a commit-pinned URL, checks their
-SHA-256 and caches them under
-ode_modules/.cache/fomod-csharp. The same hashes are
-pinned in
-ativeRuntimeBundle.ts, which verifies them again before preparing the
+`src/main/copy-assets.mjs` downloads both files from a commit-pinned URL, checks their
+SHA-256 and caches them under `node_modules/.cache/fomod-csharp`. The same hashes are
+pinned in `src/renderer/src/extensions/installer_fomod_ipc/utils/nativeRuntimeBundle.ts`,
+which verifies them again before preparing the
 runtime; update the URL commit and both pins together.
 
 The helper is the .NET Framework 4.8 build of the Nexus FOMOD IPC helper,
-dist/mono in @nexusmods/fomod-installer-ipc, built from that repository's
-linux branch (dotnet build -p:FomodMono=true). The build copies it to
-ssets/fomod-csharp/helper; electron-builder unpacks the asset directory so Mono
+`dist/mono` in `@nexusmods/fomod-installer-ipc`, built from that repository's
+linux branch (`dotnet build -p:FomodMono=true`). The build copies it to
+`assets/fomod-csharp/helper`; electron-builder unpacks the asset directory so Mono
 can run it. Extraction uses Vortex's existing SevenZip dependency. Mono runs from the
 verified private cache, with an explicit compiler path and native library search
 path. Windows retains its existing IPC helper and automatic Desktop Runtime setup.

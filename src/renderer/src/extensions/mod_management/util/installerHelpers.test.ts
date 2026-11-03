@@ -323,4 +323,24 @@ describe("toPosixSeparators", () => {
       value: "dinput",
     });
   });
+
+  test.each([
+    {
+      type: "error",
+      source: "C# script compilation failed: CS0023",
+      destination: null,
+      value: "fatal",
+    },
+    { type: "attribute", source: null, destination: null, key: "installerChoices", value: {} },
+    { type: "mkdir", source: null, destination: "Textures\\Chosen" },
+    { type: "generatefile", source: null, destination: "Textures\\Chosen.txt", data: "payload" },
+  ])("accepts serialized null paths on $type instructions", (serialized) => {
+    // The C# helper's JSON includes null for unused optional instruction fields.
+    const instruction = JSON.parse(JSON.stringify(serialized));
+    expect(toPosixSeparators(instruction)).toEqual({
+      ...serialized,
+      destination: serialized.destination?.replace(/\\/g, "/") ?? null,
+    });
+    expect(instruction).toEqual(serialized);
+  });
 });

@@ -604,6 +604,11 @@ within `MAX_PATH` under pnpm's hashed store directory for URL dependencies.
 The installer's file callbacks resolve archive members under their archived spelling,
 so Windows separators and case in installer XML find files on a case-sensitive
 filesystem. Installer images use `resolveCasePath` below the extracted archive.
+The C# helper can serialize unused instruction paths as `null`. Linux separator
+normalization preserves those fields, so compiler failures reach the installer error
+handler instead of causing a second error while converting paths. Regression checks
+in `installerHelpers.test.ts` and `InstallManager.instructionErrors.test.ts` cover the
+serialized fields and the fatal-error consumer; they do not execute a C# script.
 
 Real-app checks install an attended XML FOMOD, choose a non-default option, deploy,
 purge and reload the renderer; cancel one wizard and run the next; and reload while

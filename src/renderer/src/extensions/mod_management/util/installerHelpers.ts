@@ -30,10 +30,10 @@ export function findCommonRootDir(files: readonly string[]): string | undefined 
  */
 export function toPosixSeparators(instruction: IInstruction): IInstruction {
   const result = { ...instruction };
-  if (result.source !== undefined) {
+  if (typeof result.source === "string") {
     result.source = result.source.replace(/\\/g, "/");
   }
-  if (result.destination !== undefined) {
+  if (typeof result.destination === "string") {
     result.destination = result.destination.replace(/\\/g, "/");
   }
   return result;
