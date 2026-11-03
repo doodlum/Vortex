@@ -255,6 +255,23 @@ The answer is published as `data-reduce-motion="true"` on `<html>`
 - For writing reducers, registering them and the deprecated `storeHelper`
   path helpers, see [state.md](state.md).
 
+## API data (TanStack Query)
+
+Nexus Mods API data goes through TanStack Query, not Redux. The client's
+defaults are in `src/renderer/src/util/queryClient.ts`.
+
+- Queries and mutations are `queryOptions` and `mutationOptions` factories,
+  one directory each under
+  `src/renderer/src/extensions/nexus_integration/queries/` and `mutations/`.
+- A call with a side effect is a mutation, not a query, so it runs only when
+  called and is never cached. Asking for a download link records a download,
+  so it's a mutation.
+- Mutations aren't retried, which is TanStack's default: one that reached the
+  server before failing would run twice. Only set `retry` on one that's safe
+  to repeat.
+- Pass `skipToken` rather than `enabled: false` while a query's inputs aren't
+  ready, so its function never runs with them missing.
+
 ## i18n
 
 Localize with `useTranslation(["ns", "common"])`. For namespaces and key format,
@@ -290,6 +307,15 @@ label, so selecting a tab stopped working as soon as the label was translated.
   Material Symbols icon (`0 -960 960 960`): scale by 0.025 and offset absolute Y
   by +960. Keep it a single filled path with `fill="currentColor"`.
 
+## Modal buttons
+
+- The primary action is the default `Button`. A destructive one is `brand="danger"`.
+- Next to a primary action, a secondary one such as "Close" or "Cancel" is
+  `appearance="moderate" brand="neutral"`.
+- A secondary action that is the only button, such as "Close", is
+  `appearance="strong" brand="neutral"`, so it reads as the way out and not a dim
+  afterthought. `ModalLayer` does this for the dialogs it draws.
+
 ## Pages and extensions
 
 - Register with `context.registerMainPage(icon, title, Component, options)`.
@@ -314,3 +340,16 @@ how to select elements and the extension-test mocking pattern, see
 
 Prefer self-documenting names over comments. Comment the non-obvious **why** (a
 subscription tradeoff, a workaround), not the **what**. Remove narration.
+
+## Legacy table navigation
+
+`controls/Table.tsx` (SuperTable) serves the production Mods table. With
+`stickyHeader`, rows scroll in the nearest ancestor whose vertical overflow is
+`auto`, `scroll` or `overlay`; when none exists, the document scrolls.
+Other tables scroll their own main pane. The `<tableId>-scroll-to` event brings
+the requested row into that scroller's visible area, allowing space for the
+sticky header. For example, the Plugins page emits `mods-scroll-to` after
+opening the Mods page for a plugin's owning mod. Page Up/Down uses the same
+scroller's height when choosing the next row. The development-only modern
+Mods table has separate navigation; SuperTable's event listeners do not apply
+to it.

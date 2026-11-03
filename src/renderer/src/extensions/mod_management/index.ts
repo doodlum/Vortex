@@ -90,11 +90,18 @@ import {
   onStartInstallDownload,
 } from "./eventHandlers";
 import InstallManager from "./InstallManager";
+import {
+  createManualInstaller,
+  MANUAL_INSTALLER_ID,
+  MANUAL_INSTALLER_PRIORITY,
+} from "./manualInstaller";
+import { answerManualInstallerRequest, MANUAL_INSTALLER_DIALOG_ID } from "./manualInstallerQueue";
 import deployMods from "./modActivation";
 import { deriveModInstallName } from "./modIdManager";
 import mergeMods, { mergedSourceName } from "./modMerging";
 import preStartDeployHook from "./preStartDeployHook";
 import { deploymentReducer } from "./reducers/deployment";
+import { manualInstallerReducer } from "./reducers/manualInstaller";
 import { modsReducer } from "./reducers/mods";
 import { modsTableViewsReducer } from "./reducers/modsTableViews";
 import { sessionReducer } from "./reducers/session";
@@ -158,6 +165,10 @@ import DeactivationButton from "./views/DeactivationButton";
 import type { IDuplicatesMap, IRemoveDuplicateMap } from "./views/DuplicatesDialog";
 import {} from "./views/ExternalChangeDialog";
 import {} from "./views/FixDeploymentDialog";
+import {
+  ManualInstallerDialog,
+  type IManualInstallerDialogProps,
+} from "./views/ManualInstallerDialog";
 import {} from "./views/ModList";
 import {} from "./views/Settings";
 import URLInput from "./views/URLInput";
@@ -2053,6 +2064,7 @@ function checkStagingFolder(api: IExtensionApi): Promise<ITestResult> {
 
 function init(context: IExtensionContext): boolean {
   context.registerReducer(["session", "mods"], sessionReducer);
+  context.registerReducer(["session", "manualInstaller"], manualInstallerReducer);
   context.registerReducer(["settings", "mods"], settingsReducer);
   context.registerReducer(["settings", "modsTableViews"], modsTableViewsReducer);
   context.registerReducer(["persistent", "mods"], modsReducer);
@@ -2273,6 +2285,17 @@ function init(context: IExtensionContext): boolean {
   context.registerDialog("collection-update-warning", CollectionUpdateWarning);
 
   context.registerDialog(
+    MANUAL_INSTALLER_DIALOG_ID,
+    ManualInstallerDialog,
+    () =>
+      ({
+        request: context.api.getState().session.manualInstaller.pending[0],
+        onAnswer: (requestId, answer) =>
+          answerManualInstallerRequest(context.api, requestId, answer),
+      }) satisfies Partial<IManualInstallerDialogProps>,
+  );
+
+  context.registerDialog(
     "external-changes",
     LazyComponent(() => require("./views/ExternalChangeDialog")),
   );
@@ -2369,6 +2392,14 @@ function init(context: IExtensionContext): boolean {
 
   registerAttributeExtractor(150, attributeExtractor);
   registerAttributeExtractor(10, upgradeExtractor);
+
+  const manualInstaller = createManualInstaller(context.api);
+  registerInstaller(
+    MANUAL_INSTALLER_ID,
+    MANUAL_INSTALLER_PRIORITY,
+    manualInstaller.testSupported,
+    manualInstaller.install,
+  );
 
   registerInstaller("fallback", 1000, basicInstaller.testSupported, basicInstaller.install);
 
