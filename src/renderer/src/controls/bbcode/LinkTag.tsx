@@ -48,23 +48,27 @@ class LinkTag extends Tag {
       return this.getComponents();
     }
 
-    return this.renderLinkedContent((children) => (
-      <ErrorContext.Consumer>
-        {(context) => (
-          <a
-            href={href}
-            // tslint:disable-next-line:jsx-no-lambda
-            onClick={context.safeCB(
-              (evt) => this.clicked(evt, callbacks, allowLocal),
-              [this.renderer.options],
+    return (
+      <>
+        {this.renderLinkedContent((children) => (
+          <ErrorContext.Consumer>
+            {(context) => (
+              <a
+                href={href}
+                // tslint:disable-next-line:jsx-no-lambda
+                onClick={context.safeCB(
+                  (evt) => this.clicked(evt, callbacks, allowLocal),
+                  [this.renderer.options],
+                )}
+                title={title}
+              >
+                {children}
+              </a>
             )}
-            title={title}
-          >
-            {children}
-          </a>
-        )}
-      </ErrorContext.Consumer>
-    ));
+          </ErrorContext.Consumer>
+        ))}
+      </>
+    );
   }
 
   /** Lets safe content keep interactive placeholders outside the link. */
