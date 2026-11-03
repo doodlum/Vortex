@@ -21,6 +21,7 @@ import { ICollectionSearchResult } from '@nexusmods/nexus-api';
 import { IDiscoveryResult } from '@/extensions/gamemode_management/types/IDiscoveryResult';
 import { IDownload } from '@/extensions/download_management/types/IDownload';
 import { IDownloadURL } from '@nexusmods/nexus-api';
+import { IExternalImagePlaceholderOptions } from '@/ui/components/prose/external_image_placeholder/ExternalImagePlaceholder';
 import { IFeedbackResponse } from '@nexusmods/nexus-api';
 import { IFileInfo } from '@nexusmods/nexus-api';
 import { IHashResult } from 'modmeta-db';
@@ -994,6 +995,7 @@ interface IBBCodeContext {
     callbacks?: {
         [name: string]: (...args: unknown[]) => void;
     };
+    externalImagePlaceholders?: IExternalImagePlaceholderOptions;
     isFromAdultContent?: boolean;
 }
 
@@ -5086,31 +5088,31 @@ export class ZoomableImage extends React$2.Component<IZoomableImageProps, {
 
 // Warnings were encountered during analysis:
 //
-// lib/api.d.ts:184:5 - (ae-forgotten-export) The symbol "IBBCodeContext" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:186:5 - (ae-forgotten-export) The symbol "DialogContentItem" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:767:3 - (ae-forgotten-export) The symbol "ByteRange" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:827:3 - (ae-forgotten-export) The symbol "IChoices" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:1076:5 - (ae-forgotten-export) The symbol "ICollectionModInstallInfo" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:1234:5 - (ae-forgotten-export) The symbol "IItemRendererProps" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:2277:5 - (ae-forgotten-export) The symbol "IQueryArgEntry" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:2946:5 - (ae-forgotten-export) The symbol "IEditChoice" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:3658:5 - (ae-forgotten-export) The symbol "IMod$1" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:4035:3 - (ae-forgotten-export) The symbol "IGameDetail" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:4463:5 - (ae-forgotten-export) The symbol "IStateVerifier" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:5158:7 - (ae-forgotten-export) The symbol "IProgress" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:5163:5 - (ae-forgotten-export) The symbol "IExtensionLoadFailure" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:5166:5 - (ae-forgotten-export) The symbol "IRunningTool" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:5169:5 - (ae-forgotten-export) The symbol "IUIBlocker" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:5184:5 - (ae-forgotten-export) The symbol "IRowState" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:5229:5 - (ae-forgotten-export) The symbol "IExtensionState$1" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:5270:5 - (ae-forgotten-export) The symbol "DownloadCheckpoint" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:5290:5 - (ae-forgotten-export) The symbol "IDashletSettings" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:5356:5 - (ae-forgotten-export) The symbol "IAttributeState" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:5440:7 - (ae-forgotten-export) The symbol "IGameInfoEntry" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:5475:5 - (ae-forgotten-export) The symbol "IOverlay" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:5561:5 - (ae-forgotten-export) The symbol "IDiscoveryPhase" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:9028:3 - (ae-forgotten-export) The symbol "MainPageBody" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:9029:3 - (ae-forgotten-export) The symbol "MainPageHeader" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:187:5 - (ae-forgotten-export) The symbol "IBBCodeContext" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:189:5 - (ae-forgotten-export) The symbol "DialogContentItem" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:770:3 - (ae-forgotten-export) The symbol "ByteRange" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:830:3 - (ae-forgotten-export) The symbol "IChoices" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:1079:5 - (ae-forgotten-export) The symbol "ICollectionModInstallInfo" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:1237:5 - (ae-forgotten-export) The symbol "IItemRendererProps" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:2280:5 - (ae-forgotten-export) The symbol "IQueryArgEntry" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:2949:5 - (ae-forgotten-export) The symbol "IEditChoice" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:3661:5 - (ae-forgotten-export) The symbol "IMod$1" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:4038:3 - (ae-forgotten-export) The symbol "IGameDetail" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:4466:5 - (ae-forgotten-export) The symbol "IStateVerifier" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:5161:7 - (ae-forgotten-export) The symbol "IProgress" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:5166:5 - (ae-forgotten-export) The symbol "IExtensionLoadFailure" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:5169:5 - (ae-forgotten-export) The symbol "IRunningTool" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:5172:5 - (ae-forgotten-export) The symbol "IUIBlocker" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:5187:5 - (ae-forgotten-export) The symbol "IRowState" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:5232:5 - (ae-forgotten-export) The symbol "IExtensionState$1" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:5273:5 - (ae-forgotten-export) The symbol "DownloadCheckpoint" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:5293:5 - (ae-forgotten-export) The symbol "IDashletSettings" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:5359:5 - (ae-forgotten-export) The symbol "IAttributeState" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:5443:7 - (ae-forgotten-export) The symbol "IGameInfoEntry" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:5478:5 - (ae-forgotten-export) The symbol "IOverlay" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:5564:5 - (ae-forgotten-export) The symbol "IDiscoveryPhase" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:9031:3 - (ae-forgotten-export) The symbol "MainPageBody" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:9032:3 - (ae-forgotten-export) The symbol "MainPageHeader" needs to be exported by the entry point api.d.ts
 
 // (No @packageDocumentation comment for this package)
 
