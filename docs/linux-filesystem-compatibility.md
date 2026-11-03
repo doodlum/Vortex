@@ -174,6 +174,15 @@ SDK library identity. Vortex keeps its own home, and an explicit tool HOME overr
 remains in effect. Start Steam once and initialise the game prefix before using tools.
 Proton launches use the same cancellation, error notification, exit recording and
 hide-and-recover window handling as ordinary executable launches.
+Flatpak tool state follows the host process monitor rather than a fixed stop timer.
+The launch record lets the monitor match native tools by their exact executable path
+across PID namespaces. Once a target PID is identified, a later successful poll with
+no matching process clears its running state. Until then, the existing Linux startup
+grace of 30 seconds applies: a short process never seen by a poll can remain marked as
+starting until the grace expires. Run
+`StarterInfo.test.ts` and `gamemode_management/util/ProcessMonitor.test.ts` from the
+renderer on both hosts for this boundary. Their simulated process lists are separate
+from an actual packaged native-tool launch and lifetime check.
 
 When Proton's tool manifest declares a required Steam Runtime AppID, direct game and
 tool launches run Proton inside that exact installed container. This supplies the Linux

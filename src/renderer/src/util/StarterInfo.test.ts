@@ -1,8 +1,13 @@
 import PromiseBB from "bluebird";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
+import ProcessMonitor from "../extensions/gamemode_management/util/ProcessMonitor";
+import type { IProcessInfo } from "../extensions/gamemode_management/util/processProvider";
+import { isExeRunning, makeExeId, sessionReducer } from "../reducers/session";
 import {
   makeApiHarness,
+  makeGameStored,
+  makeProfile,
   makeStarterInfo,
   registerHarnessGame,
   resetHarnessRegistries,
@@ -60,9 +65,84 @@ beforeEach(() => {
   };
 });
 afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
   resetHarnessRegistries();
   vi.unstubAllGlobals();
   window.api = originalApi;
+});
+
+test("Flatpak keeps a launched native tool visible to the host monitor until its process exits", async () => {
+  vi.useFakeTimers();
+  vi.stubEnv("IS_FLATPAK", "true");
+  const profile = makeProfile();
+  const info = makeStarterInfo({
+    isGame: false,
+    exePath: "/tools/native-editor",
+    exclusive: true,
+    onStart: undefined,
+  });
+  registerHarnessGame(info.gameId);
+  const h = makeApiHarness(
+    {
+      profiles: { [profile.id]: profile },
+      activeProfileId: profile.id,
+      knownGames: [makeGameStored()],
+      discovered: { [info.gameId]: { path: "/games/test" } },
+    },
+    [{ path: ["session", "base"], reducer: sessionReducer }],
+  );
+  h.setState((draft) => {
+    const discovery = draft.settings.gameMode.discovered[info.gameId];
+    discovery.executable = "SkyrimSE.exe";
+    discovery.tools = {
+      native: {
+        id: "native",
+        name: "Native editor",
+        path: info.exePath,
+        executable: () => "native-editor",
+        requiredFiles: [],
+        hidden: false,
+        custom: true,
+        exclusive: true,
+      },
+    };
+  });
+  let processes: IProcessInfo[] = [
+    { pid: 7001, ppid: 1, name: "native-editor", path: info.exePath },
+  ];
+  const monitor = new ProcessMonitor(h.api, {
+    foreignNamespace: true,
+    list: async () => processes,
+  }) as unknown as { doCheck(): Promise<void> };
+  let finish: () => void;
+  const lifetime = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  h.setRunProcess(async (options) => {
+    options.onSpawned?.(123);
+    await lifetime;
+    options.onExit?.(0, null);
+  });
+  const onError = vi.fn();
+  const launching = StarterInfo.run(info, h.api, onError);
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(isExeRunning(h.api.getState().session.base.toolsRunning, info.exePath)).toBe(true);
+    await vi.advanceTimersByTimeAsync(3000);
+    await monitor.doCheck();
+    expect(h.api.getState().session.base.toolsRunning[makeExeId(info.exePath)]).toMatchObject({
+      pid: 7001,
+      exclusive: true,
+    });
+    processes = [];
+    await monitor.doCheck();
+    expect(isExeRunning(h.api.getState().session.base.toolsRunning, info.exePath)).toBe(false);
+    expect(onError).not.toHaveBeenCalled();
+  } finally {
+    finish!();
+    await launching;
+  }
 });
 
 function harness() {

@@ -4,7 +4,7 @@ import * as path from "path";
 import { getErrorCode, unknownToError } from "@vortex/shared";
 import PromiseBB from "bluebird";
 
-import { setToolRunning, setToolStopped } from "../actions";
+import { setToolRunning } from "../actions";
 import { ApplicationData } from "../applicationData";
 import { emitModListSnapshot } from "../extensions/analytics/utils/modListSnapshot";
 import type { IDiscoveryResult } from "../extensions/gamemode_management/types/IDiscoveryResult";
@@ -124,14 +124,6 @@ class StarterInfo implements IStarterInfo {
       if (info.isGame) {
         void emitModListSnapshot(api, info.gameId);
       }
-
-      // Flatpak can't reliably observe host game exit for now, so emulate stop after a short delay
-      // for now. We'll come up with a better solution/design in the future.
-      if (process.platform === "linux" && process.env.IS_FLATPAK === "true") {
-        setTimeout(() => {
-          api.store.dispatch(setToolStopped(info.exePath));
-        }, 2000);
-      }
     };
 
     // a game without an executable (Tier 0: launched through its store) has
@@ -178,8 +170,8 @@ class StarterInfo implements IStarterInfo {
       // to the launcher
       const isLinuxSteamLauncher =
         process.platform !== "win32" && launcherResult.launcher === "steam";
-      // Keep existing Linux Steam behavior unless running under Flatpak, where we now
-      // emulate stop events to avoid stale running state.
+      // Linux Steam launches outside Flatpak rely on ordinary process discovery.
+      // Flatpak also records the launch so the host monitor can match across PID namespaces.
       if (!isLinuxSteamLauncher || process.env.IS_FLATPAK === "true") {
         onSpawned();
       }
