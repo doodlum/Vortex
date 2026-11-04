@@ -24,6 +24,35 @@ Tests are colocated with the code they cover, as `src/**/*.test.ts` (or
 `*.test.tsx` for components). Component tests use `vitest` with
 `@testing-library/react` v16.
 
+## Build cache outputs
+
+Main's build target must declare each standalone worker and source map in
+`src/main/package.json`. Nx restores the declared outputs on a cache hit; an omitted
+worker can make a successful cached build fail when the app first hashes a file.
+
+After installing the normal workspace dependencies, run from `src/main`:
+
+```sh
+pnpm exec vitest run build-outputs.test.ts
+```
+
+This account-free test compares literal `bundleWorker` entries in the real build script
+with the cache output declaration. It needs no running app and does not itself prove a
+cache round trip. For that check, stop the app and prepare dependencies with the normal
+build first. Set `NX_CACHE_DIRECTORY` to a new private temporary directory and keep
+`NODE_ENV=production` consistent across both runs. Run from the repo root:
+
+```sh
+pnpm exec nx run @vortex/main:build --excludeTaskDependencies --skipRemoteCache --output-style=static
+```
+
+Record hashes of `src/main/build/hash-worker.cjs` and its `.map`, then move only those
+two generated files to a private backup. Repeat the same command and confirm it reports
+a local cache hit and restores both hashes. Keep backups until restoration is verified;
+if it fails, restore the generated files before launching the app. Dependency tasks are
+excluded only because the normal build already prepared them. This checks the real local
+cache contract, separately from an app install or packaged-runtime test.
+
 ## Finding elements in component tests
 
 Pick the most specific selector that is unambiguous:

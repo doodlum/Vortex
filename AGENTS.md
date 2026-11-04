@@ -8,6 +8,11 @@ to load for a task. It deliberately duplicates nothing from `docs/`.
 
 `pnpm run verify` from the repo root.
 
+Main worker build/cache changes also run `pnpm exec vitest run build-outputs.test.ts` from
+`src/main`. Every literal `bundleWorker` output and source map belongs in the main build
+target outputs. Verify actual restoration from a private local Nx cache on a stopped
+checkout; preserve generated-file backups and use the testing guide for scope.
+
 Scope a single test with `pnpm exec vitest run <file>` from inside the project
 directory that owns it (e.g. `cd src/renderer` first). `pnpm run test` runs the
 whole suite via nx and cannot be scoped.
