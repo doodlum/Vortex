@@ -121,6 +121,16 @@ recommendation appropriate to the files and packages that remain. Filesystem acc
 instead of being interpreted as a missing installation.
 
 New local SMAPI loader installations keep their archive-derived or chosen display name. The loader is recognized by its root `StardewModdingAPI.dll` and a native or Windows apphost, so its bundled Console Commands manifest does not rename the whole package. Ordinary mod manifests still supply their mod names. Existing custom names are preserved.
+The generic missing-primary-tool warning refreshes after the current profile deploys or purges, and when a primary tool is selected. A successful validation clears the stale warning. Filesystem executables must be regular files; required companion directories remain supported. An empty working-directory setting uses the executable's parent directory. Missing files select the game executable as the fallback, while access errors are reported without clearing the chosen tool. Results from an older profile, selection, executable path or superseded validation are ignored.
+
+For changes to this shared launcher behavior, also run from `src/renderer` on both hosts:
+
+```sh
+pnpm exec vitest run src/extensions/starter_dashlet
+pnpm run typecheck
+```
+
+These checks use real temporary files, the registered health check and lifecycle callbacks, and controlled delayed/access-error responses. They cover current-profile deploy/purge refresh, repaired executables, custom and non-filesystem launchers, companion directories, default working directories, stale checks and repeated selection of the same tool. They require writable temporary space and no game or account. Verify the visible warning and actual selected tool in a packaged app separately.
 
 Run from `extensions/games/game-stardewvalley` on both hosts:
 

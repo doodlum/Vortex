@@ -1,5 +1,6 @@
 import path from "path";
 
+import { getErrorCode, unknownToError } from "@vortex/shared";
 import PromiseBB from "bluebird";
 import memoize from "memoize-one";
 
@@ -8,7 +9,7 @@ import type { IState } from "@/types/api";
 import type { IExtensionApi, IExtensionContext } from "../../types/IExtensionContext";
 import type { ITestResult } from "../../types/ITestResult";
 import * as fs from "../../util/fs";
-import { activeGameId } from "../../util/selectors";
+import { activeGameId, activeProfileId } from "../../util/selectors";
 import type { IStarterInfo } from "../../util/StarterInfo";
 import { getSafe } from "../../util/storeHelper";
 import { truthy } from "../../util/util";
@@ -19,13 +20,25 @@ import { setPrimaryTool } from "./actions";
 import settingsReducer from "./reducers";
 import Tools from "./Tools";
 
+const primaryToolChecks = new WeakMap<IExtensionApi, number>();
+
+function supersedePrimaryToolCheck(api: IExtensionApi): number {
+  const checkId = (primaryToolChecks.get(api) ?? 0) + 1;
+  primaryToolChecks.set(api, checkId);
+  return checkId;
+}
+
 function testPrimaryTool(api: IExtensionApi): PromiseBB<ITestResult> {
+  const checkId = supersedePrimaryToolCheck(api);
   const state = api.store.getState();
 
   const gameMode = activeGameId(state);
   if (gameMode === undefined) {
     return PromiseBB.resolve(undefined);
   }
+  const profileId = activeProfileId(state);
+  const primarySelections = state.settings.interface.primaryTool;
+  const profileSelections = state.settings.profiles;
   const primaryToolId = getSafe(
     state,
     ["settings", "interface", "primaryTool", gameMode],
@@ -39,6 +52,30 @@ function testPrimaryTool(api: IExtensionApi): PromiseBB<ITestResult> {
       ["settings", "gameMode", "discovered", gameMode, "tools", primaryToolId],
       undefined,
     );
+
+    const selectedPath = primaryTool?.path;
+    const selectedWorkingDirectory = primaryTool?.workingDirectory;
+    const selectedName = primaryTool?.name;
+    const requiredNames: string[] = [...(primaryTool?.requiredFiles ?? [])];
+    const stillCurrent = () => {
+      const latest = api.store.getState();
+      const latestSelections = latest.settings.interface.primaryTool;
+      const latestTool = latest.settings.gameMode.discovered[gameMode]?.tools?.[primaryToolId];
+      const latestRequired = latestTool?.requiredFiles ?? [];
+      return (
+        primaryToolChecks.get(api) === checkId &&
+        activeGameId(latest) === gameMode &&
+        activeProfileId(latest) === profileId &&
+        latest.settings.profiles === profileSelections &&
+        latestSelections === primarySelections &&
+        latestSelections?.[gameMode] === primaryToolId &&
+        latestTool?.path === selectedPath &&
+        latestTool?.workingDirectory === selectedWorkingDirectory &&
+        latestTool?.name === selectedName &&
+        latestRequired.length === requiredNames.length &&
+        requiredNames.every((file, index) => latestRequired[index] === file)
+      );
+    };
 
     // name the missing tool if we can (e.g. "Skyrim Script Extender 64"), the
     // discovered entry may be gone entirely so fall back to the game's tool list
@@ -78,22 +115,43 @@ function testPrimaryTool(api: IExtensionApi): PromiseBB<ITestResult> {
     };
 
     if (primaryTool === undefined || !truthy(primaryTool.path)) {
-      notifyInvalid();
-      api.store.dispatch(setPrimaryTool(gameMode, undefined));
+      if (stillCurrent()) {
+        notifyInvalid();
+        if (stillCurrent()) api.store.dispatch(setPrimaryTool(gameMode, undefined));
+      }
     } else {
-      const workingDir =
-        primaryTool.workingDirectory !== undefined
-          ? primaryTool.workingDirectory
-          : path.dirname(primaryTool.path);
+      const workingDir = truthy(primaryTool.workingDirectory)
+        ? primaryTool.workingDirectory
+        : path.dirname(primaryTool.path);
 
       // Make sure all the required files are still present.
-      const requiredFiles = primaryTool.requiredFiles.map((file) => path.join(workingDir, file));
-      return PromiseBB.each(requiredFiles, (file: string) => fs.statAsync(file))
-        .then(() => PromiseBB.resolve(undefined))
+      const requiredFiles = requiredNames.map((file) => path.join(workingDir, file));
+      const physicalExecutable = path.isAbsolute(selectedPath);
+      if (physicalExecutable) requiredFiles.push(selectedPath);
+      return PromiseBB.each([...new Set(requiredFiles)], async (file: string) => {
+        const info = await fs.statAsync(file);
+        if (physicalExecutable && file === selectedPath && !info.isFile()) {
+          throw Object.assign(new Error("Primary tool path is not a regular file"), {
+            code: "ENOTDIR",
+          });
+        }
+      })
+        .then(() => {
+          if (stillCurrent()) api.dismissNotification("invalid-primary-tool");
+          return undefined;
+        })
         .catch((err) => {
-          notifyInvalid();
-          api.store.dispatch(setPrimaryTool(gameMode, undefined));
-          return PromiseBB.resolve(undefined);
+          if (!stillCurrent()) return undefined;
+          const code = getErrorCode(err);
+          if (code === "ENOENT" || code === "ENOTDIR") {
+            notifyInvalid();
+            if (stillCurrent()) api.store.dispatch(setPrimaryTool(gameMode, undefined));
+          } else {
+            api.showErrorNotification("Failed to check primary tool", unknownToError(err), {
+              allowReport: false,
+            });
+          }
+          return undefined;
         });
     }
   }
@@ -101,14 +159,17 @@ function testPrimaryTool(api: IExtensionApi): PromiseBB<ITestResult> {
   return PromiseBB.resolve(undefined);
 }
 
-const onDeploymentEvent = async (api: IExtensionApi): Promise<void> => {
+const onDeploymentEvent = async (api: IExtensionApi, profileId: string): Promise<void> => {
   const state = api.store.getState();
   const gameMode = activeGameId(state);
-  if (gameMode !== undefined) {
-    // Increment deployment counter to trigger tool validation update
-    api.store.dispatch(incrementDeploymentCounter(gameMode));
-    await api.emitAndAwait("discover-tools", gameMode);
-  }
+  if (gameMode === undefined || activeProfileId(state) !== profileId) return;
+  // Discovery can await while files already reflect this deployment or purge.
+  supersedePrimaryToolCheck(api);
+  api.store.dispatch(incrementDeploymentCounter(gameMode));
+  await api.emitAndAwait("discover-tools", gameMode);
+  const latest = api.store.getState();
+  if (activeProfileId(latest) !== profileId || activeGameId(latest) !== gameMode) return;
+  await testPrimaryTool(api);
 };
 
 const toolsValidation = memoize(validateTools);
@@ -138,8 +199,21 @@ function init(context: IExtensionContext): boolean {
   context.once(() => {
     // Purging and deploying may change the tool state. We need to kick off
     //  a discovery event.
-    context.api.onAsync("did-deploy", () => onDeploymentEvent(context.api));
-    context.api.onAsync("did-purge", () => onDeploymentEvent(context.api));
+    context.api.onAsync("did-deploy", (profileId: string) =>
+      onDeploymentEvent(context.api, profileId),
+    );
+    context.api.onAsync("did-purge", (profileId: string) =>
+      onDeploymentEvent(context.api, profileId),
+    );
+    context.api.onStateChange(["settings", "interface", "primaryTool"], (_previous, current) => {
+      const gameMode = activeGameId(context.api.store.getState());
+      if (gameMode === undefined || !truthy(getSafe(current, [gameMode], undefined))) return;
+      return testPrimaryTool(context.api).catch((err) => {
+        context.api.showErrorNotification("Failed to check primary tool", unknownToError(err), {
+          allowReport: false,
+        });
+      });
+    });
   });
   return true;
 }
