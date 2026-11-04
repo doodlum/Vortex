@@ -28,6 +28,7 @@ import { log } from "../../util/log";
 import { showError } from "../../util/message";
 import { downloadPathForGame } from "../../util/selectors";
 import { knownGames } from "../../util/selectors";
+import { settleAll } from "../../util/settleAll";
 import { getSafe } from "../../util/storeHelper";
 import { batchDispatch, makeQueue, truthy } from "../../util/util";
 import { emitModRemoved } from "../analytics/mixpanel/modChangeAnalytics";
@@ -680,7 +681,7 @@ async function undeploy(
 
   try {
     // all mod types settle before the queue moves on
-    const typeResults = await Promise.allSettled(
+    const typeResults = await settleAll(
       Object.keys(byModTypes).map(async (typeId) => {
         const subdir = genSubDirFunc(game, getModType(typeId));
         const deployPath = modPaths[typeId || ""];

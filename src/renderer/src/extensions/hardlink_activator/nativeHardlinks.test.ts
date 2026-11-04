@@ -1,13 +1,27 @@
 import * as fs from "node:fs";
+import { lstat, unlink } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { afterEach, expect, it } from "vitest";
+import PromiseBB from "bluebird";
+import { afterEach, expect, it, vi } from "vitest";
+
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  const mocked = { ...actual, lstat: vi.fn(actual.lstat), unlink: vi.fn(actual.unlink) };
+  return { ...mocked, default: mocked };
+});
 
 import { purgeNativeHardlinks } from "./nativeHardlinks";
 
+// Async functions retain the intrinsic native constructor even when the renderer global is Bluebird.
+const NativePromise = (async () => undefined)().constructor as PromiseConstructor;
+
 const roots: string[] = [];
 afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.mocked(lstat).mockReset().mockImplementation(fs.promises.lstat);
+  vi.mocked(unlink).mockReset().mockImplementation(fs.promises.unlink);
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -81,5 +95,50 @@ it.skipIf(process.platform === "win32")(
 
     expect(fs.lstatSync(shortcut).isSymbolicLink()).toBe(true);
     expect(fs.readFileSync(path.join(external, "mod.ini"), "utf8")).toBe("mod");
+  },
+);
+
+it.each(["native", "bluebird"] as const)(
+  "propagates denied unlink with the %s Promise runtime, including Bluebird global",
+  async (runtime) => {
+    const h = fixture();
+    const source = path.join(h.staging, "mod.ini");
+    const target = path.join(h.game, "mod.ini");
+    fs.writeFileSync(source, "staged mod");
+    fs.linkSync(source, target);
+    const denied = Object.assign(new Error("unlink denied"), { code: "EACCES" });
+    vi.mocked(unlink).mockRejectedValueOnce(denied);
+    vi.stubGlobal("Promise", runtime === "bluebird" ? PromiseBB : NativePromise);
+    try {
+      await expect(purgeNativeHardlinks(h.staging, h.game)).rejects.toMatchObject({
+        errors: [denied],
+      });
+      expect(fs.readFileSync(target, "utf8")).toBe("staged mod");
+      expect(fs.statSync(source).nlink).toBe(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  },
+);
+it.each(["native", "bluebird"] as const)(
+  "refuses an incomplete staging ownership scan with the %s Promise runtime",
+  async (runtime) => {
+    const h = fixture();
+    const source = path.join(h.staging, "mod.ini");
+    const target = path.join(h.game, "mod.ini");
+    fs.writeFileSync(source, "staged mod");
+    fs.linkSync(source, target);
+    const failure = Object.assign(new Error("ownership scan failed"), { code: "EIO" });
+    vi.mocked(lstat).mockRejectedValueOnce(failure);
+    vi.stubGlobal("Promise", runtime === "bluebird" ? PromiseBB : NativePromise);
+    try {
+      await expect(purgeNativeHardlinks(h.staging, h.game)).rejects.toMatchObject({
+        errors: [failure],
+      });
+      expect(unlink).not.toHaveBeenCalled();
+      expect(fs.readFileSync(target, "utf8")).toBe("staged mod");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   },
 );

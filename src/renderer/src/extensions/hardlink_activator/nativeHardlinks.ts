@@ -3,6 +3,8 @@ import * as path from "node:path";
 
 import { getErrorCode } from "@vortex/shared";
 
+import { settleAll } from "../../util/settleAll";
+
 async function* filesUnder(directory: string): AsyncGenerator<string> {
   let entries;
   try {
@@ -31,7 +33,7 @@ async function linkedFileIdentity(file: string): Promise<string | undefined> {
 async function visitFiles(root: string, visit: (file: string) => Promise<void>): Promise<void> {
   const pending: string[] = [];
   const settle = async () => {
-    const results = await Promise.allSettled(pending.splice(0).map(visit));
+    const results = await settleAll(pending.splice(0).map(visit));
     const errors: unknown[] = [];
     for (const result of results) {
       if (result.status === "rejected") errors.push(result.reason);

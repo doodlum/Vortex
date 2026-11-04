@@ -70,13 +70,28 @@ This prevents new false ownership records; it cannot reconstruct a staged mod th
 already changed by accepting an external-change import. Reinstall that mod from its
 original archive when needed.
 
+Native purge waits for every operation in the current filesystem batch before reporting
+an ownership-scan or unlink failure. Renderer batches use standard tagged results even
+when the running application provides Bluebird promises. Except for the existing missing-mod
+Ignore/Deploy recovery flow, rejected per-type undeployment stops mod removal before
+deleting staging files or mod records. Restore access and
+retry through Vortex; retained manifest entries still identify files it owns.
+
 From `src/renderer` on both hosts, run:
 
 ```sh
+pnpm exec vitest run src/util/settleAll.test.ts src/extensions/hardlink_activator/nativeHardlinks.test.ts src/extensions/hardlink_activator/nativeHardlinks.failure.test.ts src/extensions/mod_management/eventHandlers.removeMods.test.ts
 pnpm exec vitest run src/extensions/mod_management/LinkingDeployment.purgeLifecycle.test.ts src/extensions/mod_management/LinkingDeployment.parity.test.ts src/extensions/mod_management/LinkingDeployment.caseInsensitive.test.ts src/extensions/mod_management/util/activationStore.test.ts src/extensions/mod_management/util/deploy.test.ts
 ```
 
-These tests need only a writable temporary filesystem. The regression deliberately gives
+These tests need only a writable temporary filesystem. The renderer batch tests run with
+both native and Bluebird Promise implementations, including rejected filesystem work and
+removal staging retention. A packaged fault check must also deny unlink of a mod-only file
+with no original backup: a later backup-restoration error must not mask a swallowed unlink
+failure. Restore the test directory permissions, retry purge, and verify staged bytes,
+originals and unmanaged files before redeploying.
+
+The restoration tests need only a writable temporary filesystem. The regression deliberately gives
 the original and mod identical timestamps, exercises nested purge roots, checks the
 leftover calculation before restoration, and verifies original and staged bytes through a
 new deployment. Fault injection and standalone-call controls preserve failure and API
