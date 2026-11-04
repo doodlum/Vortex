@@ -279,3 +279,25 @@ it("ignores an old setup path when discovery already selected a different instal
   expect(api.sendNotification).not.toHaveBeenCalled();
   expect(api.store.dispatch).not.toHaveBeenCalled();
 });
+
+it("replaces the deployment action after the last SMAPI package is removed", async () => {
+  state.persistent.profiles.active.modState[mod.id].enabled = false;
+  await new StardewValleyGame(context).setup?.({ path: directory } as types.IDiscoveryResult);
+  expect(api.sendNotification.mock.calls.at(-1)?.[0].actions[0].title).toBe("Deploy");
+  delete state.persistent.mods.stardewvalley[mod.id];
+  // emitAndAwait with no registered listener is a no-op in the app.
+  await handlers.get("did-remove-mods")?.("stardewvalley", [mod]);
+  const notification = api.sendNotification.mock.calls.at(-1)?.[0];
+  expect(notification?.title).toBe("SMAPI is not installed");
+  expect(notification?.actions[0].title).toBe("Get SMAPI");
+});
+it("keeps the deployment action when a failed removal leaves SMAPI installed", async () => {
+  state.persistent.profiles.active.modState[mod.id].enabled = false;
+  await handlers.get("did-remove-mods")?.("stardewvalley", [mod]);
+  expect(api.sendNotification.mock.calls.at(-1)?.[0].actions[0].title).toBe("Deploy");
+});
+it("ignores removal completion for another game", async () => {
+  await handlers.get("did-remove-mods")?.("other-game", []);
+  expect(api.sendNotification).not.toHaveBeenCalled();
+  expect(api.store.dispatch).not.toHaveBeenCalled();
+});

@@ -77,6 +77,13 @@ export function registerRuntimeEvents(context: types.IExtensionContext) {
       await refreshSMAPIState(context.api, { profileId });
     });
 
+    context.api.onAsync("did-remove-mods", async (gameId: string) => {
+      if (gameId !== GAME_ID) return;
+      // Removal completion also fires after failure: read the current mod/file
+      // state rather than assuming the requested packages were removed.
+      await refreshSMAPIState(context.api);
+    });
+
     context.api.events.on("did-install-mod", (gameId: string, archiveId: string, modId: string) => {
       if (gameId !== GAME_ID) {
         return;

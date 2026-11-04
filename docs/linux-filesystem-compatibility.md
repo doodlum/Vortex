@@ -115,7 +115,9 @@ status. A successful deployment clears an earlier missing-SMAPI warning. Disabli
 purging SMAPI clears its primary-tool selection when the executable is absent; a custom
 primary tool is preserved. An installed but disabled SMAPI package offers **Deploy**, which
 enables that package before deployment, rather than downloading another copy. Incomplete
-installations are not treated as deployable packages. Filesystem access errors are reported
+installations are not treated as deployable packages. Removing the last installed package
+updates the recommendation to **Get SMAPI** without restarting. Removal failures retain the
+recommendation appropriate to the files and packages that remain. Filesystem access errors are reported
 instead of being interpreted as a missing installation.
 
 Run from `extensions/games/game-stardewvalley` on both hosts:
@@ -127,11 +129,14 @@ pnpm run typecheck
 
 The runtime-event regression uses temporary executable files and the actual status selectors
 and handlers, with unrelated metadata/network services mocked. It checks deployment, purge,
-disabled installs, custom tools, other profiles, access errors and stale asynchronous reads.
+disabled installs, successful/failed removal, custom tools, other profiles, access errors and
+stale asynchronous reads.
 The native executable case runs on Linux; Windows covers the Windows executable layout.
 These checks need no account or game. Verify the visible warning and selected tool separately
 in a fresh real-app profile through local archive installation, enable/deploy, disable,
-purge/redeploy and restart, alongside staged and deployed file hashes. The Nexus Get SMAPI
+purge/redeploy, removal of the last installed SMAPI package, and restart, alongside staged
+and deployed file hashes. Check that removal offers Get SMAPI without restarting; when
+removal fails, check the recommendation against the packages and executable that remain. The Nexus Get SMAPI
 workflow additionally needs a valid account and download service.
 
 ## Native Daggerfall Unity
