@@ -13,7 +13,7 @@ export function testWorkspace() {
     assert.equal(path.dirname(root), temporaryRoot);
     assert.ok(path.basename(root).startsWith("vortex-api-test-"));
     assert.equal(fs.lstatSync(root).isSymbolicLink(), false);
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
   try {
     fs.symlinkSync(

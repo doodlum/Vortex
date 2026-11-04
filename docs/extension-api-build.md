@@ -41,3 +41,5 @@ syntax-invalid declaration to fail typechecking, and verify cache reuse for an
 unchanged declaration, including report output restoration. They need Git on PATH
 and additional temporary space for a private Nx cache. This covers task-cache
 invalidation; it does not replace a real renderer build or API extraction.
+
+On Windows, a child process can briefly retain a temporary workspace as its current directory after its command finishes. Fixture cleanup retries supported busy/access errors for at most five retries with a 100 ms increasing delay, then reports the error. The Windows checks use real child processes to cover both a released directory and a lock that outlasts the retry window. The workspace boundary checks and junction target remain intact.
