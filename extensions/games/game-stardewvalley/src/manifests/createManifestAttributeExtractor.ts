@@ -1,6 +1,9 @@
+import { stat } from "node:fs/promises";
+import path from "node:path";
+
 import { log, selectors } from "@nexusmods/vortex-api";
 import type { types } from "@nexusmods/vortex-api";
-import { getErrorMessageOrDefault } from "@vortex/shared";
+import { getErrorCode, getErrorMessageOrDefault } from "@vortex/shared";
 /**
  * Creates the manifest-based mod attribute extractor used during installation.
  */
@@ -20,6 +23,23 @@ import { parseManifest } from "./parseManifest";
  * - `customFileName` (except for SMAPI itself)
  * - `manifestVersion`
  */
+
+/** Recognize the installed loader independently of optional download metadata. */
+async function hasSMAPILoader(modPath: string): Promise<boolean> {
+  const regularFile = async (name: string) => {
+    try {
+      return (await stat(path.join(modPath, name))).isFile();
+    } catch (error) {
+      if (["ENOENT", "ENOTDIR"].includes(getErrorCode(error) ?? "")) return false;
+      throw error;
+    }
+  };
+  return (
+    (await regularFile("StardewModdingAPI.dll")) &&
+    ((await regularFile("StardewModdingAPI.exe")) || (await regularFile("StardewModdingAPI")))
+  );
+}
+
 export function createManifestAttributeExtractor(context: types.IExtensionContext) {
   return async (modInfo: any, modPath: string): Promise<{ [key: string]: any }> => {
     if (selectors.activeGameId(context.api.getState()) !== GAME_ID || modPath === undefined) {
@@ -65,7 +85,12 @@ export function createManifestAttributeExtractor(context: types.IExtensionContex
     };
 
     if (refManifest !== undefined) {
-      if (modInfo.download.modInfo?.nexus?.ids?.modId !== SMAPI_MOD_ID) {
+      const nexusModId = modInfo.download?.modInfo?.nexus?.ids?.modId;
+      const isSMAPI =
+        nexusModId === SMAPI_MOD_ID ||
+        nexusModId === String(SMAPI_MOD_ID) ||
+        (await hasSMAPILoader(modPath));
+      if (!isSMAPI) {
         result["customFileName"] = refManifest.Name;
       }
 

@@ -120,6 +120,8 @@ updates the recommendation to **Get SMAPI** without restarting. Removal failures
 recommendation appropriate to the files and packages that remain. Filesystem access errors are reported
 instead of being interpreted as a missing installation.
 
+New local SMAPI loader installations keep their archive-derived or chosen display name. The loader is recognized by its root `StardewModdingAPI.dll` and a native or Windows apphost, so its bundled Console Commands manifest does not rename the whole package. Ordinary mod manifests still supply their mod names. Existing custom names are preserved.
+
 Run from `extensions/games/game-stardewvalley` on both hosts:
 
 ```sh
