@@ -24,14 +24,14 @@ export function findSMAPITool(api: types.IExtensionApi): types.IDiscoveredTool |
 }
 
 /**
- * Lists currently enabled installed mods that correspond to the SMAPI package.
+ * Lists installed SMAPI packages, enabled in the last active profile by default.
  *
  * @param api Vortex extension API (`types.IExtensionApi`) used to read profile
  * and mod state.
- * @returns Active SMAPI mods (`types.IMod[]`) for the last active Stardew
- * profile.
+ * @param includeDisabled Include packages not enabled in the last active profile.
+ * @returns Matching installed SMAPI packages (`types.IMod[]`).
  */
-export function getSMAPIMods(api: types.IExtensionApi): types.IMod[] {
+export function getSMAPIMods(api: types.IExtensionApi, includeDisabled = false): types.IMod[] {
   const state = api.getState();
   const profileId = selectors.lastActiveProfileForGame(state, GAME_ID);
   const profile = selectors.profileById(state, profileId);
@@ -39,19 +39,25 @@ export function getSMAPIMods(api: types.IExtensionApi): types.IMod[] {
   const isSMAPI = (mod: types.IMod) =>
     mod.type === MOD_TYPE_SMAPI && mod.attributes?.modId === SMAPI_MOD_ID;
   const mods: { [modId: string]: types.IMod } = selectSdvMods(state);
-  return Object.values(mods).filter((mod: types.IMod) => isSMAPI(mod) && isActive(mod.id));
+  return Object.values(mods).filter(
+    (mod: types.IMod) =>
+      mod.state === "installed" && isSMAPI(mod) && (includeDisabled || isActive(mod.id)),
+  );
 }
 
 /**
- * Selects the newest enabled SMAPI mod entry by semantic version.
+ * Selects the newest matching SMAPI mod entry by semantic version.
  *
  * @param api Vortex extension API (`types.IExtensionApi`) used to resolve
  * active SMAPI mods.
- * @returns Highest-version SMAPI mod (`types.IMod`) when any are enabled;
- * otherwise `undefined`.
+ * @param includeDisabled Include packages not enabled in the last active profile.
+ * @returns Highest-version matching installed package, or `undefined`.
  */
-export function findSMAPIMod(api: types.IExtensionApi): types.IMod | undefined {
-  const smapiMods = getSMAPIMods(api);
+export function findSMAPIMod(
+  api: types.IExtensionApi,
+  includeDisabled = false,
+): types.IMod | undefined {
+  const smapiMods = getSMAPIMods(api, includeDisabled);
   return smapiMods.length === 0
     ? undefined
     : smapiMods.length > 1

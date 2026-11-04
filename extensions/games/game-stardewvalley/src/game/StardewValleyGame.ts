@@ -9,9 +9,7 @@ import type { types } from "@nexusmods/vortex-api";
 
 import { GAME_ID, MODS_REL_PATH } from "../common";
 import { resolveSMAPIPlatform } from "../installers/smapi";
-import { deploySMAPI } from "../smapi/lifecycle";
-import { findSMAPIMod } from "../smapi/selectors";
-import { downloadAndInstallSMAPI } from "../smapi/workflow";
+import { refreshSMAPIState } from "../smapi/status";
 import { selectSdvDiscoveryPath } from "../state/selectors";
 import { installedGamePlatform } from "./platform";
 
@@ -155,41 +153,8 @@ export default class StardewValleyGame implements types.IGame {
 
     await fs.ensureDirWritableAsync(path.join(discovery.path, MODS_REL_PATH));
 
-    const smapiPath = path.join(
-      discovery.path,
-      resolveSMAPIPlatform(installedGamePlatform(discovery.path)).executableName,
-    );
-    const smapiFound = await this.getPathExistsAsync(smapiPath);
-    if (!smapiFound) {
-      this.recommendSmapi();
-    }
+    await refreshSMAPIState(this.context.api, { gamePath: discovery.path });
   }) as unknown as Setup;
-
-  /**
-   * Shows a SMAPI warning with a one-click Deploy/Get action.
-   */
-  private recommendSmapi() {
-    const smapiMod = findSMAPIMod(this.context.api);
-    const title = smapiMod ? "SMAPI is not deployed" : "SMAPI is not installed";
-    const actionTitle = smapiMod ? "Deploy" : "Get SMAPI";
-    const action = () =>
-      (smapiMod ? deploySMAPI(this.context.api) : downloadAndInstallSMAPI(this.context.api)).then(
-        () => this.context.api.dismissNotification?.("smapi-missing"),
-      );
-
-    this.context.api.sendNotification?.({
-      id: "smapi-missing",
-      type: "warning",
-      title,
-      message: "SMAPI is required to mod Stardew Valley.",
-      actions: [
-        {
-          title: actionTitle,
-          action,
-        },
-      ],
-    });
-  }
 
   /**
    * Asynchronously check whether a file or directory path exists.

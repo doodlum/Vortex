@@ -1,6 +1,6 @@
 import path from "path";
 
-import { actions, log, selectors, util } from "@nexusmods/vortex-api";
+import { log, selectors } from "@nexusmods/vortex-api";
 import type { types } from "@nexusmods/vortex-api";
 import { getErrorMessageOrDefault } from "@vortex/shared";
 /**
@@ -8,11 +8,11 @@ import { getErrorMessageOrDefault } from "@vortex/shared";
  */
 import type { IQuery, IServer } from "modmeta-db";
 
-import { GAME_ID } from "../common";
+import { GAME_ID, MOD_TYPE_SMAPI } from "../common";
 import { updateConflictInfo } from "../compatibility/updateConflictInfo";
 import { onAddedFiles, onWillEnableMods } from "../configMod";
 import { SMAPIProxy } from "../smapi/proxy";
-import { findSMAPIMod } from "../smapi/selectors";
+import { refreshSMAPIState } from "../smapi/status";
 
 type LoopbackCB = NonNullable<IServer["loopbackCB"]>;
 
@@ -68,38 +68,23 @@ export function registerRuntimeEvents(context: types.IExtensionContext) {
         return;
       }
 
-      const smapiMod = findSMAPIMod(context.api);
-      const primaryTool = util.getSafe(
-        state,
-        ["settings", "interface", "primaryTool", GAME_ID],
-        undefined,
-      );
-      if (smapiMod && primaryTool === undefined) {
-        store.dispatch(actions.setPrimaryTool(GAME_ID, "smapi"));
-      }
+      await refreshSMAPIState(context.api, { profileId });
     });
 
     context.api.onAsync("did-purge", async (profileId: string) => {
-      const state = context.api.getState();
-      const profile = selectors.profileById(state, profileId);
-      if (profile?.gameId !== GAME_ID) {
-        return;
-      }
-
-      const smapiMod = findSMAPIMod(context.api);
-      const primaryTool = util.getSafe(
-        state,
-        ["settings", "interface", "primaryTool", GAME_ID],
-        undefined,
-      );
-      if (smapiMod && primaryTool === "smapi") {
-        store.dispatch(actions.setPrimaryTool(GAME_ID, undefined as any));
-      }
+      const profile = selectors.profileById(context.api.getState(), profileId);
+      if (profile?.gameId !== GAME_ID) return;
+      await refreshSMAPIState(context.api, { profileId });
     });
 
     context.api.events.on("did-install-mod", (gameId: string, archiveId: string, modId: string) => {
       if (gameId !== GAME_ID) {
         return;
+      }
+      if (context.api.getState().persistent.mods[gameId]?.[modId]?.type === MOD_TYPE_SMAPI) {
+        refreshSMAPIState(context.api).catch((err) =>
+          log("error", "failed to refresh SMAPI status", { error: getErrorMessageOrDefault(err) }),
+        );
       }
       updateConflictInfo(context.api, proxy, gameId, modId)
         .then(() => log("debug", "added compatibility info", { modId }))
