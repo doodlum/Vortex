@@ -29,6 +29,8 @@ trees. Its scratch directory needs room for another prepared tree; see
 
 ## Install packaging tools
 
+Run packaging as your normal build user. Tool version checks preserve the executable path selected by PATH, including a symlink such as the Snap CLI on Ubuntu. The result journal records the resolved binary and its SHA-256 separately from that invocation, so multicall tools keep their CLI behavior.
+
 The tools are build-machine prerequisites. Application users do not need Ruby,
 RubyGems, Node, pnpm or a .NET SDK to run the resulting packages.
 

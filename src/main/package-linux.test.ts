@@ -449,3 +449,30 @@ test.runIf(process.platform === "linux")(
     expect((await fs.readdir(root)).sort()).toEqual(["input", filename].sort());
   },
 );
+
+test.runIf(process.platform === "linux")(
+  "tool identity invokes the selected symlink name and hashes its resolved target",
+  async () => {
+    const { root } = await fixture();
+    const bin = path.join(root, "tools with spaces");
+    await fs.mkdir(bin);
+    const target = path.join(bin, "multicall-daemon");
+    const selected = path.join(bin, "packing-cli");
+    const body =
+      '#!/bin/sh\n[ "$#" = 1 ] && [ "$1" = version ] || exit 23\ncase "$0" in */packing-cli) printf "packing-cli version 1\\n" ;; *) printf "daemon invocation\\n" ;; esac\n';
+    await fs.writeFile(target, body, { mode: 0o755 });
+    await fs.symlink(path.basename(target), selected);
+    for (const command of ["packing-cli", selected]) {
+      const identity = await toolIdentity(command, ["version"], { ...process.env, PATH: bin });
+      expect(identity.version).toBe("packing-cli version 1");
+      expect(identity.executable).toBe(await fs.realpath(target));
+      expect(identity.sha256).toBe(createHash("sha256").update(body).digest("hex"));
+    }
+    expect((await toolIdentity(target, ["version"], process.env)).version).toBe(
+      "daemon invocation",
+    );
+    await expect(
+      toolIdentity("missing", ["version"], { ...process.env, PATH: bin }),
+    ).rejects.toThrow("Missing packaging tool: missing");
+  },
+);

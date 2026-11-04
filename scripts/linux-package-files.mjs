@@ -128,7 +128,7 @@ export async function writeJson(file, value) {
 
 /** Identify the executable selected by PATH as well as its reported version. */
 export async function toolIdentity(command, args, env) {
-  let executable;
+  let executable, invocation;
   const candidates = path.isAbsolute(command)
     ? [command]
     : (env.PATH ?? "").split(path.delimiter).map((directory) => path.resolve(directory, command));
@@ -137,6 +137,7 @@ export async function toolIdentity(command, args, env) {
       await fs.access(candidate, fs.constants.X_OK);
       if ((await fs.stat(candidate)).isFile()) {
         executable = await fs.realpath(candidate);
+        invocation = candidate;
         break;
       }
     } catch (error) {
@@ -144,6 +145,6 @@ export async function toolIdentity(command, args, env) {
     }
   }
   if (!executable) throw new Error(`Missing packaging tool: ${command}`);
-  const version = execFileSync(executable, args, { env, encoding: "utf8", timeout: 30_000 }).trim();
+  const version = execFileSync(invocation, args, { env, encoding: "utf8", timeout: 30_000 }).trim();
   return { executable, sha256: await hashFile(executable), version };
 }
