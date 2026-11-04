@@ -34,6 +34,20 @@ backups parked through relinking. Distinct physical Linux backups are restored s
 Case-only updates, delayed Windows alias removal, partial disable and move placeholders
 have regression cases. Run the Linux cases on a case-sensitive filesystem.
 
+## Installing archives on filesystems without hardlinks
+
+Archive installation tries hardlinks between extracted files and the staged mod to avoid
+copying bytes. On exFAT, the filesystem rejects those links with EPERM even when both
+folders are writable. This optional optimization falls back to copying without opening
+an Access denied dialog; copy errors still use normal filesystem recovery. This does not
+make hardlink deployment available on exFAT. Keep staging on the same filesystem as the
+game for Move Deployment, which Vortex can select when links are unavailable.
+
+Run `pnpm exec vitest run src/extensions/mod_management/InstallManager.archiveSources.test.ts`
+from `src/renderer`. The regression exercises the real filesystem wrapper with an unsupported
+link, asserts no permission prompt, and checks the copied bytes. It complements a real
+mounted-filesystem install/deploy/purge test; it does not establish that runtime result.
+
 ## Purge restoration and manifest ownership
 
 Linking deployment removes links for all mod types and records genuine leftovers before

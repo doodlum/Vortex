@@ -7539,7 +7539,9 @@ class InstallManager {
       // create parent directories
       await mapWithConcurrency(Array.from(dirs), (d) => fs.ensureDirAsync(d), dirConcurrency);
 
-      // perform hard links in parallel; fallback to copy on failure
+      // Hardlinks are only an optimization: unsupported filesystems (e.g. exFAT)
+      // return EPERM. Let that reach the copy fallback without a permission dialog.
+      // Actual copy failures retain the normal filesystem error handling.
       let transferFailure: { error: unknown } | undefined;
       await mapWithConcurrency(
         jobs,
@@ -7547,7 +7549,7 @@ class InstallManager {
           if (transferFailure !== undefined) return;
           try {
             try {
-              await fs.linkAsync(job.src, job.dst);
+              await fs.linkAsync(job.src, job.dst, { showDialogCallback: () => false });
             } catch (err) {
               const code = getErrorCode(err);
               if (code === "ENOENT") {
@@ -7558,7 +7560,7 @@ class InstallManager {
                 const resolved = resolveNativePath(job.src);
                 if (resolved !== job.src) {
                   try {
-                    await fs.linkAsync(resolved, job.dst);
+                    await fs.linkAsync(resolved, job.dst, { showDialogCallback: () => false });
                     log("debug", "installer source resolved to the archive's own spelling", {
                       requested: job.src,
                       resolved,

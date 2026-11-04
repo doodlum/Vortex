@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import PromiseBB from "bluebird";
+import * as fsExtra from "fs-extra";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { IExtensionApi } from "../../types/api";
@@ -11,6 +12,12 @@ import InstallManager from "./InstallManager";
 import type { IInstruction } from "./types/IInstallResult";
 
 vi.mock("../../logging", () => ({ log: vi.fn() }));
+vi.mock("fs-extra", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, any>>();
+  const base = actual.default ?? actual;
+  const link = vi.fn(base.link);
+  return { ...base, link, default: { ...base, link } };
+});
 
 interface SourceCopyBoundary {
   transformInstructions(input: IInstruction[]): { copy: IInstruction[] };
@@ -29,6 +36,7 @@ describe("installer archive sources", () => {
   const manager = Object.create(InstallManager.prototype) as SourceCopyBoundary;
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   });
 
@@ -174,5 +182,42 @@ describe("installer archive sources", () => {
         await new Promise<void>((resolve) => setImmediate(resolve));
       }
     }
+  });
+
+  it("falls back from unsupported hardlinks without opening a permission dialog", async () => {
+    const f = await fixture();
+    const dialog = vi.fn().mockResolvedValue({ response: 0 });
+    vi.stubGlobal("window", { api: { dialog: { showMessageBox: dialog } } });
+    // exFAT permits ordinary reads/writes, but link(2) returns EPERM. Keep the
+    // real fs wrapper: mocking linkAsync would hide its permission dialog.
+    const link = vi.spyOn(fsExtra, "link").mockImplementation((_src, destination) =>
+      Promise.reject(
+        Object.assign(new Error("hardlinks unsupported"), {
+          code: "EPERM",
+          dest: destination,
+        }),
+      ),
+    );
+    let failure: unknown;
+    await manager
+      .extractArchive(
+        f.api,
+        "fixture.zip",
+        f.source,
+        f.destination,
+        [{ type: "copy", source: "Assets/Config.txt", destination: "Options.INI" }],
+        "game",
+      )
+      .catch((error: unknown) => {
+        failure = error;
+      });
+    expect(link).toHaveBeenCalled();
+    expect(
+      dialog,
+      "an optional hardlink optimization must reach its copy fallback without asking for permissions",
+    ).not.toHaveBeenCalled();
+    expect(failure).toBeUndefined();
+    expect(await readFile(path.join(f.destination, "Options.INI"), "utf8")).toBe("config payload");
+    expect(f.showErrorNotification).not.toHaveBeenCalled();
   });
 });
