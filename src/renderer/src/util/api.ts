@@ -133,7 +133,6 @@ import github from "./github";
 import type { TFunction } from "./i18n";
 import { getCurrentLanguage } from "./i18n";
 import lazyRequire from "./lazyRequire";
-import { epicGamesLauncherShim as epicGamesLauncher, steamShim as steam } from "./legacyGameStores";
 import local from "./local";
 import makeReactive from "./makeReactive";
 import onceCB from "./onceCB";
@@ -222,7 +221,6 @@ export {
   deepMerge,
   delay,
   deriveModInstallName as deriveInstallName,
-  epicGamesLauncher,
   // extend is renderer-only, available via renderer/controls/ComponentEx
   extractExeIcon,
   fileMD5,
@@ -303,7 +301,6 @@ export {
   SevenZip,
   sortMods,
   StarterInfo,
-  steam,
   terminate,
   testModReference,
   testRefByIdentifiers,
