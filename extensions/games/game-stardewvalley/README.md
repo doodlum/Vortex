@@ -25,6 +25,12 @@ then start in [`index.ts`](index.ts).
   [SMAPI](https://smapi.io/), which is a mod loader and API.
 - Without SMAPI, standard Stardew mods do not load.
 
+A local SMAPI archive is recognized by its installed SMAPI mod type, including
+when Nexus metadata is unavailable. An installed package offers **Deploy** while
+its loader is absent; it offers **Get SMAPI** after the package is removed.
+Restarting Vortex preserves that distinction. A Nexus mod ID alone does not
+classify an ordinary mod as SMAPI.
+
 ### Core game/mod files
 
 - Game executables:

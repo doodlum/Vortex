@@ -5,7 +5,7 @@ import type { types } from "@nexusmods/vortex-api";
 import { selectors, util } from "@nexusmods/vortex-api";
 import { gte } from "semver";
 
-import { GAME_ID, MOD_TYPE_SMAPI, SMAPI_MOD_ID } from "../common";
+import { GAME_ID, MOD_TYPE_SMAPI } from "../common";
 import { selectSdvMods } from "../state/selectors";
 
 /**
@@ -36,8 +36,8 @@ export function getSMAPIMods(api: types.IExtensionApi, includeDisabled = false):
   const profileId = selectors.lastActiveProfileForGame(state, GAME_ID);
   const profile = selectors.profileById(state, profileId);
   const isActive = (modId: string) => util.getSafe(profile, ["modState", modId, "enabled"], false);
-  const isSMAPI = (mod: types.IMod) =>
-    mod.type === MOD_TYPE_SMAPI && mod.attributes?.modId === SMAPI_MOD_ID;
+  // The installer classifies the loader payload. Local/offline archives need no Nexus metadata.
+  const isSMAPI = (mod: types.IMod) => mod.type === MOD_TYPE_SMAPI;
   const mods: { [modId: string]: types.IMod } = selectSdvMods(state);
   return Object.values(mods).filter(
     (mod: types.IMod) =>

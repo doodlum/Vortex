@@ -301,3 +301,29 @@ it("ignores removal completion for another game", async () => {
   expect(api.sendNotification).not.toHaveBeenCalled();
   expect(api.store.dispatch).not.toHaveBeenCalled();
 });
+
+it.each([undefined, {}, { modId: "2400" }, { modId: 9999 }])(
+  "recognizes an installer-classified SMAPI package independently of Nexus attributes %j",
+  async (attributes) => {
+    state.persistent.mods.stardewvalley[mod.id] = { ...mod, attributes };
+    const game = new StardewValleyGame(context);
+    await game.setup?.({ path: directory } as types.IDiscoveryResult);
+    expect(api.sendNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "SMAPI is not deployed" }),
+    );
+    await writeFile(path.join(directory, "StardewModdingAPI.exe"), "deployed loader");
+    await emit("did-deploy");
+    expect(state.settings.interface.primaryTool.stardewvalley).toBe("smapi");
+  },
+);
+it.each([
+  { ...mod, type: "", attributes: { modId: 2400 } },
+  { ...mod, state: "installing" },
+])("does not offer deployment for an uninstalled or unclassified loader %j", async (entry) => {
+  state.persistent.mods.stardewvalley[mod.id] = entry;
+  const game = new StardewValleyGame(context);
+  await game.setup?.({ path: directory } as types.IDiscoveryResult);
+  expect(api.sendNotification).toHaveBeenCalledWith(
+    expect.objectContaining({ title: "SMAPI is not installed" }),
+  );
+});
