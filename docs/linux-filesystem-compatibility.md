@@ -74,8 +74,13 @@ Native purge waits for every operation in the current filesystem batch before re
 an ownership-scan or unlink failure. Renderer batches use standard tagged results even
 when the running application provides Bluebird promises. Except for the existing missing-mod
 Ignore/Deploy recovery flow, rejected per-type undeployment stops mod removal before
-deleting staging files or mod records. Restore access and
-retry through Vortex; retained manifest entries still identify files it owns.
+deleting staging files or mod records. Each type also waits for all its mod deactivations
+and cancellation before the next queued removal starts. After finalization, Vortex saves
+the resulting manifest and refuses removal if it still owns files from a requested mod's
+installation folder, even when the finalizer resolved after a per-file failure. Ownership
+belonging only to other mods does not prevent removal. This applies to replacement/update
+removals as well as manual removal. Restore access and retry through Vortex; retained
+manifest entries still identify files it owns.
 
 From `src/renderer` on both hosts, run:
 

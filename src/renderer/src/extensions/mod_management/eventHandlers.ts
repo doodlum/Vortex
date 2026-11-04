@@ -700,8 +700,8 @@ async function undeploy(
             activator,
           );
           await activator.prepare(deployPath, false, lastActivation, normalize);
-          await Promise.all(
-            byModTypes[typeId].map((mod) =>
+          const deactivationResults = await settleAll(
+            byModTypes[typeId].map(async (mod) =>
               activator.deactivate(
                 path.join(stagingPath, mod.installationPath),
                 subdir(mod),
@@ -709,9 +709,15 @@ async function undeploy(
               ),
             ),
           );
+          const rejected = deactivationResults.find(
+            (result): result is PromiseRejectedResult => result.status === "rejected",
+          );
+          if (rejected !== undefined) {
+            throw rejected.reason;
+          }
         } catch (err) {
           if (activator.cancel !== undefined) {
-            activator.cancel(gameMode, deployPath, stagingPath);
+            await activator.cancel(gameMode, deployPath, stagingPath);
           }
           throw err;
         }
@@ -725,15 +731,24 @@ async function undeploy(
           newActivation,
           activator.id,
         );
+        // Finalizers can resolve after a per-file failure. Keep staging until the
+        // saved manifest no longer owns files from any mod being removed.
+        const removedSources = new Set(byModTypes[typeId].map((mod) => mod.installationPath));
+        if (newActivation.some((file) => removedSources.has(file.source))) {
+          throw new TemporaryError(
+            "Some mod files could not be removed from the game directory. " +
+              "Resolve the deployment errors and retry removing the mod.",
+          );
+        }
       }),
     );
     const failed = typeResults.find(
       (result): result is PromiseRejectedResult => result.status === "rejected",
     );
+    reportRecordedFailures(api, gameMode);
     if (failed !== undefined) {
       throw failed.reason;
     }
-    reportRecordedFailures(api, gameMode);
   } finally {
     log("debug", "done undeploying single mod", {
       game: gameMode,
