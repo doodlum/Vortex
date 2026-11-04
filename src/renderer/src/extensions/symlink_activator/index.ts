@@ -19,6 +19,7 @@ import type {
   IDeploymentMethod,
   IUnavailableReason,
 } from "../mod_management/types/IDeploymentMethod";
+import { deploymentProbeDirectory } from "../mod_management/util/deploymentProbeDirectory";
 
 class DeploymendMethod extends LinkingDeployment {
   public compatible: string[] = ["symlink_activator_elevated"];
@@ -87,8 +88,13 @@ class DeploymendMethod extends LinkingDeployment {
       return { description: (t) => t("Game doesn't support symlinks") };
     }
 
+    let probeDirectory: string;
     try {
-      fs.accessSync(modPaths[typeId], fs.constants.W_OK);
+      // A removed game is not an output folder to recreate.
+      if (!fs.statSync(discovery.path).isDirectory()) {
+        throw new Error("Game directory is not available");
+      }
+      probeDirectory = deploymentProbeDirectory(modPaths[typeId]);
       if (!this.ensureAdmin()) {
         return { description: (t) => t("Requires admin rights on windows.") };
       }
@@ -96,7 +102,7 @@ class DeploymendMethod extends LinkingDeployment {
       return { description: (t) => getErrorMessageOrDefault(err) };
     }
 
-    const canary = path.join(modPaths[typeId], "__vortex_canary.tmp");
+    const canary = path.join(probeDirectory, "__vortex_canary.tmp");
 
     let res: IUnavailableReason;
     try {

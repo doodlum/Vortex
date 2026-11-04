@@ -22,6 +22,7 @@ import type {
   IDeploymentMethod,
   IUnavailableReason,
 } from "../mod_management/types/IDeploymentMethod";
+import { deploymentProbeDirectory } from "../mod_management/util/deploymentProbeDirectory";
 import { purgeNativeHardlinks } from "./nativeHardlinks";
 
 export class FileFound extends Error {
@@ -84,8 +85,13 @@ class DeploymentMethod extends LinkingDeployment {
       return undefined;
     }
 
+    let probeDirectory: string;
     try {
-      fs.accessSync(modPaths[typeId], fs.constants.W_OK);
+      // A removed game is not an output folder to recreate.
+      if (!fs.statSync(discovery.path).isDirectory()) {
+        throw new Error("Game directory is not available");
+      }
+      probeDirectory = deploymentProbeDirectory(modPaths[typeId]);
     } catch {
       log("info", "hardlink deployment not supported due to lack of write access", {
         typeId,
@@ -145,7 +151,7 @@ class DeploymentMethod extends LinkingDeployment {
     });
 
     try {
-      if (fs.statSync(installationPath).dev !== fs.statSync(modPaths[typeId]).dev) {
+      if (fs.statSync(installationPath).dev !== fs.statSync(probeDirectory).dev) {
         return sameDrive();
       }
     } catch (err) {
@@ -166,7 +172,7 @@ class DeploymentMethod extends LinkingDeployment {
     const canaryLink =
       process.platform === "win32"
         ? canary + ".link"
-        : path.join(modPaths[typeId], "__vortex_canary.tmp.link");
+        : path.join(probeDirectory, "__vortex_canary.tmp.link");
 
     let res: IUnavailableReason;
 
@@ -223,10 +229,10 @@ class DeploymentMethod extends LinkingDeployment {
     return super.finalize(gameId, dataPath, installationPath, progressCB);
   }
 
-  public postPurge(): PromiseBB<void> {
+  public async postPurge(): Promise<void> {
     delete this.mInstallationFiles;
     this.mInstallationFiles = undefined;
-    return PromiseBB.resolve();
+    await super.postPurge();
   }
 
   protected purgeLinks(

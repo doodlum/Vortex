@@ -23,6 +23,7 @@ import type {
   IDeploymentMethod,
   IUnavailableReason,
 } from "../mod_management/types/IDeploymentMethod";
+import { deploymentProbeDirectory } from "../mod_management/util/deploymentProbeDirectory";
 
 const LNK_EXT = ".vortex_lnk";
 
@@ -85,8 +86,13 @@ class DeploymentMethod extends LinkingDeployment {
       };
     }
 
+    let probeDirectory: string;
     try {
-      fs.accessSync(modPaths[typeId], fs.constants.W_OK);
+      // A removed game is not an output folder to recreate.
+      if (!fs.statSync(discovery.path).isDirectory()) {
+        throw new Error("Game directory is not available");
+      }
+      probeDirectory = deploymentProbeDirectory(modPaths[typeId]);
     } catch (err) {
       log("info", "move deployment not supported due to lack of write access", {
         typeId,
@@ -109,7 +115,7 @@ class DeploymentMethod extends LinkingDeployment {
     }
 
     try {
-      if (fs.statSync(instPath).dev !== fs.statSync(modPaths[typeId]).dev) {
+      if (fs.statSync(instPath).dev !== fs.statSync(probeDirectory).dev) {
         // actually we could support this but it would be so slow it wouldn't make sense
 
         return {

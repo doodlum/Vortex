@@ -34,6 +34,99 @@ backups parked through relinking. Distinct physical Linux backups are restored s
 Case-only updates, delayed Windows alias removal, partial disable and move placeholders
 have regression cases. Run the Linux cases on a case-sensitive filesystem.
 
+## Purge restoration and manifest ownership
+
+Linking deployment removes links for all mod types and records genuine leftovers before
+restoring base-file backups and cleaning empty folders. A restored original can share the
+mod's timestamp, so restoring it before the leftover check can retain a false deployment
+entry. A subsequent deployment can then offer that original as an external change to import
+into the mod. Nested game-root and StreamingAssets/Mods destinations expose the same issue.
+
+The Windows walker reports numeric epoch seconds, while its POSIX fallback supplies
+`Date` values. Deployment normalizes both to epoch milliseconds before writing manifests.
+The real-backend timestamp regression also checks that a rejected Linux purge retains
+the correct leftover entries, rather than dropping them because of an invalid timestamp.
+
+The `prePurge`/`purge`/`postPurge` lifecycle defers restoration to `postPurge`. Standalone
+`purge` calls without those hooks retain immediate restoration. A rejected link-purge
+operation leaves that root unqueued for restoration and its remaining links available to
+leftover checks. Existing per-file unlink-error handling is unchanged. Native and Windows hardlink cleanup both run
+the shared restoration hook; the staging files must keep their archive bytes throughout.
+This prevents new false ownership records; it cannot reconstruct a staged mod that was
+already changed by accepting an external-change import. Reinstall that mod from its
+original archive when needed.
+
+From `src/renderer` on both hosts, run:
+
+```sh
+pnpm exec vitest run src/extensions/mod_management/LinkingDeployment.purgeLifecycle.test.ts src/extensions/mod_management/LinkingDeployment.parity.test.ts src/extensions/mod_management/LinkingDeployment.caseInsensitive.test.ts src/extensions/mod_management/util/activationStore.test.ts src/extensions/mod_management/util/deploy.test.ts
+```
+
+These tests need only a writable temporary filesystem. The regression deliberately gives
+the original and mod identical timestamps, exercises nested purge roots, checks the
+leftover calculation before restoration, and verifies original and staged bytes through a
+new deployment. Fault injection and standalone-call controls preserve failure and API
+behavior. Verify the real application purge/redeploy sequence separately, asserting both
+deployed and staged bytes and no false external-change import.
+
+## Missing deployment output folders
+
+Purge can remove empty mod output directories. Deployment method selection probes the
+nearest existing directory when an output is missing; the ordinary deployment step creates
+the output with its existing permission/consent handling. Availability checks do not create
+output directories. Hardlink checks still compare filesystem devices and, on Linux, create
+their link canary in the existing output ancestor to detect cross-mount restrictions.
+
+This applies to hardlink, symlink and move deployment. A missing game directory, non-directory
+component, permission/I/O error, symlink loop or dangling symlink remains unavailable. Only
+genuinely missing path components permit ancestor probing; an inaccessible output does not
+fall back to a writable parent. External change handling and purge ownership are unchanged.
+
+Run from `src/renderer` on Windows and Linux:
+
+```sh
+pnpm exec vitest run src/extensions/hardlink_activator/isSupported.test.ts src/extensions/mod_management/util/deploymentProbeDirectory.test.ts src/extensions/mod_management/util/deploymentProbeDirectory.methods.test.ts
+```
+
+These tests need a writable temporary directory and directory symlink/junction support,
+without a game or account. They cover real filesystem ancestors, failure propagation,
+all three selection consumers and the Linux cross-mount canary error. The selection wiring
+test substitutes the symlink canary; it does not establish kernel symlink support. Verify
+install/deploy/purge/redeploy in an actual Vortex with a disposable game copy separately.
+
+## Native Daggerfall Unity
+
+On Linux, select the extracted game directory containing `DaggerfallUnity_Data` and either
+`DaggerfallUnity.x86_64` (native 64-bit release) or `DaggerfallUnity.exe` (Windows release).
+The executable must be a file; a data directory alone is insufficient. If both executables
+exist, Vortex treats that installation as Windows. Keep native and Windows releases in
+separate directories to choose explicitly.
+
+The dfmod installer selects the matching Linux or Windows archive directories from that
+game's discovered installation, independently of the host OS or another active game. Common
+files remain included. OS directory names match whole path components, and conflicting
+nested OS directories are excluded. `.dfmod` files deploy into `Mods` beneath
+`DaggerfallUnity_Data/StreamingAssets`, as before.
+
+Native automatic discovery and version reading use `DFTFU_Environment.log` under
+`$XDG_CONFIG_HOME/unity3d/Daggerfall Workshop/Daggerfall Unity` (default `~/.config`).
+This follows [Unity's Linux persistent-data convention](https://docs.unity.com/en-us/engine/6000.0/script-reference/unityengine/application/persistentdatapath).
+Before the game has written that log, select its directory manually. Windows installations
+retain the LocalLow log path; on Linux the existing game-owned prefix translation still
+applies to Windows game filesystem callbacks. This change does not establish a Proton
+launch, classic-data setup, playable mod compatibility or macOS support.
+
+Run from `extensions/games/game-daggerfallunity` on Windows and Linux:
+
+```sh
+pnpm exec vitest run
+```
+
+These inert temporary-file tests need no game, account or display. They exercise the actual
+registered extension against native/Windows file layouts, platform archive routing, missing
+executables and native/Windows environment-log selection. Real native management and
+physical deployment/purge/restart checks remain separate requirements.
+
 ## Choosing a staging folder
 
 When game mods and Vortex user data are on different filesystems, Linux suggests staging

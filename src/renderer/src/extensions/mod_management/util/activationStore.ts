@@ -120,7 +120,7 @@ function readManifest(data: string | Buffer): IDeploymentManifest {
   return repairManifest(parsed);
 }
 
-/** Whether the file at an entry's path is the deployed one; manifest times are whole seconds. */
+/** Whether the file matches its manifest time; some walkers only supply whole-second precision. */
 function isDeployedFile(stats: Stats, file: IDeployedFile): boolean {
   return Math.abs(stats.mtime.getTime() - file.time) < 1000;
 }

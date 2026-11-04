@@ -298,7 +298,8 @@ export interface IDeploymentMethod {
   /**
    * called after mods were purged. If multiple mod types wer purged, this is only called
    * after they are all done.
-   * Like prePurge, this is intended for optimizations
+   * LinkingActivator restores backups and cleans directories here, after the caller has
+   * recorded purge leftovers. Invoke this hook even when a purge operation fails.
    */
   postPurge: () => PromiseLike<void>;
 

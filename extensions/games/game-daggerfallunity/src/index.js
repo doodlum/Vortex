@@ -1,4 +1,5 @@
 const path = require("path");
+const { statSync } = require("node:fs");
 const { fs, util } = require("@nexusmods/vortex-api");
 
 const LOCAL_LOW = path.resolve(
@@ -9,14 +10,43 @@ const LOCAL_LOW = path.resolve(
   "Daggerfall Unity",
 );
 const ENV_LOG = path.join(LOCAL_LOW, "DFTFU_Environment.log");
+const NATIVE_EXEC = "DaggerfallUnity.x86_64";
 const GAME_ID = "daggerfallunity";
 const GAME_EXEC = "DaggerfallUnity.exe";
 const CMD_PATTERN = "CommandLine | ";
 const VERSION_PATTERN = "Version | ";
 const DFMOD_EXT = ".dfmod";
 
-function resolveGameVersion() {
-  return fs.readFileAsync(ENV_LOG, { encoding: "utf8" }).then((data) => {
+function gameExecutable(gamePath) {
+  if (process.platform !== "linux") return GAME_EXEC;
+  if (gamePath !== undefined) {
+    for (const executable of [GAME_EXEC, NATIVE_EXEC]) {
+      try {
+        if (statSync(path.join(gamePath, executable)).isFile()) return executable;
+      } catch (err) {
+        if (err.code !== "ENOENT") throw err;
+      }
+    }
+  }
+  throw new util.DataInvalid(
+    "The selected directory does not contain a Daggerfall Unity executable.",
+  );
+}
+
+function nativeEnvironmentLog() {
+  const config = process.env.XDG_CONFIG_HOME;
+  return path.join(
+    config && path.isAbsolute(config) ? config : path.join(util.getVortexPath("home"), ".config"),
+    "unity3d",
+    "Daggerfall Workshop",
+    "Daggerfall Unity",
+    "DFTFU_Environment.log",
+  );
+}
+
+function resolveGameVersion(gamePath) {
+  const log = gameExecutable(gamePath) === NATIVE_EXEC ? nativeEnvironmentLog() : ENV_LOG;
+  return fs.readFileAsync(log, { encoding: "utf8" }).then((data) => {
     const match = data.match(/^Version \| [0-9].[0-9].*/gm);
     return match
       ? Promise.resolve(match[0].substr(VERSION_PATTERN.length).trim())
@@ -24,22 +54,32 @@ function resolveGameVersion() {
   });
 }
 
-function findGame() {
-  const getTrimmedPath = (gamePath) => {
-    const trimmed = gamePath.substr(CMD_PATTERN.length).trim().replace(/\"/g, "");
-    return path.dirname(trimmed);
-  };
-
-  return fs
-    .readFileAsync(ENV_LOG, { encoding: "utf8" })
-    .then((data) => {
-      const lines = data.split(/\n/gm);
-      const gamePathLine = lines.find((line) => line.indexOf(GAME_EXEC) !== -1);
-      return gamePathLine !== undefined
-        ? Promise.resolve(getTrimmedPath(gamePathLine))
-        : Promise.resolve(undefined);
-    })
-    .catch((err) => (err["code"] === "ENOENT" ? Promise.resolve(undefined) : Promise.reject(err)));
+async function findGame() {
+  const logs = process.platform === "linux" ? [nativeEnvironmentLog(), ENV_LOG] : [ENV_LOG];
+  for (const log of logs) {
+    let data;
+    try {
+      data = await fs.readFileAsync(log, { encoding: "utf8" });
+    } catch (err) {
+      if (err.code === "ENOENT") continue;
+      throw err;
+    }
+    const line = data.split(/\r?\n/).find((line) => line.startsWith(CMD_PATTERN));
+    if (line === undefined) continue;
+    const command = line.slice(CMD_PATTERN.length).trim();
+    const quoted = command.match(/^"([^"]+)"/);
+    const plain = command.match(/^(.*?DaggerfallUnity(?:\.exe|\.x86_64))(?=\s|$)/);
+    const executable = quoted?.[1] ?? plain?.[1];
+    if (executable === undefined) continue;
+    const directory = path.dirname(executable);
+    if (process.platform !== "linux") return directory;
+    try {
+      if (path.basename(executable) === gameExecutable(directory)) return directory;
+    } catch (err) {
+      if (!(err instanceof util.DataInvalid)) throw err;
+    }
+  }
+  return undefined;
 }
 
 function testSupported(files, gameId) {
@@ -57,48 +97,28 @@ function testSupported(files, gameId) {
   });
 }
 
-function install(files, destinationPath) {
-  const result = {
-    instructions: [],
-  };
-
-  const dfmods = files
-    .filter((file) => path.extname(file) === DFMOD_EXT)
-    .map((mod) => path.basename(mod));
-  let filtered = files.filter((file) => !file.endsWith(path.sep));
-
-  filtered.forEach((file) => {
-    let pathLower = path.dirname(file).toLowerCase();
-
-    const isWindows = pathLower.indexOf("windows") !== -1;
-    const isLinux = pathLower.indexOf("linux") !== -1;
-    const isOSX = pathLower.indexOf("osx") !== -1;
-
-    // Only handle files that are either in a Windows folder or in no OS specific folder
-    const doProcessForWindows = isWindows || (!isLinux && !isOSX);
-
-    if (dfmods.indexOf(path.basename(file)) !== -1) {
-      if (doProcessForWindows) {
-        // This is the dfmod we want to install.
-        result.instructions.push({
-          type: "copy",
-          source: file,
-          destination: path.join("Mods", path.basename(file)),
-        });
-      }
-    } else {
-      // Non-dfmod file, most likely other resources like texture overrides or quest packs etc.
-      if (doProcessForWindows) {
-        result.instructions.push({
-          type: "copy",
-          source: file,
-          destination: file,
-        });
-      }
-    }
-  });
-
-  return Promise.resolve(result);
+function install(files, destinationPath, gamePath) {
+  const platform = gameExecutable(gamePath) === NATIVE_EXEC ? "linux" : "windows";
+  const instructions = [];
+  for (const file of files) {
+    const normalized = file.replace(/\\/g, "/");
+    if (normalized.endsWith("/")) continue;
+    const parts = normalized
+      .split("/")
+      .slice(0, -1)
+      .map((part) => part.toLowerCase());
+    const platforms = parts.filter((part) => ["windows", "linux", "osx"].includes(part));
+    if (platforms.some((part) => part !== platform)) continue;
+    instructions.push({
+      type: "copy",
+      source: file,
+      destination:
+        path.posix.extname(normalized) === DFMOD_EXT
+          ? path.join("Mods", path.posix.basename(normalized))
+          : file,
+    });
+  }
+  return Promise.resolve({ instructions });
 }
 
 function main(context) {
@@ -111,14 +131,27 @@ function main(context) {
     queryModPath: () => path.join("DaggerfallUnity_Data", "StreamingAssets"),
     logo: "gameart.jpg",
     getGameVersion: resolveGameVersion,
-    executable: () => GAME_EXEC,
-    requiredFiles: [GAME_EXEC],
+    // Vortex queries this before discovery while registering games and browsing for paths.
+    executable: (gamePath) =>
+      gamePath === undefined
+        ? process.platform === "linux"
+          ? NATIVE_EXEC
+          : GAME_EXEC
+        : gameExecutable(gamePath),
+    requiredFiles: process.platform === "linux" ? ["DaggerfallUnity_Data"] : [GAME_EXEC],
+    setup: async (discovery) => {
+      gameExecutable(discovery.path);
+    },
   });
 
-  // The game is multi-platform and many modders seem to be nesting the mod files
-  //  inside the target platform, we're only interested in the windows version
-  //  at this point
-  context.registerInstaller("dfmodmultiplatform", 15, testSupported, install);
+  // Select archive payloads for this game's executable, including Windows games on Linux.
+  context.registerInstaller("dfmodmultiplatform", 15, testSupported, (files, destinationPath) =>
+    install(
+      files,
+      destinationPath,
+      context.api.getState().settings.gameMode.discovered[GAME_ID]?.path,
+    ),
+  );
 
   return true;
 }

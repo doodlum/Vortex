@@ -67,3 +67,25 @@ test.for(["linux", "win32"] as const)(
     }
   },
 );
+
+test.for(["linux", "win32"] as const)(
+  "%s: a purged missing mod root remains deployable without recreating it during selection",
+  async (platform, { makeDeployment }) => {
+    const h = makeDeployment({ files: { "a.esp": "a" } });
+    const gamePath = path.dirname(h.gameDir);
+    nodeFs.rmdirSync(h.gameDir);
+    vi.stubGlobal("process", { ...process, platform });
+    try {
+      link.calls = [];
+      link.error = undefined;
+      expect(
+        h.method.isSupported(supportState(gamePath, h.stagingDir), "skyrimse", ""),
+      ).toBeUndefined();
+      expect(nodeFs.existsSync(h.gameDir)).toBe(false);
+      expect(path.dirname(link.calls[0][1])).toBe(platform === "win32" ? h.stagingDir : gamePath);
+      expect(nodeFs.readdirSync(gamePath)).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  },
+);

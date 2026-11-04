@@ -38,6 +38,11 @@ export { BACKUP_TAG } from "./util/canonicalDeployment";
 
 const VARIANT_SEPARATOR = "\u0000";
 
+// The Windows walker reports epoch seconds; its POSIX fallback returns fs.Stats Dates.
+function modificationTimeMilliseconds(value: number | Date): number {
+  return typeof value === "number" ? value * 1000 : value.getTime();
+}
+
 function deploymentGroup(key: string): string {
   return key.split(VARIANT_SEPARATOR, 1)[0];
 }
@@ -123,6 +128,7 @@ abstract class LinkingActivator implements IDeploymentMethod {
   private mQueue: Promise<void> = Promise.resolve();
   private mContext: IDeploymentContext;
   private mDirCache: Set<string>;
+  private mPurgeDirectories: Map<string, DirectoryCleaningMode> | undefined;
 
   constructor(
     id: string,
@@ -484,7 +490,7 @@ abstract class LinkingActivator implements IDeploymentMethod {
                       relPath,
                       source: sourceName,
                       target: deployPath,
-                      time: entry.mtime * 1000,
+                      time: modificationTimeMilliseconds(entry.mtime),
                     };
                   }
                 });
@@ -533,6 +539,7 @@ abstract class LinkingActivator implements IDeploymentMethod {
   }
 
   public prePurge(): Promise<void> {
+    this.mPurgeDirectories = new Map();
     return Promise.resolve();
   }
 
@@ -559,7 +566,16 @@ abstract class LinkingActivator implements IDeploymentMethod {
       fs
         .statAsync(dataPath)
         .then(() => this.purgeLinks(installPath, dataPath, onProgress))
-        .then(() => this.postLinkPurge(dataPath, false, true, directoryCleaning))
+        .then(() => {
+          if (this.mPurgeDirectories === undefined) {
+            // Preserve standalone purge calls that do not use the lifecycle hooks.
+            return this.postLinkPurge(dataPath, false, true, directoryCleaning);
+          }
+          // Restored base files must not participate in the subsequent leftover-manifest
+          // check: their timestamps can match the mod's, and mod-type roots can overlap.
+          this.mPurgeDirectories.set(dataPath, directoryCleaning);
+          return undefined;
+        })
         .then(() => undefined)
         .catch((err: unknown) => {
           if (getErrorCode(err) === "ENOENT") {
@@ -570,8 +586,13 @@ abstract class LinkingActivator implements IDeploymentMethod {
     );
   }
 
-  public postPurge(): PromiseLike<void> {
-    return Promise.resolve();
+  public async postPurge(): Promise<void> {
+    const directories = this.mPurgeDirectories;
+    this.mPurgeDirectories = undefined;
+    if (directories === undefined) return;
+    for (const [dataPath, directoryCleaning] of directories) {
+      await this.postLinkPurge(dataPath, false, true, directoryCleaning);
+    }
   }
 
   public getDeployedPath(input: string): string {
