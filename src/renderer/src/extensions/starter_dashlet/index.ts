@@ -205,14 +205,43 @@ function init(context: IExtensionContext): boolean {
     context.api.onAsync("did-purge", (profileId: string) =>
       onDeploymentEvent(context.api, profileId),
     );
-    context.api.onStateChange(["settings", "interface", "primaryTool"], (_previous, current) => {
-      const gameMode = activeGameId(context.api.store.getState());
-      if (gameMode === undefined || !truthy(getSafe(current, [gameMode], undefined))) return;
-      return testPrimaryTool(context.api).catch((err) => {
+    context.api.onStateChange(["settings", "interface", "primaryTool"], async () => {
+      const state = context.api.store.getState();
+      const gameMode = activeGameId(state);
+      if (gameMode === undefined) return;
+      const primarySelections = state.settings.interface.primaryTool;
+      const profileSelections = state.settings.profiles;
+      const profileId = activeProfileId(state);
+      const gamePath = state.settings.gameMode.discovered[gameMode]?.path;
+      const primaryToolId = getSafe(primarySelections, [gameMode], undefined);
+      if (!truthy(primaryToolId)) return;
+      const stillSelected = () => {
+        const latest = context.api.store.getState();
+        return (
+          activeGameId(latest) === gameMode &&
+          activeProfileId(latest) === profileId &&
+          latest.settings.profiles === profileSelections &&
+          latest.settings.interface.primaryTool === primarySelections &&
+          latest.settings.gameMode.discovered[gameMode]?.path === gamePath
+        );
+      };
+      let checkId = supersedePrimaryToolCheck(context.api);
+      try {
+        // A deployment can select a newly installed tool before discovery adds it.
+        // Refresh that entry before treating its absence as an invalid selection.
+        if (!truthy(state.settings.gameMode.discovered[gameMode]?.tools?.[primaryToolId]?.path)) {
+          await context.api.emitAndAwait("discover-tools", gameMode);
+          if (!stillSelected() || primaryToolChecks.get(context.api) !== checkId) return;
+        }
+        const validation = testPrimaryTool(context.api);
+        checkId = primaryToolChecks.get(context.api)!;
+        await validation;
+      } catch (err) {
+        if (!stillSelected() || primaryToolChecks.get(context.api) !== checkId) return;
         context.api.showErrorNotification("Failed to check primary tool", unknownToError(err), {
           allowReport: false,
         });
-      });
+      }
     });
   });
   return true;

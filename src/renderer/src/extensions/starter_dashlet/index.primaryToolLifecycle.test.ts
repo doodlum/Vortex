@@ -9,6 +9,7 @@ vi.mock("../../util/fs", () => ({ statAsync: io.stat }));
 vi.mock("./Tools", () => ({ default: () => null }));
 import { setPrimaryTool } from "./actions";
 import init from "./index";
+import settingsReducer from "./reducers";
 const roots: string[] = [];
 beforeEach(() => {
   io.stat.mockReset();
@@ -72,8 +73,11 @@ async function fixture() {
       dispatch: vi.fn((a: any) => {
         if (a.type === "SET_PRIMARY_TOOL") {
           const previous = state.settings.interface.primaryTool;
-          const current = { ...previous, [a.payload.gameId]: a.payload.toolId };
-          state.settings.interface.primaryTool = current;
+          state.settings.interface = settingsReducer.reducers.SET_PRIMARY_TOOL(
+            state.settings.interface,
+            a.payload,
+          );
+          const current = state.settings.interface.primaryTool;
           changes.get("settings.interface.primaryTool")?.(previous, current);
         }
       }),
@@ -376,3 +380,87 @@ it("supersedes older checks while lifecycle discovery is pending", async () => {
   expect(f.notices.has("invalid-primary-tool")).toBe(false);
   expect(f.api.sendNotification).not.toHaveBeenCalled();
 });
+
+it.each(["stable", "profile", "selection", "same-choice"])(
+  "awaits discovery of a selected tool before validation (%s)",
+  async (scenario) => {
+    const f = await fixture();
+    await fs.writeFile(f.executable, "owned deployed loader");
+    const tool = f.state.settings.gameMode.discovered.game.tools.smapi;
+    delete f.state.settings.gameMode.discovered.game.tools.smapi;
+    f.state.settings.interface.primaryTool = {};
+    let release!: () => void;
+    const discovery = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    f.api.emitAndAwait.mockImplementation(async () => {
+      await discovery;
+      f.state.settings.gameMode.discovered.game.tools.smapi = tool;
+      return [];
+    });
+    try {
+      f.api.store.dispatch(setPrimaryTool("game", "smapi"));
+      await Promise.resolve();
+      expect(f.state.settings.interface.primaryTool.game).toBe("smapi");
+      expect(f.api.sendNotification).not.toHaveBeenCalled();
+      expect(f.api.emitAndAwait).toHaveBeenCalledWith("discover-tools", "game");
+      if (scenario === "profile") f.state.settings.profiles = { activeProfileId: "p2" };
+      else if (scenario === "selection") {
+        f.state.settings.gameMode.discovered.game.tools.custom = { ...tool, id: "custom" };
+        f.api.store.dispatch(setPrimaryTool("game", "custom"));
+        await vi.waitFor(() => expect(f.notices.has("invalid-primary-tool")).toBe(false));
+      } else if (scenario === "same-choice") f.api.store.dispatch(setPrimaryTool("game", "smapi"));
+      const priorDismissals = f.api.dismissNotification.mock.calls.length;
+      release();
+      if (scenario === "stable" || scenario === "same-choice") {
+        await vi.waitFor(() => expect(f.notices.has("invalid-primary-tool")).toBe(false));
+        expect(f.state.settings.interface.primaryTool.game).toBe("smapi");
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(f.api.dismissNotification.mock.calls.length).toBe(priorDismissals);
+        expect(f.state.settings.interface.primaryTool.game).toBe(
+          scenario === "selection" ? "custom" : "smapi",
+        );
+      }
+      expect(f.api.sendNotification).not.toHaveBeenCalled();
+    } finally {
+      release();
+    }
+  },
+);
+
+it.each(["current", "profile", "selection", "superseded"])(
+  "scopes failed discovery to its current selection (%s)",
+  async (scenario) => {
+    const f = await fixture();
+    await fs.writeFile(f.executable, "owned loader");
+    const tool = f.state.settings.gameMode.discovered.game.tools.smapi;
+    delete f.state.settings.gameMode.discovered.game.tools.smapi;
+    f.state.settings.interface.primaryTool = {};
+    let reject!: (error: Error) => void;
+    const pending = new Promise<void>((_resolve, decline) => {
+      reject = decline;
+    });
+    f.api.emitAndAwait.mockImplementationOnce(async () => {
+      await pending;
+      return [];
+    });
+    f.api.store.dispatch(setPrimaryTool("game", "smapi"));
+    await vi.waitFor(() =>
+      expect(f.api.emitAndAwait).toHaveBeenCalledWith("discover-tools", "game"),
+    );
+    if (scenario === "profile") f.state.settings.profiles = { activeProfileId: "p2" };
+    else if (scenario === "selection") f.api.store.dispatch(setPrimaryTool("game", undefined));
+    else if (scenario === "superseded") {
+      f.state.settings.gameMode.discovered.game.tools.smapi = tool;
+      await f.check();
+    }
+    reject(new Error("Owned delayed tool discovery failure"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(f.api.showErrorNotification).toHaveBeenCalledTimes(scenario === "current" ? 1 : 0);
+    expect(f.api.sendNotification).not.toHaveBeenCalled();
+    expect(f.state.settings.interface.primaryTool.game).toBe(
+      scenario === "selection" ? undefined : "smapi",
+    );
+  },
+);
