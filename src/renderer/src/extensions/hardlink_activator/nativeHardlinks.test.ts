@@ -7,7 +7,7 @@ import PromiseBB from "bluebird";
 import { afterEach, expect, it, vi } from "vitest";
 
 vi.mock("node:fs/promises", async () => {
-  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  const actual = await vi.importActual<typeof fs.promises>("node:fs/promises");
   const mocked = { ...actual, lstat: vi.fn(actual.lstat), unlink: vi.fn(actual.unlink) };
   return { ...mocked, default: mocked };
 });
