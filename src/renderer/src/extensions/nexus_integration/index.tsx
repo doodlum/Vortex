@@ -350,7 +350,7 @@ const requestLog = {
     } else {
       return (...args) => {
         const prom = obj[prop](...args);
-        if (prom.then !== undefined) {
+        if (prom?.then !== undefined) {
           const stack = getCaller();
           let caller = stack[1].getFunctionName();
           if (caller === null) {
@@ -1640,7 +1640,7 @@ function init(context: IExtensionContext): boolean {
     120,
     "nexus",
     {},
-    context.api.translate("Open Nexus Page"),
+    "Open Nexus Page",
     (games: string[]) => openNexusPage(context.api.store.getState(), games),
   );
 
@@ -1649,7 +1649,7 @@ function init(context: IExtensionContext): boolean {
     120,
     "nexus",
     {},
-    context.api.translate("Open Nexus Page"),
+    "Open Nexus Page",
     (games: string[]) => openNexusPage(context.api.store.getState(), games),
   );
 
@@ -1658,7 +1658,7 @@ function init(context: IExtensionContext): boolean {
     120,
     "nexus",
     {},
-    context.api.translate("Open Nexus Page"),
+    "Open Nexus Page",
     (games: string[]) => openNexusPage(context.api.store.getState(), games),
     (games: string[]) => gameById(context.api.getState(), games[0]) !== undefined,
   );
