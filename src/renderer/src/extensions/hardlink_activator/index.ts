@@ -197,6 +197,17 @@ class DeploymentMethod extends LinkingDeployment {
       const code = getErrorCode(err);
       if (code === "EXDEV") {
         res = sameDrive();
+      } else if (code === "ENOSPC" || code === "EDQUOT") {
+        res = {
+          description: (t) =>
+            code === "EDQUOT"
+              ? t("Disk quota exceeded.")
+              : t("Not enough disk space to deploy mods."),
+          solution: (t) =>
+            code === "EDQUOT"
+              ? t("Reduce disk usage or increase the disk quota, then retry deployment.")
+              : t("Free disk space on the staging and game drives, then retry deployment."),
+        };
       } else if (code !== "EMFILE") {
         // the error code we're actually getting is EISDIR, which makes no sense at all
         res = {

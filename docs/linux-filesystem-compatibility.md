@@ -885,6 +885,22 @@ Never fill the host's root filesystem or delete manifest-owned files to reset a 
 This check establishes space-exhaustion recovery; quota `EDQUOT`, deployment-write failures,
 and other deployment interruption paths need separate tests.
 
+## Deployment capacity checks
+
+Hardlink deployment checks the filesystem by creating a temporary canary. If writing
+or linking it fails because the disk is full, Vortex reports insufficient disk space;
+if the user's disk quota is exhausted, it reports that quota limit. These errors do
+not mean the filesystem lacks hardlink support. Free space on the staging and game
+drives, or reduce usage/increase the quota, then retry deployment. The canary is cleaned
+up through the existing probe cleanup path. This check does not reserve space or
+guarantee that a later deployment will finish.
+
+From src/renderer, run pnpm exec vitest run src/extensions/hardlink_activator/isSupported.test.ts
+on Windows and Linux. The regression injects ENOSPC and EDQUOT at both canary operations
+and preserves the cross-device, unsupported-filesystem and file-descriptor-limit
+controls. It does not establish a physical quota or deployment-write recovery result;
+verify those separately with isolated real filesystems and retained ownership evidence.
+
 ## Staging directory access
 
 Hardlink, Symlink and Move deployment require an existing staging directory that the

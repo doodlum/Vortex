@@ -187,3 +187,10 @@ Legacy C# result handling also runs renderer installer_fomod_ipc/installer.resul
 mod_management/InstallManager.instructionErrors on both hosts. Error-only failed C#
 results must not create installed metadata; retain file/INI partial-warning and XML
 controls, null cancellation signals, and actual packaged form-cancel/error verification.
+
+Hardlink support-probe capacity changes: run renderer hardlink_activator/isSupported
+on both hosts, including write/link ENOSPC and EDQUOT, existing EXDEV/EMFILE and
+unsupported-filesystem controls, plus deploymentProbeDirectory tests. Read
+docs/linux-filesystem-compatibility.md. Keep capacity errors distinct from unsupported
+links; the probe does not reserve capacity. Physical full-volume refusal/recovery,
+actual deployment-write failure and quota enforcement require separate app evidence.

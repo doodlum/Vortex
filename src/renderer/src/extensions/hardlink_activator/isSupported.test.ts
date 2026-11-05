@@ -10,12 +10,19 @@ import { getGame } from "../gamemode_management/util/getGame";
 const link = vi.hoisted(() => ({
   calls: [] as Array<[string, string]>,
   error: undefined as string,
+  writeError: undefined as string,
 }));
 
 vi.mock("../../util/fs", async (importOriginal) => {
   const actual = await importOriginal<typeof utilFs>();
   return {
     ...actual,
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (link.writeError !== undefined && String(args[0]).endsWith("__vortex_canary.tmp")) {
+        throw Object.assign(new Error(link.writeError), { code: link.writeError });
+      }
+      return actual.writeFileSync(...args);
+    },
     linkSync: (source: string, dest: string) => {
       link.calls.push([source, dest]);
       if (link.error !== undefined) {
@@ -86,6 +93,60 @@ test.for(["linux", "win32"] as const)(
       expect(nodeFs.readdirSync(gamePath)).toEqual([]);
     } finally {
       vi.unstubAllGlobals();
+    }
+  },
+);
+
+test.for(
+  ["linux", "win32"].flatMap((platform) =>
+    ["write", "link"].flatMap((operation) =>
+      ["ENOSPC", "EDQUOT"].map((code) => ({ platform, operation, code })),
+    ),
+  ),
+)(
+  "$platform: reports $code from the canary $operation as capacity, not link support",
+  ({ platform, operation, code }, { makeDeployment }) => {
+    const h = makeDeployment({ files: { "a.esp": "a" } });
+    const gamePath = path.dirname(h.gameDir);
+    nodeFs.mkdirSync(getGame("skyrimse").getModPaths(gamePath)[""], { recursive: true });
+    vi.stubGlobal("process", { ...process, platform });
+    try {
+      link.error = operation === "link" ? code : undefined;
+      link.writeError = operation === "write" ? code : undefined;
+      const reason = h.method.isSupported(supportState(gamePath, h.stagingDir), "skyrimse", "");
+      expect(reason?.description((text: string) => text)).toBe(
+        code === "EDQUOT" ? "Disk quota exceeded." : "Not enough disk space to deploy mods.",
+      );
+      expect(reason?.solution?.((text: string) => text)).toMatch(
+        code === "EDQUOT" ? /quota/i : /free.*space/i,
+      );
+      for (const directory of [h.stagingDir, getGame("skyrimse").getModPaths(gamePath)[""]]) {
+        expect(nodeFs.readdirSync(directory).filter((name) => name.includes("canary"))).toEqual([]);
+      }
+    } finally {
+      link.error = undefined;
+      link.writeError = undefined;
+      vi.unstubAllGlobals();
+    }
+  },
+);
+
+test.for(["EMFILE", "EOPNOTSUPP"])(
+  "retains the existing %s support-probe behavior",
+  (code, { makeDeployment }) => {
+    const h = makeDeployment({ files: { "a.esp": "a" } });
+    const gamePath = path.dirname(h.gameDir);
+    nodeFs.mkdirSync(getGame("skyrimse").getModPaths(gamePath)[""], { recursive: true });
+    link.error = code;
+    try {
+      const reason = h.method.isSupported(supportState(gamePath, h.stagingDir), "skyrimse", "");
+      if (code === "EMFILE") expect(reason).toBeUndefined();
+      else
+        expect(reason?.description((text: string) => text)).toBe(
+          "Filesystem doesn't support hard links.",
+        );
+    } finally {
+      link.error = undefined;
     }
   },
 );
