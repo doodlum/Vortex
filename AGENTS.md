@@ -194,3 +194,11 @@ unsupported-filesystem controls, plus deploymentProbeDirectory tests. Read
 docs/linux-filesystem-compatibility.md. Keep capacity errors distinct from unsupported
 links; the probe does not reserve capacity. Physical full-volume refusal/recovery,
 actual deployment-write failure and quota enforcement require separate app evidence.
+
+Symlink support-probe diagnostics: run renderer symlink_activator/isSupported tests on
+Windows and Linux alongside hardlink_activator/isSupported and deploymentProbeDirectory.
+Cover ENOSPC/EDQUOT at user-data symlink creation, canary write and canary link; retain
+Windows EPERM handling and propagate other user-data probe errors without a false
+Windows-elevation explanation. Update docs/linux-filesystem-compatibility.md. These
+injected tests do not establish Windows symlink privileges, physical quotas or deployed
+recovery; verify those separately with actual paths, visible errors and ownership evidence.

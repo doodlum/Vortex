@@ -887,11 +887,15 @@ and other deployment interruption paths need separate tests.
 
 ## Deployment capacity checks
 
-Hardlink deployment checks the filesystem by creating a temporary canary. If writing
-or linking it fails because the disk is full, Vortex reports insufficient disk space;
+Hardlink and Symlink deployment check the filesystem by creating temporary canaries.
+If writing or linking a canary fails because the disk is full, Vortex reports insufficient disk space;
 if the user's disk quota is exhausted, it reports that quota limit. These errors do
-not mean the filesystem lacks hardlink support. Free space on the staging and game
-drives, or reduce usage/increase the quota, then retry deployment. The canary is cleaned
+not mean the filesystem lacks link support. Symlink deployment also probes its user-data
+directory; a full disk or exhausted quota there is reported as capacity rather than a
+request for Windows administrator rights. Free space on the affected user-data, staging
+or game drive, or reduce usage/increase the quota, then retry deployment. Other errors
+from the user-data probe retain their error message; only Windows EPERM receives the
+existing administrator-rights explanation. The canary is cleaned
 up through the existing probe cleanup path. This check does not reserve space or
 guarantee that a later deployment will finish.
 
@@ -900,6 +904,17 @@ on Windows and Linux. The regression injects ENOSPC and EDQUOT at both canary op
 and preserves the cross-device, unsupported-filesystem and file-descriptor-limit
 controls. It does not establish a physical quota or deployment-write recovery result;
 verify those separately with isolated real filesystems and retained ownership evidence.
+
+Also run `pnpm exec vitest run src/extensions/symlink_activator/isSupported.test.ts`
+from `src/renderer` on both hosts. Its controlled failures cover the user-data link probe,
+canary write and canary link, plus permission, read-only, descriptor-limit and unsupported-link
+controls. These tests mock link creation and do not require Windows symlink privileges.
+For physical Linux acceptance, first verify an actual deployed symlink and its target on
+a private bounded filesystem, then fill only that filesystem until non-root ENOSPC.
+Open the deployment error's More dialog and verify the displayed capacity explanation.
+Keep staging, originals and manifests intact, retain failure evidence, restore space, then
+reselect Symlink deployment and test deploy, restart, purge and normal removal separately.
+Do not infer Windows privilege behavior or a physical quota result from injected tests.
 
 ## Staging directory access
 

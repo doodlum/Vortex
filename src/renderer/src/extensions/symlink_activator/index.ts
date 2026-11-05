@@ -24,12 +24,26 @@ import {
   stagingDirectoryUnavailable,
 } from "../mod_management/util/deploymentProbeDirectory";
 
+function capacityProblem(code: string | undefined): IUnavailableReason | undefined {
+  if (code !== "ENOSPC" && code !== "EDQUOT") return undefined;
+  return {
+    description: (t) =>
+      code === "EDQUOT" ? t("Disk quota exceeded.") : t("Not enough disk space to deploy mods."),
+    solution: (t) =>
+      code === "EDQUOT"
+        ? t("Reduce disk usage or increase the disk quota, then retry deployment.")
+        : t(
+            "Free disk space on the affected user data, staging or game drive, then retry deployment.",
+          ),
+  };
+}
+
 class DeploymendMethod extends LinkingDeployment {
   public compatible: string[] = ["symlink_activator_elevated"];
 
   public priority: number = 10;
 
-  private mDidLogElevation: boolean = false;
+  private mDidLogProbeError: boolean = false;
 
   constructor(api: IExtensionApi) {
     super(
@@ -103,9 +117,8 @@ class DeploymendMethod extends LinkingDeployment {
         throw new Error("Game directory is not available");
       }
       probeDirectory = deploymentProbeDirectory(modPaths[typeId]);
-      if (!this.ensureAdmin()) {
-        return { description: (t) => t("Requires admin rights on windows.") };
-      }
+      const permissionProblem = this.symlinkPermissionProblem();
+      if (permissionProblem !== undefined) return permissionProblem;
     } catch (err) {
       return { description: (t) => getErrorMessageOrDefault(err) };
     }
@@ -123,7 +136,10 @@ class DeploymendMethod extends LinkingDeployment {
       fs.symlinkSync(canary, canary + ".link");
     } catch (err) {
       const code = getErrorCode(err);
-      if (code === "EMFILE") {
+      const capacity = capacityProblem(code);
+      if (capacity !== undefined) {
+        res = capacity;
+      } else if (code === "EMFILE") {
         // EMFILE shouldn't keep us from using links
       } else if (code === "EISDIR") {
         // the error code we're actually getting when symlinks aren't supported is EISDIR,
@@ -246,7 +262,7 @@ class DeploymendMethod extends LinkingDeployment {
     return false;
   }
 
-  private ensureAdmin(): boolean {
+  private symlinkPermissionProblem(): IUnavailableReason | undefined {
     const userData = getVortexPath("userData");
     // any file we know exists
     const srcFile = path.join(userData, "Cookies");
@@ -260,15 +276,23 @@ class DeploymendMethod extends LinkingDeployment {
       }
       fs.symlinkSync(srcFile, destFile);
       fs.removeSync(destFile);
-      return true;
+      return undefined;
     } catch (err) {
-      if (!this.mDidLogElevation) {
-        log("debug", "assuming user needs elevation to create symlinks", {
+      if (!this.mDidLogProbeError) {
+        log("debug", "failed to probe symbolic links in user data", {
           error: getErrorMessageOrDefault(err),
         });
-        this.mDidLogElevation = true;
+        this.mDidLogProbeError = true;
       }
-      return false;
+      const code = getErrorCode(err);
+      return (
+        capacityProblem(code) ?? {
+          description: (t) =>
+            process.platform === "win32" && code === "EPERM"
+              ? t("Requires admin rights on windows.")
+              : getErrorMessageOrDefault(err),
+        }
+      );
     }
   }
 
