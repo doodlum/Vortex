@@ -705,6 +705,19 @@ the configured staging directory, skips directory symlinks, includes hidden file
 waits for each bounded batch to finish before reporting failure. Native helper tests cover
 unrelated hardlinks, device identity, large inode precision, disappearing files and pending
 operations during failure. Directory-symlink fixtures run on POSIX; they skip on Windows.
+Windows hardlink purge also waits for its queued unlinks if directory enumeration fails.
+It propagates the first unlink error or cancellation after the current batch settles,
+then skips later batches. The original error remains available to normal cancellation
+handling instead of logging it and reporting success. A walker
+error cannot mask an already recorded unlink failure, including when the walker reports
+a disappearing directory. Early batch failures are observed while enumeration continues,
+so normal purge handling receives them before global unhandled-error reporting.
+Run `pnpm exec vitest run src/extensions/hardlink_activator/windowsPurge.failure.test.ts`
+from `src/renderer` on both hosts. These mocked Windows walker controls cover error and
+queue ordering under native and Bluebird promises; separately hold a real Windows file
+handle without delete sharing, cancel the File busy prompt, and verify purge refuses to
+report success while the deployment manifest still owns that file. Release the handle
+before retrying through Vortex.
 
 Linux Steam setup awaits its initial store scan before synchronous game support
 callbacks resolve prefix folders. It then validates the associated initialized

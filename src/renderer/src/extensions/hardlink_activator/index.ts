@@ -285,6 +285,7 @@ class DeploymentMethod extends LinkingDeployment {
       let purged: number = 0;
 
       let queue = PromiseBB.resolve();
+      const failures: unknown[] = [];
       if (inos.size === 0) {
         return PromiseBB.resolve();
       }
@@ -298,17 +299,36 @@ class DeploymentMethod extends LinkingDeployment {
                 if (purged % 1000 === 0) {
                   onProgress?.(purged, total);
                 }
-                return fs
-                  .unlinkAsync(entry.filePath)
-                  .catch((err) => log("warn", "failed to remove", entry.filePath));
+                return fs.unlinkAsync(entry.filePath).catch((err: unknown) => {
+                  failures.push(err);
+                  log("warn", "failed to remove", {
+                    path: entry.filePath,
+                    error: getErrorMessageOrDefault(err),
+                  });
+                });
               } else {
                 return PromiseBB.resolve();
               }
-            }).then(() => undefined),
+            }).then(() => {
+              // Drain this batch, then preserve the original failure or cancellation.
+              // Later queued batches must not start once a batch has failed.
+              if (failures.length > 0) throw failures[0];
+            }),
           );
+          // A long walk can outlive a failed batch. Observe this tail immediately
+          // while keeping its rejection for the caller that awaits the final queue.
+          void queue.catch(() => undefined);
         },
         { details: true, skipHidden: false },
-      ).then(() => queue);
+      ).then(
+        () => queue,
+        // The walker can fail after scheduling unlinks. Wait for their queue;
+        // an unlink failure takes precedence over a missing walker root.
+        (err: unknown) =>
+          queue.then(() => {
+            throw err;
+          }),
+      );
     });
   }
 
