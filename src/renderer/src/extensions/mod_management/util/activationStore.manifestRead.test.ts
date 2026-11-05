@@ -14,7 +14,7 @@ import { fallbackPurge, ownDeployedFiles } from "./activationStore";
 import { registerDeploymentMethod } from "./deploymentMethods";
 
 vi.mock("../../../util/fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../util/fs")>();
+  const actual = await importOriginal<typeof vortexFs>();
   return { ...actual, readFileAsync: vi.fn(actual.readFileAsync) };
 });
 hardlinkInit({ api: {}, registerDeploymentMethod } as unknown as IExtensionContext);
