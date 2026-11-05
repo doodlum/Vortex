@@ -842,3 +842,33 @@ native C# execution, real dialog interaction, physical deployment or packaging.
 The native runtime/cache, platform routing and startup contracts have additional
 inert tests described in [the C# runtime guide](legacy-csharp-runtime.md). Actual
 packaged installation and deployment parity remain separate verification gates.
+
+### Extraction on a full filesystem
+
+When extraction fails, Vortex recognizes disk-full diagnostics and checks available blocks
+on the extraction filesystem. Installation extracts into staging; simulation uses Vortex's
+temporary directory. Some Linux 7-Zip failures say `File exists` even when their target
+filesystem has no available space. Vortex reports insufficient space instead of offering
+to continue with a supposedly damaged archive in that case. A failed capacity probe keeps
+the original extraction diagnostic; confirmed archive-corruption diagnostics retain priority.
+Both installation and installer simulation use this classification. The reported path is
+the extraction parent directory: staging for installation, or Vortex's temporary directory
+for simulation. A library mounted below the root filesystem is checked at that library.
+
+With normal workspace dependencies installed, run from `src/renderer` on Linux and Windows:
+
+```sh
+pnpm exec vitest run src/extensions/mod_management/InstallManager.diskFull.test.ts
+```
+
+These account-free tests exercise both extraction consumers with controlled extractor and
+capacity responses. They do not fill a disk. For physical acceptance, use an isolated profile
+and a private bounded filesystem with staging and the game on that filesystem. Keep the
+profile, downloads and evidence on a separate filesystem. Install and deploy a baseline mod,
+fill only an unlisted test file until a non-root write actually returns `ENOSPC`, then attempt
+a second valid archive. Record the user-visible failure, terminal callback, retained baseline
+payload and original backups. Free only that filler, retry installation and deployment, then
+restart, purge and remove through Vortex. Stop the app before unmounting the private volume.
+Never fill the host's root filesystem or delete manifest-owned files to reset a failure.
+This check establishes space-exhaustion recovery; quota `EDQUOT`, deployment-write failures,
+and other deployment interruption paths need separate tests.

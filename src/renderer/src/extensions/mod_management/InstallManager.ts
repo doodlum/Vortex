@@ -2,6 +2,7 @@
  * @see docs/mod-management/collections.md - For collections & phased installation documentation
  */
 
+import * as nodeFs from "node:fs";
 import * as os from "os";
 import * as path from "path";
 
@@ -1114,8 +1115,8 @@ class InstallManager {
           if (critical !== undefined) {
             return Promise.reject(new ArchiveBrokenError(path.basename(archivePath), critical));
           }
-          if (errors.some((err) => this.isDiskFull(err))) {
-            return Promise.reject(new InsufficientDiskSpace(path.parse(tempPath).root));
+          if (this.isDiskFull(errors.join("\n"), tempPath)) {
+            return Promise.reject(new InsufficientDiskSpace(path.dirname(tempPath)));
           }
           return this.queryContinue(api, errors, archivePath);
         } else {
@@ -3884,13 +3885,24 @@ class InstallManager {
     return patterns.some((pattern) => lowered.includes(pattern));
   }
 
-  // A disk-full extraction error is a genuine system failure, not archive damage: it must not be
-  // routed through the "archive damaged, continue?" prompt (whose Cancel yields a UserCanceled that
-  // leaves a collection member stuck non-terminal). Detected by message so it can be re-thrown as a
-  // real, ENOSPC-coded failure instead.
-  private isDiskFull(errorMessage: string): boolean {
+  // Extractors can report ambiguous errors (including EEXIST) when their target is full.
+  // Check the extraction filesystem only after extraction fails; failed probes leave the original
+  // archive diagnostic intact. The parent exists even if extraction removed its temporary folder.
+  private isDiskFull(errorMessage: string, tempPath: string): boolean {
     const lowered = errorMessage.toLowerCase();
-    return lowered.includes("not enough space") || lowered.includes("enospc");
+    if (
+      lowered.includes("not enough space") ||
+      lowered.includes("no space left on device") ||
+      lowered.includes("enospc") ||
+      /\berrno[=:]\s*28\b/.test(lowered)
+    ) {
+      return true;
+    }
+    try {
+      return nodeFs.statfsSync(path.dirname(tempPath)).bavail <= 0;
+    } catch {
+      return false;
+    }
   }
 
   private extractWithRetry(
@@ -4023,8 +4035,8 @@ class InstallManager {
           if (critical !== undefined) {
             throw new ArchiveBrokenError(path.basename(archivePath), critical);
           }
-          if (errors.some((err) => this.isDiskFull(err))) {
-            throw new InsufficientDiskSpace(path.parse(tempPath).root);
+          if (this.isDiskFull(errors.join("\n"), tempPath)) {
+            throw new InsufficientDiskSpace(path.dirname(tempPath));
           }
           await this.queryContinue(api, errors, archivePath);
         }

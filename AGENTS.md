@@ -156,3 +156,10 @@ Read the doc for the area you're touching rather than the whole tree.
 - Archive transfer changes: read `docs/linux-filesystem-compatibility.md`. Run renderer `InstallManager.archiveSources.test.ts` on both hosts. Optional extraction hardlinks must reach copy fallback on EPERM without a permission dialog; retain real fs-wrapper coverage, copy failure propagation and draining of accepted transfers. Verify actual mounted exFAT install and Move Deployment separately.
 
 - Packaging tool identity probes must invoke the selected path while recording and hashing its resolved target. Preserve symlink-based multicall behavior (for example Ubuntu snap/snapd); cover bare PATH and absolute symlink calls plus direct-target and missing-tool controls in package-linux.test.ts on Linux. Windows skips do not establish Linux invocation behavior. Record the original nightly failure and validate actual Snap generation separately.
+
+For extraction storage-error changes, run `InstallManager.diskFull.test.ts` from
+`src/renderer` on both hosts. Installation and simulation must preserve archive-error
+behavior when a capacity probe fails and preserve confirmed-corruption precedence. Unit
+capacity responses do not establish physical disk-full recovery: use the bounded private
+filesystem procedure in `docs/linux-filesystem-compatibility.md`, retaining first outcomes
+and treating callback timeouts as inconclusive. Never fill the root filesystem.
