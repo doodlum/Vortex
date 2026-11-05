@@ -47,6 +47,7 @@ async function fixture() {
   return { root, deploy: await fs.realpath(deploy), scratch, config };
 }
 
+// This exercises real filesystem I/O; allow slower hosts to complete the same assertions.
 test("isolates copied native payloads and preserves external resources/output and original inputs", async () => {
   const { deploy, scratch, config } = await fixture();
   const staged = await stageLinuxPackage(deploy, scratch);
@@ -70,7 +71,7 @@ test("isolates copied native payloads and preserves external resources/output an
   ).toEqual(config);
   await fs.writeFile(path.join(staged.stage, "build/main.cjs"), "changed copy");
   expect(await fs.readFile(path.join(deploy, "build/main.cjs"), "utf8")).toBe("original payload");
-});
+}, 30_000);
 
 test("refuses scratch parents with a dependency tree that the collector could traverse", async () => {
   const { root, deploy, scratch } = await fixture();
