@@ -10,7 +10,7 @@ import * as fs from "../../util/fs";
 import getVortexPath from "../../util/getVortexPath";
 import type { TFunction } from "../../util/i18n";
 import { log } from "../../util/log";
-import { activeGameId, gameName } from "../../util/selectors";
+import { activeGameId, gameName, installPathForGame } from "../../util/selectors";
 import walk from "../../util/walk";
 import type { IDiscoveryResult } from "../gamemode_management/types/IDiscoveryResult";
 import { getGame } from "../gamemode_management/util/getGame";
@@ -19,7 +19,10 @@ import type {
   IDeploymentMethod,
   IUnavailableReason,
 } from "../mod_management/types/IDeploymentMethod";
-import { deploymentProbeDirectory } from "../mod_management/util/deploymentProbeDirectory";
+import {
+  deploymentProbeDirectory,
+  stagingDirectoryUnavailable,
+} from "../mod_management/util/deploymentProbeDirectory";
 
 class DeploymendMethod extends LinkingDeployment {
   public compatible: string[] = ["symlink_activator_elevated"];
@@ -86,6 +89,11 @@ class DeploymendMethod extends LinkingDeployment {
 
     if (game.details?.supportsSymlinks === false || game.compatible?.symlinks === false) {
       return { description: (t) => t("Game doesn't support symlinks") };
+    }
+
+    const stagingProblem = stagingDirectoryUnavailable(installPathForGame(state, gameId));
+    if (stagingProblem !== undefined) {
+      return stagingProblem;
     }
 
     let probeDirectory: string;

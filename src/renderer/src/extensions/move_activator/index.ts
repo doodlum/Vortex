@@ -23,7 +23,10 @@ import type {
   IDeploymentMethod,
   IUnavailableReason,
 } from "../mod_management/types/IDeploymentMethod";
-import { deploymentProbeDirectory } from "../mod_management/util/deploymentProbeDirectory";
+import {
+  deploymentProbeDirectory,
+  stagingDirectoryUnavailable,
+} from "../mod_management/util/deploymentProbeDirectory";
 
 const LNK_EXT = ".vortex_lnk";
 
@@ -84,6 +87,11 @@ class DeploymentMethod extends LinkingDeployment {
       return {
         description: (t) => t("Game doesn't support the move deployment method"),
       };
+    }
+
+    const stagingProblem = stagingDirectoryUnavailable(installPathForGame(state, gameId));
+    if (stagingProblem !== undefined) {
+      return stagingProblem;
     }
 
     let probeDirectory: string;

@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { getErrorCode } from "@vortex/shared";
 
 import * as fs from "../../../util/fs";
+import type { IUnavailableReason } from "../types/IDeploymentMethod";
 
 /** Probe a missing output's existing ancestor without creating directories in a selector. */
 export function deploymentProbeDirectory(target: string): string {
@@ -29,5 +30,26 @@ export function deploymentProbeDirectory(target: string): string {
       if (parent === current) throw err;
       current = parent;
     }
+  }
+}
+
+/** Staging must already exist and allow reading, updating and traversing mod files. */
+export function stagingDirectoryUnavailable(stagingPath: string): IUnavailableReason {
+  try {
+    if (!fs.statSync(stagingPath).isDirectory()) {
+      throw new Error("Mod staging path is not a directory");
+    }
+    fs.accessSync(stagingPath, fs.constants.R_OK | fs.constants.W_OK | fs.constants.X_OK);
+    return undefined;
+  } catch {
+    return {
+      description: (t) => t("Can't access mod staging directory."),
+      order: 2,
+      solution: (t) =>
+        t(
+          'Ensure "{{stagingPath}}" exists and your current user account can read, write and access its contents.',
+          { replace: { stagingPath } },
+        ),
+    };
   }
 }

@@ -884,3 +884,17 @@ restart, purge and remove through Vortex. Stop the app before unmounting the pri
 Never fill the host's root filesystem or delete manifest-owned files to reset a failure.
 This check establishes space-exhaustion recovery; quota `EDQUOT`, deployment-write failures,
 and other deployment interruption paths need separate tests.
+
+## Staging directory access
+
+Hardlink, Symlink and Move deployment require an existing staging directory that the
+current account can read, write and traverse. On Linux, denied directory permissions
+or a read-only staging mount make these methods unavailable in Settings > Mods.
+Restore access to the existing staging directory, then reactivate the same profile
+and retry deployment. Do not reinitialize or delete staging data to repair permissions.
+
+The renderer `deploymentProbeDirectory.methods.test.ts` regression covers method
+availability before denied/read-only staging access and after access is restored. Run
+`pnpm exec vitest run deploymentProbeDirectory` from `src/renderer`; it includes the
+missing-output and removed-game controls. Filesystem access checks do not establish
+all Windows ACL behavior or replace a real mounted-directory deployment test.

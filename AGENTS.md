@@ -176,3 +176,9 @@ Manifest read handling changes: read `docs/linux-filesystem-compatibility.md` an
 renderer activationStore.manifestRead and activationStore controls on both hosts.
 Keep primary read failures separate from parse failures; unreadable ownership must
 stop purge. Verify denied output access and recovery in a real app separately.
+
+Staging-root availability changes: run renderer deploymentProbeDirectory methods and
+helper tests on both hosts. Preserve missing-output/removed-game behavior and require
+read/write/traverse access to the existing staging root without creating it in selectors.
+Read docs/linux-filesystem-compatibility.md; verify actual denied/read-only staging
+roots separately, including retained data and same-profile recovery.

@@ -22,7 +22,10 @@ import type {
   IDeploymentMethod,
   IUnavailableReason,
 } from "../mod_management/types/IDeploymentMethod";
-import { deploymentProbeDirectory } from "../mod_management/util/deploymentProbeDirectory";
+import {
+  deploymentProbeDirectory,
+  stagingDirectoryUnavailable,
+} from "../mod_management/util/deploymentProbeDirectory";
 import { purgeNativeHardlinks } from "./nativeHardlinks";
 
 export class FileFound extends Error {
@@ -83,6 +86,11 @@ class DeploymentMethod extends LinkingDeployment {
 
     if (modPaths[typeId] === undefined) {
       return undefined;
+    }
+
+    const stagingProblem = stagingDirectoryUnavailable(installPathForGame(state, gameId));
+    if (stagingProblem !== undefined) {
+      return stagingProblem;
     }
 
     let probeDirectory: string;
