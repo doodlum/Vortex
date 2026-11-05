@@ -356,9 +356,10 @@ type ExportType$2 = IBaseProps$11 & IActionControlProps & IExtensibleProps & Rea
 type ExportType$3 = IContextMenuProps & IActionControlProps & IExtensibleProps & React$2.HTMLAttributes<any>;
 
 // Warning: (ae-forgotten-export) The symbol "IBaseProps$6" needs to be exported by the entry point api.d.ts
+// Warning: (ae-forgotten-export) The symbol "IReportingProps" needs to be exported by the entry point api.d.ts
 //
 // @public (undocumented)
-type ExportType = IBaseProps$6 & IActionControlProps & IExtensibleProps & React$2.HTMLAttributes<any>;
+type ExportType = IBaseProps$6 & IActionControlProps & IExtensibleProps & IReportingProps & React$2.HTMLAttributes<any>;
 
 // @public
 interface ExtensionInfo {
@@ -3452,6 +3453,11 @@ interface IRegisterRepositoryLookup {
 }
 
 // @public (undocumented)
+interface IReportingProps {
+    onAction?: (action: IActionDefinition, index: number) => void;
+}
+
+// @public (undocumented)
 interface IRowState {
     // (undocumented)
     highlighted: boolean;
@@ -5124,8 +5130,8 @@ export class ZoomableImage extends React$2.Component<IZoomableImageProps, {
 // lib/api.d.ts:5337:7 - (ae-forgotten-export) The symbol "IGameInfoEntry" needs to be exported by the entry point api.d.ts
 // lib/api.d.ts:5372:5 - (ae-forgotten-export) The symbol "IOverlay" needs to be exported by the entry point api.d.ts
 // lib/api.d.ts:5458:5 - (ae-forgotten-export) The symbol "IDiscoveryPhase" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:8842:3 - (ae-forgotten-export) The symbol "MainPageBody" needs to be exported by the entry point api.d.ts
-// lib/api.d.ts:8843:3 - (ae-forgotten-export) The symbol "MainPageHeader" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:8852:3 - (ae-forgotten-export) The symbol "MainPageBody" needs to be exported by the entry point api.d.ts
+// lib/api.d.ts:8853:3 - (ae-forgotten-export) The symbol "MainPageHeader" needs to be exported by the entry point api.d.ts
 
 // (No @packageDocumentation comment for this package)
 
