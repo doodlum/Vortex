@@ -264,7 +264,14 @@ function getManifestImpl(
   paths: ReturnType<typeof manifestPaths>,
 ): Promise<IDeploymentManifest> {
   const { manifestPath, backupPath, binaryBackupPath } = paths;
-  return readManifestFile(manifestPath)
+  let primaryReadFailed = false;
+  return Promise.resolve()
+    .then(() => fs.readFileAsync(manifestPath, "utf8"))
+    .catch((err: unknown) => {
+      primaryReadFailed = true;
+      throw err;
+    })
+    .then((data) => readManifest(data))
     .catch((err: unknown) => {
       if (err instanceof UserCanceled) {
         return Promise.reject(err);
@@ -274,12 +281,15 @@ function getManifestImpl(
       if (code === "ENOENT") {
         return emptyManifest(instanceId);
       }
-      if (code === "EPERM") {
-        errObj.message =
-          `The manifest file "${manifestPath}" is inaccessible due to ` +
-          "insufficient permissions.\nPlease ensure your Windows user account " +
-          "has full read/write permissions to the manifest file and try again.";
-        errObj["allowReport"] = false;
+      // A read failure says nothing about the validity of the stored manifest.
+      if (primaryReadFailed) {
+        if (code === "EPERM" || code === "EACCES") {
+          errObj.message =
+            `The manifest file "${manifestPath}" is inaccessible due to ` +
+            "insufficient permissions.\nPlease ensure your user account " +
+            "has full read/write permissions to the manifest file and try again.";
+          errObj["allowReport"] = false;
+        }
         return Promise.reject(errObj);
       }
 
@@ -427,11 +437,20 @@ export async function ownDeployedFiles(
   stagingPath: string,
 ): Promise<IDeployedFile[]> {
   const { instanceId } = api.getState().app;
-  // a damaged manifest lists nothing, so the purge still runs
+  const { manifestPath } = manifestPaths(deployPath, stagingPath, modType);
+  let data: string;
+  try {
+    data = await readFile(manifestPath, "utf8");
+  } catch (err: unknown) {
+    if (getErrorCode(err) === "ENOENT") {
+      return [];
+    }
+    throw err;
+  }
+  // Keep legacy recovery for malformed data, but never discard unreadable ownership.
   let manifest: IDeploymentManifest | undefined;
   try {
-    const { manifestPath } = manifestPaths(deployPath, stagingPath, modType);
-    manifest = readManifest(await readFile(manifestPath, "utf8"));
+    manifest = readManifest(data);
   } catch {
     manifest = undefined;
   }

@@ -171,3 +171,8 @@ SDK cache contamination, refresh refusal, membership cooldowns and obsolete API-
 Use synthetic credentials for controls; packaged owner-authenticated downloads and restart
 are separate evidence. Do not put credential values in reports or claim a two-account live
 switch from mocked requests.
+
+Manifest read handling changes: read `docs/linux-filesystem-compatibility.md` and run
+renderer activationStore.manifestRead and activationStore controls on both hosts.
+Keep primary read failures separate from parse failures; unreadable ownership must
+stop purge. Verify denied output access and recovery in a real app separately.

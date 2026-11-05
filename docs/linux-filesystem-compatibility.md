@@ -50,6 +50,18 @@ mounted-filesystem install/deploy/purge test; it does not establish that runtime
 
 ## Purge restoration and manifest ownership
 
+If Vortex cannot read a deployment manifest, purge stops without treating that failure
+as corruption or an empty ownership list. For a permission error, restore access to
+the game output directory and manifest, then retry. Do not restore a backup merely
+because directory access was denied. A missing manifest retains the existing recovery
+behavior; a readable but malformed manifest still uses the corruption recovery flow.
+
+The renderer regression `activationStore.manifestRead.test.ts` covers failed primary
+reads, unreadable ownership, cancellation and missing manifests. Run it together with
+`activationStore.test.ts` from `src/renderer` using `pnpm exec vitest run` and both
+file paths. These tests preserve the backup restore/decline controls; a real denied
+output-directory test is needed to verify the visible permission error and recovery.
+
 Linking deployment removes links for all mod types and records genuine leftovers before
 restoring base-file backups and cleaning empty folders. A restored original can share the
 mod's timestamp, so restoring it before the leftover check can retain a false deployment
