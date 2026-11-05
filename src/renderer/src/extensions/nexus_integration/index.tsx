@@ -8,7 +8,6 @@ import type {
   IModInfo,
   ICollection,
   IRevision,
-  IValidateKeyResponse,
   IRating,
   RatingOptions,
 } from "@nexusmods/nexus-api";
@@ -74,20 +73,9 @@ import {
   genGameAttribute,
   genModIdAttribute,
 } from "./attributes";
-import {
-  NEXUS_API_SUBDOMAIN,
-  NEXUS_BASE_URL,
-  NEXUS_DOMAIN,
-  PREMIUM_PATH,
-  REVALIDATION_FREQUENCY,
-} from "./constants";
+import { NEXUS_API_SUBDOMAIN, NEXUS_BASE_URL, NEXUS_DOMAIN, PREMIUM_PATH } from "./constants";
 import * as eh from "./eventHandlers";
-import {
-  adoptMembershipRead,
-  ensureFreshMembership,
-  scheduleMembershipRefresh,
-  trackMembershipReads,
-} from "./membership";
+import { adoptMembershipRead, scheduleMembershipRefresh, trackMembershipReads } from "./membership";
 import { NxmProtocol } from "./nxmProtocol";
 import { buildNXMModUrl } from "./NXMUrl";
 import { accountReducer } from "./reducers/account";
@@ -111,11 +99,14 @@ import {
   retrieveNexusGames,
   updateToken,
 } from "./util";
+import { createAccountClient } from "./util/accountClient";
+import { createApiRevalidation } from "./util/apiRevalidation";
 import { checkModVersion } from "./util/checkModsVersion";
 import { nexusGameId } from "./util/convertGameId";
 import { fillNexusIdByMD5, guessFromFileName, queryResetSource } from "./util/guessModID";
 import { isStoragePathName } from "./util/healStoragePathNames";
 import { nexusModPageUrl } from "./util/nexus_urls/nexusUrls";
+import { requestFuncs } from "./util/requestMethods";
 import retrieveCategoryList from "./util/retrieveCategories";
 import Tracking from "./util/tracking";
 import { makeFileUID } from "./util/UIDs";
@@ -167,59 +158,15 @@ const revalidateFuncs = new Set([
   "getFileInfo",
 ]);
 
-const requestFuncs = new Set([
-  "revalidate",
-  "setKey",
-  "validateKey",
-  "getUserInfo",
-  "getTrackedMods",
-  "trackMod",
-  "untrackMod",
-  "getGames",
-  "getLatestAdded",
-  "getLatestUpdated",
-  "getTrending",
-  "getEndorsements",
-  "getColourschemes",
-  "getColorschemes",
-  "getGameInfo",
-  "getRecentlyUpdatedMods",
-  "endorseMod",
-  "getModInfo",
-  "getChangelogs",
-  "getModFiles",
-  "getFileInfo",
-  "getDownloadURLs",
-  "getFileByMD5",
-  "modsByUid",
-  "modFilesByUid",
-  "fileHashes",
-  "getCollectionDownloadLink",
-  "createCollection",
-  "updateCollection",
-  "createOrUpdateRevision",
-  "editCollection",
-  "publishRevision",
-  "attachCollectionsToCategory",
-  "getCollectionGraph",
-  "getCollectionListGraph",
-  "getCollectionRevisionGraph",
-  "getRevisionUploadUrl",
-  "endorseCollection",
-  "rateRevision",
-  "getCollectionVideo",
-  "getOwnIssues",
-  "sendFeedback",
-]);
-
 class Disableable {
   private mDisabled = false;
-  private mLastValidation: number = Date.now();
+  private mRevalidate: ReturnType<typeof createApiRevalidation>;
   private mApi: IExtensionApi;
   private mClient: NexusT | undefined;
 
   constructor(api: IExtensionApi) {
     this.mApi = api;
+    this.mRevalidate = createApiRevalidation(api);
   }
 
   /** The fully wrapped client, so requests this proxy makes itself are gated and logged too. */
@@ -256,44 +203,7 @@ class Disableable {
         return obj[prop](hash, gameId);
       };
     } else if (revalidateFuncs.has(prop)) {
-      // tslint:disable-next-line:no-this-assignment
-      const that = this;
-      // tslint:disable-next-line:only-arrow-functions
-      return function (...args) {
-        const state = that.mApi.getState();
-        const key = state.confidential.account?.["nexus"]?.["APIKey"];
-        if (key === undefined) {
-          // An OAuth session carries the membership in the JWT, but that only changes when the
-          // token is refreshed, so a plan bought or cancelled on the website can sit stale for the
-          // rest of the session. The membership module owns how often to ask and shares one request
-          // between callers, so hand it every call rather than keeping a second clock here. The
-          // call being made doesn't need the answer, so don't hold it up for one.
-          void ensureFreshMembership(that.mApi, that.mClient ?? obj);
-          return obj[prop](...args);
-        }
-
-        const now = Date.now();
-        if (now <= that.mLastValidation + REVALIDATION_FREQUENCY) {
-          return obj[prop](...args);
-        }
-        that.mLastValidation = now;
-
-        // the purpose of this is to renew our user info, in case the user
-        // has bought premium since the last validation but technically
-        // it's possible we never logged in successfully in the first place
-        // because the internet was offline at startup.
-        // In that case we can use this opportunity to try to log in now
-        const prom: PromiseBB<IValidateKeyResponse> = PromiseBB.resolve(
-          truthy(obj.getValidationResult()) ? obj.revalidate() : obj.setKey(key),
-        );
-
-        return prom.then((userInfo) => {
-          if (truthy(userInfo)) {
-            that.mApi.events.emit("did-login", null);
-          }
-          return obj[prop](...args);
-        });
-      };
+      return (...args) => this.mRevalidate(this.mClient ?? obj, () => obj[prop](...args));
     } else {
       return obj[prop];
     }
@@ -1018,7 +928,12 @@ function once(api: IExtensionApi, callbacks: Array<(nexus: NexusT) => void>) {
     const disableable = new Disableable(api);
     nexus = new Proxy(
       new Proxy(
-        new Nexus("Vortex", getApplication().version, nexusGameId(getGame(gameMode)), 30000),
+        createAccountClient(
+          api,
+          () =>
+            new Nexus("Vortex", getApplication().version, nexusGameId(getGame(gameMode)), 30000),
+          new Set([...requestFuncs, "getPreferences"]),
+        ),
         disableable,
       ),
       requestLog,
@@ -1075,6 +990,7 @@ function once(api: IExtensionApi, callbacks: Array<(nexus: NexusT) => void>) {
         // hand the login's account read to the membership module, so the freshness checks further
         // down this function share it
         adoptMembershipRead(
+          api,
           Promise.resolve(updateToken(api, nexus, oauthCred)).then(
             (loggedIn): UserInfoRead => (loggedIn ? "updated" : "failed"),
             (): UserInfoRead => "failed",

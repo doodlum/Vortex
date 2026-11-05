@@ -79,6 +79,7 @@ import { isRateLimited, notifyRateLimited } from "./rateLimit";
 import { isLoggedIn, userInfo as userInfoSelector } from "./selectors";
 import { accessTokenSchema } from "./types/IJWTAccessToken";
 import type { IMembership, IValidateKeyDataV2 } from "./types/IValidateKeyData";
+import { getAccountSession, isCurrentAccountSession } from "./util/accountSession";
 import { checkModVersion, fetchRecentUpdates, ONE_DAY, ONE_MINUTE } from "./util/checkModsVersion";
 import {
   convertGameIdReverse,
@@ -1889,6 +1890,7 @@ export function getUserInfo(
   /*userInfo: IValidateKeyResponse*/
 ): BluebirdPromise<UserInfoRead> {
   log("info", "updateUserInfo()");
+  const session = getAccountSession(api);
 
   /**
    * This is where we are primarily updating the user info in the state.
@@ -1902,12 +1904,14 @@ export function getUserInfo(
     // get userinfo from api
     return BluebirdPromise.resolve(nexus.getUserInfo())
       .then((apiUserInfo): UserInfoRead => {
+        if (!isCurrentAccountSession(api, session)) return "failed";
         // update state with new info from endpoint
         api.store.dispatch(setUserInfo(transformUserInfoFromApi(apiUserInfo)));
         //log('info', 'getUserInfo() nexus.getUserInfo response', apiUserInfo);
         return "updated";
       })
       .catch((err): UserInfoRead => {
+        if (!isCurrentAccountSession(api, session)) return "failed";
         //log('error', `getUserInfo() nexus.getUserInfo response ${err.message}`, err);
         if (err instanceof ProcessCanceled) {
           // no connection, or the api was switched off; neither is worth a toast for a read
@@ -2005,19 +2009,22 @@ export function updateToken(
   credentials: IOAuthCredentials,
 ): BluebirdPromise<boolean> {
   log("info", "updateToken()");
+  const session = getAccountSession(api);
 
   return BluebirdPromise.resolve(nexus.setTokenProvider(tokenProviderFor(api)))
     .then(() => {
-      if (!isLoggedIn(api.getState())) {
+      if (!isCurrentAccountSession(api, session) || !isLoggedIn(api.getState())) {
         // priming the provider refreshed the token, the site refused, and the session is gone
         return false;
       }
       return BluebirdPromise.resolve(nexus.getUserInfo()).then((apiUserInfo) => {
+        if (!isCurrentAccountSession(api, session)) return false;
         api.store.dispatch(setUserInfo(transformUserInfoFromApi(apiUserInfo)));
         return true;
       });
     })
     .catch((err: unknown) => {
+      if (!isCurrentAccountSession(api, session)) return false;
       if (isLoginRefused(err)) {
         refuseLogin(api, err);
         return false;
@@ -2043,13 +2050,23 @@ export function updateToken(
 }
 
 export function updateKey(api: IExtensionApi, nexus: Nexus, key: string): BluebirdPromise<boolean> {
+  const session = getAccountSession(api);
   return (
     BluebirdPromise.resolve(nexus.setKey(key))
-      .then(() => true)
+      .then(
+        () => isCurrentAccountSession(api, session),
+        (error) => {
+          if (!isCurrentAccountSession(api, session)) return false;
+          throw error;
+        },
+      )
       //.then(userInfo => updateUserInfo(api, nexus))
       // don't stop the login just because the github rate limit is exceeded
-      .catch(RateLimitExceeded, () => BluebirdPromise.resolve(true))
+      .catch(RateLimitExceeded, () =>
+        BluebirdPromise.resolve(isCurrentAccountSession(api, session)),
+      )
       .catch(TimeoutError, (err) => {
+        if (!isCurrentAccountSession(api, session)) return false;
         api.sendNotification({
           type: "error",
           message: "API Key validation timed out",
@@ -2057,7 +2074,7 @@ export function updateKey(api: IExtensionApi, nexus: Nexus, key: string): Bluebi
             {
               title: "Retry",
               action: (dismiss) => {
-                updateKey(api, nexus, key);
+                if (isCurrentAccountSession(api, session)) updateKey(api, nexus, key);
                 dismiss();
               },
             },
@@ -2068,6 +2085,7 @@ export function updateKey(api: IExtensionApi, nexus: Nexus, key: string): Bluebi
         return false;
       })
       .catch(NexusError, (err) => {
+        if (!isCurrentAccountSession(api, session)) return false;
         api.sendNotification({
           id: "nexus-login-failed",
           type: "error",
@@ -2077,7 +2095,7 @@ export function updateKey(api: IExtensionApi, nexus: Nexus, key: string): Bluebi
             {
               title: "Try again",
               action: (dismiss) => {
-                updateKey(api, nexus, key);
+                if (isCurrentAccountSession(api, session)) updateKey(api, nexus, key);
                 dismiss();
               },
             },
@@ -2088,6 +2106,7 @@ export function updateKey(api: IExtensionApi, nexus: Nexus, key: string): Bluebi
         return false;
       })
       .catch(ProcessCanceled, (err) => {
+        if (!isCurrentAccountSession(api, session)) return false;
         log("debug", "login canceled", err.message);
         api.sendNotification({
           id: "nexus-login-failed",
@@ -2098,7 +2117,7 @@ export function updateKey(api: IExtensionApi, nexus: Nexus, key: string): Bluebi
             {
               title: "Try again",
               action: (dismiss) => {
-                updateKey(api, nexus, key);
+                if (isCurrentAccountSession(api, session)) updateKey(api, nexus, key);
                 dismiss();
               },
             },
@@ -2109,6 +2128,7 @@ export function updateKey(api: IExtensionApi, nexus: Nexus, key: string): Bluebi
         return false;
       })
       .catch((err) => {
+        if (!isCurrentAccountSession(api, session)) return false;
         const t = api.translate;
         api.showErrorNotification(
           err.code === "ESOCKETTIMEDOUT"
@@ -2120,7 +2140,7 @@ export function updateKey(api: IExtensionApi, nexus: Nexus, key: string): Bluebi
               {
                 title: "Retry",
                 action: (dismiss) => {
-                  updateKey(api, nexus, key);
+                  if (isCurrentAccountSession(api, session)) updateKey(api, nexus, key);
                   dismiss();
                 },
               },

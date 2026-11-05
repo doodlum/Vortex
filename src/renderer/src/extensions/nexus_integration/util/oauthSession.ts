@@ -3,10 +3,17 @@ import jwt from "jsonwebtoken";
 
 import { log } from "@/logging";
 import type { IExtensionApi } from "@/types/IExtensionContext";
+import { ProcessCanceled } from "@/util/CustomErrors";
 
 import { clearOAuthCredentials, setOAuthCredentials } from "../actions/account";
 import { setUserInfo } from "../actions/persistent";
 import { accessTokenSchema } from "../types/IJWTAccessToken";
+import {
+  getAccountSession,
+  isCurrentAccountSession,
+  oauthAccountIdentity,
+  type AccountSession,
+} from "./accountSession";
 import { requestTokenRefresh } from "./oauth";
 
 /**
@@ -28,7 +35,7 @@ const REFRESH_LEEWAY_MS = 30 * 1000;
 // A dead refresh token is turned down by the token endpoint with 400 invalid_grant (RFC 6749 §5.2).
 const REFUSED_OAUTH_CODES = ["invalid_grant"];
 
-let inFlight: Promise<string | undefined> | undefined;
+const refreshes = new WeakMap<AccountSession, Promise<string | undefined>>();
 
 function credentialsFromState(api: IExtensionApi): IOAuthCredentials | undefined {
   return api.getState().confidential.account?.["nexus"]?.["OAuthCredentials"];
@@ -60,18 +67,24 @@ export function refuseLogin(api: IExtensionApi, err: unknown): void {
 async function doRefresh(
   api: IExtensionApi,
   current: IOAuthCredentials,
+  session: AccountSession,
 ): Promise<string | undefined> {
   let reply;
   try {
     reply = await requestTokenRefresh(current.refreshToken);
   } catch (err) {
+    const latest = credentialsFromState(api);
+    if (!isCurrentAccountSession(api, session)) return undefined;
+    if (latest?.refreshToken !== current.refreshToken) return latest?.token;
     if (REFUSED_OAUTH_CODES.includes(getErrorCode(err) ?? "")) {
       refuseLogin(api, err);
     }
     throw err;
   }
 
-  // the session may have been replaced or ended while the request was out; don't resurrect it
+  // A different account must not receive this refresh or provide a token to its old request.
+  if (!isCurrentAccountSession(api, session)) return undefined;
+  // A same-account session may have received newer credentials while this request was out.
   const latest = credentialsFromState(api);
   if (latest?.refreshToken !== current.refreshToken) {
     log("info", "OAuth session changed during a refresh, discarding the result");
@@ -91,12 +104,16 @@ async function doRefresh(
 
 /** One refresh at a time: everyone who needs a new token while one is on its way shares it. */
 function refresh(api: IExtensionApi, current: IOAuthCredentials): Promise<string | undefined> {
-  if (inFlight === undefined) {
-    inFlight = doRefresh(api, current).finally(() => {
-      inFlight = undefined;
+  const session = getAccountSession(api);
+  let pending = refreshes.get(session);
+  if (pending === undefined) {
+    const request = doRefresh(api, current, session).finally(() => {
+      if (refreshes.get(session) === request) refreshes.delete(session);
     });
+    refreshes.set(session, request);
+    pending = request;
   }
-  return inFlight;
+  return pending;
 }
 
 /**
@@ -111,12 +128,16 @@ export async function getAccessToken(
   rejectedToken?: string,
 ): Promise<string | undefined> {
   const current = credentialsFromState(api);
+  const session = getAccountSession(api);
   if (current === undefined) {
     return undefined;
   }
 
   if (rejectedToken !== undefined) {
-    return rejectedToken === current.token ? refresh(api, current) : current.token;
+    if (rejectedToken === current.token) return refresh(api, current);
+    return oauthAccountIdentity({ token: rejectedToken }) === oauthAccountIdentity(current)
+      ? current.token
+      : undefined;
   }
 
   if (!expiresSoon(current.token)) {
@@ -125,6 +146,7 @@ export async function getAccessToken(
   try {
     return await refresh(api, current);
   } catch (err) {
+    if (!isCurrentAccountSession(api, session)) return undefined;
     const latest = credentialsFromState(api);
     log(
       "info",
@@ -137,8 +159,25 @@ export async function getAccessToken(
   }
 }
 
-/** `getAccessToken` bound to an api, in the shape nexus-api's `setTokenProvider` takes. */
-export const tokenProviderFor =
-  (api: IExtensionApi) =>
-  (rejectedToken?: string): Promise<string | undefined> =>
-    getAccessToken(api, rejectedToken);
+type TokenProvider = (rejectedToken?: string) => Promise<string | undefined>;
+const providers = new WeakMap<AccountSession, TokenProvider>();
+
+/** A provider belongs to one session, while permitting that account's token refreshes. */
+export function tokenProviderFor(api: IExtensionApi): TokenProvider {
+  const session = getAccountSession(api);
+  let provider = providers.get(session);
+  if (provider === undefined) {
+    const check = () => {
+      if (!isCurrentAccountSession(api, session))
+        throw new ProcessCanceled("Nexus account session changed");
+    };
+    provider = async (rejectedToken?: string) => {
+      check();
+      const token = await getAccessToken(api, rejectedToken);
+      check();
+      return token;
+    };
+    providers.set(session, provider);
+  }
+  return provider;
+}

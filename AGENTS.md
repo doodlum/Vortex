@@ -163,3 +163,11 @@ behavior when a capacity probe fails and preserve confirmed-corruption precedenc
 capacity responses do not establish physical disk-full recovery: use the bounded private
 filesystem procedure in `docs/linux-filesystem-compatibility.md`, retaining first outcomes
 and treating callback timeouts as inconclusive. Never fill the root filesystem.
+
+For Nexus session/cache changes, read `docs/nexus-sessions.md` and run the complete
+renderer `src/extensions/nexus_integration` cohort on both hosts. Preserve deferred-response
+controls for logout, account replacement, switching away and back, same-account refresh,
+SDK cache contamination, refresh refusal, membership cooldowns and obsolete API-key retries.
+Use synthetic credentials for controls; packaged owner-authenticated downloads and restart
+are separate evidence. Do not put credential values in reports or claim a two-account live
+switch from mocked requests.

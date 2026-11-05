@@ -201,7 +201,7 @@ describe("membership freshness", () => {
         finishLogin = resolve;
       });
 
-      const adopted = adoptMembershipRead(login);
+      const adopted = adoptMembershipRead(harness.api, login);
       const pending = ensureFreshMembership(harness.api, nexus);
       finishLogin("updated");
       await pending;
@@ -216,7 +216,7 @@ describe("membership freshness", () => {
       const harness = makeApi();
       const { nexus, getUserInfo } = makeNexus();
 
-      await adoptMembershipRead(Promise.resolve("updated"));
+      await adoptMembershipRead(harness.api, Promise.resolve("updated"));
       await ensureFreshMembership(harness.api, nexus);
 
       expect(getUserInfo).not.toHaveBeenCalled();
@@ -226,7 +226,9 @@ describe("membership freshness", () => {
       const harness = makeApi();
       const { nexus, getUserInfo } = makeNexus();
 
-      await expect(adoptMembershipRead(Promise.reject(new Error("no")))).resolves.toBe(false);
+      await expect(adoptMembershipRead(harness.api, Promise.reject(new Error("no")))).resolves.toBe(
+        false,
+      );
 
       // the failed read holds the next one off briefly, but the module isn't stuck on it
       resetMembershipFreshness();

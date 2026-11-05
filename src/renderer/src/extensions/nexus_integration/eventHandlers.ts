@@ -54,11 +54,12 @@ import { setUpdatingMods } from "../mod_management/actions/session";
 import type { IModListItem } from "../news_dashlet/types";
 import { setUserInfo } from "./actions/persistent";
 import { NEXUS_GAMES_URL } from "./constants";
-import { ensureFreshMembership, refreshMembership } from "./membership";
+import { adoptMembershipRead, ensureFreshMembership, refreshMembership } from "./membership";
 import { nxmModUrl } from "./NXMUrl";
 import { isRateLimited, notifyRateLimited } from "./rateLimit";
 import { isLoggedIn, isPremium } from "./selectors";
 import type { IValidateKeyDataV2 } from "./types/IValidateKeyData";
+import type { UserInfoRead } from "./util";
 import {
   checkModVersionsImpl,
   endorseDirectImpl,
@@ -73,6 +74,7 @@ import {
   updateKey,
   updateToken,
 } from "./util";
+import { oauthAccountIdentity } from "./util/accountSession";
 import { findLatestUpdate, retrieveModInfo } from "./util/checkModsVersion";
 import { nexusGameId, convertGameIdReverse } from "./util/convertGameId";
 import {
@@ -1300,15 +1302,23 @@ export function onOAuthTokenChanged(api: IExtensionApi, nexus: Nexus): StateChan
       return;
     }
 
-    if (oldValue !== undefined) {
+    if (
+      oldValue !== undefined &&
+      oauthAccountIdentity(oldValue) === oauthAccountIdentity(newValue)
+    ) {
       updateUserInfoFromRefreshedToken(api, newValue);
       return;
     }
 
-    // fresh login: undefined -> defined
+    // fresh login or replacement by a different account
     nexus.clearPreferencesCache();
     api.store.dispatch(setUserInfo(undefined));
-    updateToken(api, nexus, newValue);
+    void adoptMembershipRead(
+      api,
+      Promise.resolve(updateToken(api, nexus, newValue)).then(
+        (updated): UserInfoRead => (updated ? "updated" : "failed"),
+      ),
+    );
   };
 }
 

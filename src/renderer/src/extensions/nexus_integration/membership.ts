@@ -1,8 +1,4 @@
-/**
- * Nothing on the website pushes a membership change to Vortex, so every read of
- * `persistent.nexus.userInfo` is potentially stale. This module is the one place that decides when
- * to go and ask again, so the triggers scattered across the UI share a single request.
- */
+/** Account-scoped membership freshness. UI triggers in one session share one request. */
 import type Nexus from "@nexusmods/nexus-api";
 
 import type { IExtensionApi } from "../../types/IExtensionContext";
@@ -11,110 +7,98 @@ import { REVALIDATION_FREQUENCY } from "./constants";
 import { isLoggedIn, userInfo } from "./selectors";
 import type { UserInfoRead } from "./util";
 import { getUserInfo } from "./util";
+import {
+  getAccountSession,
+  isCurrentAccountSession,
+  type AccountSession,
+} from "./util/accountSession";
 
-/** Collapses the focus / hover / menu triggers, which all mean "the user might have changed plan". */
 const REFRESH_DEBOUNCE = 3000;
-
-/** How long a failed read holds off the next attempt, so an unreachable api isn't hammered. */
 const FAILURE_COOLDOWN = 30 * 1000;
-
-/**
- * Floor for hovering a collection, which fires on mouse movement alone. The install path confirms
- * the membership before it refuses anything, so the read a hover asks for is speculative and the
- * background revalidation cadence is enough for it.
- */
 export const HOVER_REFRESH_FLOOR = REVALIDATION_FREQUENCY;
 
-let lastRead = 0;
-let lastReadCooldown = REVALIDATION_FREQUENCY;
-let inFlight: Promise<boolean> | undefined;
+interface Freshness {
+  lastRead: number;
+  lastReadCooldown: number;
+  inFlight?: Promise<boolean>;
+}
+let freshness = new WeakMap<AccountSession, Freshness>();
+let debounceSession: AccountSession | undefined;
 
-/**
- * How long a read ending in `result` holds off the next one. Only an api that couldn't answer
- * gets the short retry: a rate limit did answer, and it said stop asking.
- */
+function stateFor(api: IExtensionApi): { session: AccountSession; state: Freshness } {
+  const session = getAccountSession(api);
+  let state = freshness.get(session);
+  if (state === undefined) {
+    state = { lastRead: Number.NEGATIVE_INFINITY, lastReadCooldown: REVALIDATION_FREQUENCY };
+    freshness.set(session, state);
+  }
+  if (debounceSession !== session) {
+    refreshDebouncer.clear();
+    debounceSession = session;
+  }
+  return { session, state };
+}
+
 function cooldownFor(result: UserInfoRead): number {
   return result === "failed" ? FAILURE_COOLDOWN : REVALIDATION_FREQUENCY;
 }
 
-/**
- * Whether the last read still stands. A read that failed stands for its own cooldown, so the api
- * isn't hammered without `lastRead` having to misreport when it last answered.
- */
-function readIsRecent(within = lastReadCooldown): boolean {
-  return Date.now() - lastRead < within;
+function readIsRecent(state: Freshness, within = state.lastReadCooldown): boolean {
+  return Date.now() - state.lastRead < within;
 }
 
-/**
- * Count a write of `userInfo` from outside this module as a read - the api-key revalidation and the
- * login token refresh both write it directly. Registered once, from the extension's init.
- *
- * Watches the store rather than going through `api.onStateChange`, which reports a change only
- * when the new value differs (ReduxWatcher compares deeply). A read that confirms the membership
- * is unchanged writes an equal value, and that is precisely the read worth remembering: without it
- * the next refusal pays for a round trip whose answer is already in state.
- */
+/** Count actual user-info writes, including equal-value writes that ReduxWatcher omits. */
 export function trackMembershipReads(api: IExtensionApi): void {
   let last = userInfo(api.getState());
+  stateFor(api);
   api.store.subscribe(() => {
+    const { state } = stateFor(api);
     const current = userInfo(api.getState());
-    if (current === last) {
-      return;
-    }
+    if (current === last) return;
     last = current;
-    lastRead = Date.now();
-    // whatever wrote this had an answer, so a post-failure window no longer applies
-    lastReadCooldown = REVALIDATION_FREQUENCY;
+    if (current === undefined) return; // clearing an account is not a successful membership read
+    state.lastRead = Date.now();
+    state.lastReadCooldown = REVALIDATION_FREQUENCY;
   });
 }
 
-/** Re-read the membership now. Concurrent callers share the one request. */
 export async function refreshMembership(api: IExtensionApi, nexus: Nexus): Promise<boolean> {
-  if (inFlight !== undefined) {
-    return inFlight;
-  }
-  return adoptMembershipRead(Promise.resolve(getUserInfo(api, nexus)));
+  const { state } = stateFor(api);
+  if (state.inFlight !== undefined) return state.inFlight;
+  return adoptMembershipRead(api, Promise.resolve(getUserInfo(api, nexus)));
 }
 
-/**
- * Count a read this module didn't make as its own, so callers waiting on freshness share it
- * instead of asking again. Login reads the account directly, because it needs the raw failure
- * to tell a refused session from an unreachable one.
- */
-export function adoptMembershipRead(read: Promise<UserInfoRead>): Promise<boolean> {
-  if (inFlight !== undefined) {
-    return inFlight;
-  }
-  inFlight = read
+/** Share the login's read with freshness checks, without adopting another account's work. */
+export function adoptMembershipRead(
+  api: IExtensionApi,
+  read: Promise<UserInfoRead>,
+): Promise<boolean> {
+  const { session, state } = stateFor(api);
+  if (state.inFlight !== undefined) return state.inFlight;
+  const pending = read
     .catch((): UserInfoRead => "failed")
     .then((result) => {
-      // a failure counts as an attempt, and stands for its own cooldown
-      lastRead = Date.now();
-      lastReadCooldown = cooldownFor(result);
+      if (!isCurrentAccountSession(api, session)) return false;
+      state.lastRead = Date.now();
+      state.lastReadCooldown = cooldownFor(result);
       return result === "updated";
     })
     .finally(() => {
-      inFlight = undefined;
+      if (state.inFlight === pending) state.inFlight = undefined;
     });
-  return inFlight;
+  state.inFlight = pending;
+  return pending;
 }
 
-/**
- * Re-read the membership unless it was read recently. For the checks that refuse the user
- * something on the strength of the cached flag, so a plan change made on the website doesn't keep
- * costing them for the rest of the session.
- */
 export async function ensureFreshMembership(api: IExtensionApi, nexus: Nexus): Promise<void> {
-  if (!isLoggedIn(api.getState()) || readIsRecent()) {
-    return;
-  }
+  const { state } = stateFor(api);
+  if (!isLoggedIn(api.getState()) || readIsRecent(state)) return;
   await refreshMembership(api, nexus);
 }
 
 const refreshDebouncer = new Debouncer(
-  (api: IExtensionApi) => {
-    // a logged-out user has no membership to read, and asking anyway raises an error toast
-    if (isLoggedIn(api.getState())) {
+  (api: IExtensionApi, session: AccountSession) => {
+    if (isCurrentAccountSession(api, session) && isLoggedIn(api.getState())) {
       api.events.emit("refresh-user-info");
     }
     return null;
@@ -124,25 +108,16 @@ const refreshDebouncer = new Debouncer(
   true,
 );
 
-/**
- * Ask for a re-read without waiting for it, for the triggers that only want the UI to catch up:
- * regaining focus, hovering a collection, the Refresh User Info menu item, an nxm://premium link.
- *
- * A trigger that fires on its own passes `notReadWithin` to drop the request while a read that
- * recent already answers it, because the debounce alone still lets one through every few seconds for
- * as long as the trigger keeps firing. A trigger the user set off deliberately passes nothing and
- * always asks.
- */
+/** Explicit triggers always ask; automatic hover/focus triggers can supply a freshness floor. */
 export function scheduleMembershipRefresh(api: IExtensionApi, notReadWithin = 0): void {
-  if (readIsRecent(notReadWithin)) {
-    return;
-  }
-  refreshDebouncer.schedule(undefined, api);
+  const { session, state } = stateFor(api);
+  if (readIsRecent(state, notReadWithin)) return;
+  refreshDebouncer.schedule(undefined, api, session);
 }
 
-/** Test seam: forget when the membership was last read, and re-arm the debounce. */
+/** Test seam: forget freshness and re-arm the debounce without retaining old session records. */
 export function resetMembershipFreshness(): void {
-  lastRead = 0;
-  lastReadCooldown = REVALIDATION_FREQUENCY;
+  freshness = new WeakMap();
+  debounceSession = undefined;
   refreshDebouncer.clear();
 }

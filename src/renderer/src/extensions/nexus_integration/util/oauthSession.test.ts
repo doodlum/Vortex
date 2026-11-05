@@ -4,11 +4,12 @@ import { describe, expect, vi } from "vitest";
 import { makeUserInfo } from "@/test-utils/builders";
 import type { IHarnessFixtures } from "@/test-utils/harnessTest";
 import { test } from "@/test-utils/harnessTest";
+import { ProcessCanceled } from "@/util/CustomErrors";
 
 import { clearOAuthCredentials, setOAuthCredentials } from "../actions/account";
 import type * as oauthModule from "./oauth";
 import { requestTokenRefresh } from "./oauth";
-import { getAccessToken } from "./oauthSession";
+import { getAccessToken, tokenProviderFor } from "./oauthSession";
 
 // util.ts (pulled in by the harness) builds the real OAuth class, so mock only the refresh
 vi.mock("./oauth", async (importOriginal) => ({
@@ -22,7 +23,7 @@ const refreshMock = vi.mocked(requestTokenRefresh);
  * An access token as the site issues it, expiring `secondsLeft` from now. Nothing verifies the
  * signature; the claims are read as they are.
  */
-const makeToken = (secondsLeft: number, id = "t") =>
+const makeToken = (secondsLeft: number, id = "t", userId = 7) =>
   jwt.sign(
     {
       application_id: 1,
@@ -31,10 +32,10 @@ const makeToken = (secondsLeft: number, id = "t") =>
       iat: Math.floor(Date.now() / 1000),
       iss: "nexusmods",
       jti: id,
-      sub: "7",
+      sub: String(userId),
       user: {
         group_id: 1,
-        id: 7,
+        id: userId,
         joined: 0,
         membership_roles: [],
         other_group_ids: "",
@@ -162,7 +163,7 @@ describe("getAccessToken", () => {
     const token = makeToken(3600);
     logIn(harness, token);
 
-    await expect(getAccessToken(harness.api, "an-older-token")).resolves.toBe(token);
+    await expect(getAccessToken(harness.api, makeToken(3600, "older"))).resolves.toBe(token);
     expect(refreshMock).not.toHaveBeenCalled();
   });
 
@@ -195,5 +196,103 @@ describe("getAccessToken", () => {
 
     await expect(pending).resolves.toBe(storedCredentials(harness)?.token);
     expect(storedCredentials(harness)?.refreshToken).toBe("refresh-other");
+  });
+});
+
+describe("account-isolated token refresh", () => {
+  function pendingReply() {
+    let resolve!: (value: ReturnType<typeof reply>) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<ReturnType<typeof reply>>((yes, no) => {
+      resolve = yes;
+      reject = no;
+    });
+    return { promise, resolve, reject };
+  }
+
+  test("does not sign the new account out when the old refresh is refused", async ({ makeApi }) => {
+    const harness = makeApi(),
+      old = pendingReply();
+    logIn(harness, makeToken(10, "account-a", 7), "refresh-a");
+    refreshMock.mockReturnValueOnce(old.promise);
+    const pending = getAccessToken(harness.api);
+    const current = makeToken(3600, "account-b", 8);
+    logIn(harness, current, "refresh-b");
+    old.reject(invalidGrant());
+    await expect(pending).resolves.toBeUndefined();
+    expect(storedCredentials(harness)?.token).toBe(current);
+    expect(storedCredentials(harness)?.refreshToken).toBe("refresh-b");
+    expect(harness.errorNotifications).toEqual([]);
+  });
+
+  test("does not share a previous account's pending refresh with the new account", async ({
+    makeApi,
+  }) => {
+    const harness = makeApi(),
+      old = pendingReply(),
+      fresh = pendingReply();
+    const renewedA = makeToken(3600, "renewed-a", 7),
+      renewedB = makeToken(3600, "renewed-b", 8);
+    refreshMock.mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
+    logIn(harness, makeToken(10, "account-a", 7), "refresh-a");
+    const first = getAccessToken(harness.api);
+    logIn(harness, makeToken(10, "account-b", 8), "refresh-b");
+    const second = getAccessToken(harness.api);
+    old.resolve(reply(renewedA, "renewed-refresh-a"));
+    fresh.resolve(reply(renewedB, "renewed-refresh-b"));
+    const results = await Promise.all([first, second]);
+    expect(refreshMock).toHaveBeenCalledTimes(2);
+    expect(results).toEqual([undefined, renewedB]);
+    expect(storedCredentials(harness)?.token).toBe(renewedB);
+    expect(storedCredentials(harness)?.refreshToken).toBe("renewed-refresh-b");
+  });
+
+  test("does not hand another account's token to a rejected old-account request", async ({
+    makeApi,
+  }) => {
+    const harness = makeApi();
+    const old = makeToken(3600, "account-a", 7);
+    logIn(harness, makeToken(3600, "account-b", 8), "refresh-b");
+    await expect(getAccessToken(harness.api, old)).resolves.toBeUndefined();
+    expect(refreshMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("reviewed asynchronous account boundaries", () => {
+  test("does not return the replacement token after a refresh-error microtask gap", async ({
+    makeApi,
+  }) => {
+    const harness = makeApi();
+    logIn(harness, makeToken(10, "a", 7), "refresh-a");
+    let reject!: (error: unknown) => void;
+    refreshMock.mockReturnValueOnce(
+      new Promise((_resolve, no) => {
+        reject = no;
+      }),
+    );
+    const pending = getAccessToken(harness.api);
+    reject(new Error("network unavailable"));
+    queueMicrotask(() => logIn(harness, makeToken(3600, "b", 8), "refresh-b"));
+    await expect(pending).resolves.toBeUndefined();
+    expect(storedCredentials(harness)?.refreshToken).toBe("refresh-b");
+  });
+
+  test("a retired SDK provider rejects instead of supplying another account's token", async ({
+    makeApi,
+  }) => {
+    const harness = makeApi();
+    logIn(harness, makeToken(3600, "a", 7), "refresh-a");
+    const provider = tokenProviderFor(harness.api);
+    logIn(harness, makeToken(3600, "b", 8), "refresh-b");
+    await expect(provider()).rejects.toBeInstanceOf(ProcessCanceled);
+  });
+
+  test("a provider remains usable through a same-account token refresh", async ({ makeApi }) => {
+    const harness = makeApi();
+    logIn(harness, makeToken(3600, "a", 7), "refresh-a");
+    const provider = tokenProviderFor(harness.api),
+      renewed = makeToken(3600, "renewed", 7);
+    logIn(harness, renewed, "refresh-renewed");
+    await expect(provider()).resolves.toBe(renewed);
   });
 });
