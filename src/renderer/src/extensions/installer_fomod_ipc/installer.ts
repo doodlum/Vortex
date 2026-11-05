@@ -142,8 +142,22 @@ export const install = async (
       validate,
     );
 
-    if (!result) {
+    if (!result || result.instructions === null) {
       throw new UserCanceled();
+    }
+
+    // The legacy helper turns a failed script into error-only warning instructions.
+    // There is no installable output in that response; metadata alone must not make
+    // the installation successful. Keep partial-output warnings and XML unchanged.
+    if (
+      hasScript &&
+      result.instructions.length > 0 &&
+      result.instructions.every((instruction) => instruction.type === "error")
+    ) {
+      result.instructions = result.instructions.map((instruction) => ({
+        ...instruction,
+        value: "fatal",
+      }));
     }
 
     log("info", "FOMOD installation completed", { gameId });

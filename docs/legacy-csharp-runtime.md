@@ -27,6 +27,11 @@ maintainer's C# helper is a separate operation that still uses a .NET SDK.
    automatic and needs no administrator privileges or separate runtime download.
 4. Complete any installer dialog, then enable and deploy the mod normally.
 
+If a legacy C# script reports only errors and no installation actions, Vortex stops
+the installation instead of adding an empty installed mod. This includes scripts
+that return failure after a cancelled form. Warnings alongside file or INI actions
+retain their existing behavior; review those warnings before enabling the mod.
+
 The runtime cache is checked before reuse. A damaged cache directory is retained
 with an `.invalid-<id>` suffix and replaced automatically. A damaged manifest
 stops preparation. A damaged application archive stops cache creation or repair;
@@ -43,7 +48,7 @@ verification; a successful helper handshake is not a complete installation test.
 Install the pinned JavaScript workspace dependencies. From `src/renderer`, run:
 
 ```sh
-pnpm exec vitest run src/extensions/installer_fomod_ipc/tester.test.ts src/extensions/installer_fomod_ipc/installer.trust.test.ts src/extensions/installer_fomod_ipc/utils/BundledRuntime.test.ts src/extensions/installer_fomod_ipc/utils/NativeProcessLauncher.test.ts src/extensions/installer_fomod_ipc/utils/connectionStrategy.test.ts src/extensions/installer_dotnet/index.platform.test.ts
+pnpm exec vitest run src/extensions/installer_fomod_ipc/tester.test.ts src/extensions/installer_fomod_ipc/installer.trust.test.ts src/extensions/installer_fomod_ipc/installer.result.test.ts src/extensions/installer_fomod_ipc/utils/BundledRuntime.test.ts src/extensions/installer_fomod_ipc/utils/NativeProcessLauncher.test.ts src/extensions/installer_fomod_ipc/utils/connectionStrategy.test.ts src/extensions/installer_dotnet/index.platform.test.ts src/extensions/mod_management/InstallManager.instructionErrors.test.ts
 ```
 
 These checks need a writable temporary directory, with no account, game, .NET

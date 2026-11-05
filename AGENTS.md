@@ -182,3 +182,8 @@ helper tests on both hosts. Preserve missing-output/removed-game behavior and re
 read/write/traverse access to the existing staging root without creating it in selectors.
 Read docs/linux-filesystem-compatibility.md; verify actual denied/read-only staging
 roots separately, including retained data and same-profile recovery.
+
+Legacy C# result handling also runs renderer installer_fomod_ipc/installer.result and
+mod_management/InstallManager.instructionErrors on both hosts. Error-only failed C#
+results must not create installed metadata; retain file/INI partial-warning and XML
+controls, null cancellation signals, and actual packaged form-cancel/error verification.
