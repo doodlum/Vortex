@@ -1,4 +1,5 @@
 import * as nodeFs from "node:fs";
+import type * as nodeOs from "node:os";
 import * as path from "node:path";
 
 import { expect, vi } from "vitest";
@@ -11,6 +12,7 @@ const link = vi.hoisted(() => ({
   calls: [] as Array<[string, string]>,
   error: undefined as string,
   writeError: undefined as string,
+  errno: undefined as number | undefined,
 }));
 
 vi.mock("../../util/fs", async (importOriginal) => {
@@ -19,14 +21,17 @@ vi.mock("../../util/fs", async (importOriginal) => {
     ...actual,
     writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
       if (link.writeError !== undefined && String(args[0]).endsWith("__vortex_canary.tmp")) {
-        throw Object.assign(new Error(link.writeError), { code: link.writeError });
+        throw Object.assign(new Error(link.writeError), {
+          code: link.writeError,
+          errno: link.errno,
+        });
       }
       return actual.writeFileSync(...args);
     },
     linkSync: (source: string, dest: string) => {
       link.calls.push([source, dest]);
       if (link.error !== undefined) {
-        throw Object.assign(new Error(link.error), { code: link.error });
+        throw Object.assign(new Error(link.error), { code: link.error, errno: link.errno });
       }
       nodeFs.writeFileSync(dest, "");
     },
@@ -41,6 +46,34 @@ function supportState(gamePath: string, stagingDir: string) {
     },
   } as any;
 }
+
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof nodeOs>();
+  const constants = { ...actual.constants, errno: { ...actual.constants.errno, EDQUOT: 122 } };
+  return { ...actual, default: { ...actual, constants }, constants };
+});
+
+test.for(["write", "link"] as const)(
+  "recognizes raw Linux quota errno at canary %s",
+  (operation, { makeDeployment }) => {
+    const h = makeDeployment({ files: { "a.esp": "a" } });
+    const gamePath = path.dirname(h.gameDir);
+    nodeFs.mkdirSync(getGame("skyrimse").getModPaths(gamePath)[""], { recursive: true });
+    vi.stubGlobal("process", { ...process, platform: "linux" });
+    link.errno = -122;
+    link.error = operation === "link" ? "UNKNOWN" : undefined;
+    link.writeError = operation === "write" ? "UNKNOWN" : undefined;
+    try {
+      const reason = h.method.isSupported(supportState(gamePath, h.stagingDir), "skyrimse", "");
+      expect(reason?.description((text: string) => text)).toBe("Disk quota exceeded.");
+    } finally {
+      link.error = undefined;
+      link.writeError = undefined;
+      link.errno = undefined;
+      vi.unstubAllGlobals();
+    }
+  },
+);
 
 test.for(["linux", "win32"] as const)(
   "%s: the support probe links where deployment will, and a cross-mount link rejects hardlinks",

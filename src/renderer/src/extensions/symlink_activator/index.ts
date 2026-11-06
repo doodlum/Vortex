@@ -1,11 +1,12 @@
 import * as path from "path";
 
-import { getErrorCode, getErrorMessageOrDefault } from "@vortex/shared";
+import { getErrorMessageOrDefault } from "@vortex/shared";
 import PromiseBB from "bluebird";
 
 import type { IExtensionApi, IExtensionContext } from "../../types/IExtensionContext";
 import type { IGame } from "../../types/IGame";
 import { UserCanceled } from "../../util/CustomErrors";
+import { getFilesystemErrorCode } from "../../util/filesystemError";
 import * as fs from "../../util/fs";
 import getVortexPath from "../../util/getVortexPath";
 import type { TFunction } from "../../util/i18n";
@@ -135,7 +136,7 @@ class DeploymendMethod extends LinkingDeployment {
       fs.writeFileSync(canary, "Should only exist temporarily, feel free to delete");
       fs.symlinkSync(canary, canary + ".link");
     } catch (err) {
-      const code = getErrorCode(err);
+      const code = getFilesystemErrorCode(err);
       const capacity = capacityProblem(code);
       if (capacity !== undefined) {
         res = capacity;
@@ -284,7 +285,7 @@ class DeploymendMethod extends LinkingDeployment {
         });
         this.mDidLogProbeError = true;
       }
-      const code = getErrorCode(err);
+      const code = getFilesystemErrorCode(err);
       return (
         capacityProblem(code) ?? {
           description: (t) =>

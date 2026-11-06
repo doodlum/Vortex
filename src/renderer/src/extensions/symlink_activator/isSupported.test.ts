@@ -1,15 +1,18 @@
 import * as nodeFs from "node:fs";
+import type * as nodeOs from "node:os";
 import * as path from "node:path";
 
-import { expect, vi } from "vitest";
+import { beforeEach, expect, vi } from "vitest";
 
 import { test } from "../../test-utils/deploymentTest";
 import type * as utilFs from "../../util/fs";
+import getVortexPath from "../../util/getVortexPath";
 
 const probe = vi.hoisted(() => ({
   phase: undefined as "permission" | "write" | "link" | undefined,
   code: undefined as string | undefined,
   calls: [] as string[],
+  errno: undefined as number | undefined,
 }));
 
 vi.mock("../../util/fs", async (importOriginal) => {
@@ -17,7 +20,10 @@ vi.mock("../../util/fs", async (importOriginal) => {
   const failure = (phase: string) => {
     probe.calls.push(phase);
     if (probe.phase === phase) {
-      throw Object.assign(new Error(`Inert ${phase} failure: ${probe.code}`), { code: probe.code });
+      throw Object.assign(new Error(`Inert ${phase} failure: ${probe.code}`), {
+        code: probe.code,
+        errno: probe.errno,
+      });
     }
   };
   return {
@@ -44,6 +50,44 @@ function stateFor(gameId: string, gamePath: string, stagingDir: string) {
 }
 
 const platforms = ["linux", "win32"] as const;
+
+beforeEach(() => {
+  nodeFs.mkdirSync(getVortexPath("userData"), { recursive: true });
+  probe.errno = undefined;
+});
+
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof nodeOs>();
+  const constants = { ...actual.constants, errno: { ...actual.constants.errno, EDQUOT: 122 } };
+  return { ...actual, default: { ...actual, constants }, constants };
+});
+
+test.for(["permission", "write", "link"] as const)(
+  "recognizes raw Linux quota errno at the %s probe",
+  (phase, { makeDeployment }) => {
+    const gameId = "raw-symlink-quota-game";
+    const h = makeDeployment({ method: "symlink", gameId, files: { "payload.txt": "mod" } });
+    vi.stubGlobal("process", { ...process, platform: "linux" });
+    probe.phase = phase;
+    probe.code = "UNKNOWN";
+    probe.errno = -122;
+    probe.calls = [];
+    try {
+      const reason = h.method.isSupported(
+        stateFor(gameId, path.dirname(h.gameDir), h.stagingDir),
+        gameId,
+        "",
+      );
+      expect(probe.calls).toContain(phase);
+      expect(reason?.description((text: string) => text)).toBe("Disk quota exceeded.");
+    } finally {
+      probe.phase = undefined;
+      probe.code = undefined;
+      probe.errno = undefined;
+      vi.unstubAllGlobals();
+    }
+  },
+);
 
 test.for(
   platforms.flatMap((platform) =>

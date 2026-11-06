@@ -899,6 +899,20 @@ existing administrator-rights explanation. The canary is cleaned
 up through the existing probe cleanup path. This check does not reserve space or
 guarantee that a later deployment will finish.
 
+Some Linux Node/Electron versions preserve the quota errno but expose its name as
+`UNKNOWN` or `Unknown system error -122`. Vortex recognizes this fallback only
+when the numeric errno matches the current Linux system's `EDQUOT` constant.
+It reports the quota limit during link support checks and in asynchronous
+filesystem errors, including a failed manifest save. Retry that save after
+reducing quota usage or increasing the quota; physical free space alone may not
+resolve the limit. This diagnostic does not change the caller's Retry/Ignore
+choices or establish that interrupted deployment recovery succeeds.
+
+Run `pnpm exec vitest run src/util/fs.quota.test.ts src/util/filesystemError.test.ts`
+from `src/renderer` for raw errno normalization and platform/sign/error-code
+controls. The support-probe suites below also cover raw Linux quota errors.
+These injected tests supplement a bounded real quota test; they do not replace it.
+
 From src/renderer, run pnpm exec vitest run src/extensions/hardlink_activator/isSupported.test.ts
 on Windows and Linux. The regression injects ENOSPC and EDQUOT at both canary operations
 and preserves the cross-device, unsupported-filesystem and file-descriptor-limit

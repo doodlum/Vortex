@@ -11,6 +11,7 @@ import { log } from "../../logging";
 import type { IExtensionApi, IExtensionContext } from "../../types/IExtensionContext";
 import type { IGame } from "../../types/IGame";
 import type { IState } from "../../types/IState";
+import { getFilesystemErrorCode } from "../../util/filesystemError";
 import * as fs from "../../util/fs";
 import { getVolumePath } from "../../util/getVolumePath";
 import { installPathForGame } from "../../util/selectors";
@@ -194,7 +195,7 @@ class DeploymentMethod extends LinkingDeployment {
       fs.linkSync(canary, canaryLink);
     } catch (err) {
       // EMFILE shouldn't keep us from using hard linking
-      const code = getErrorCode(err);
+      const code = getFilesystemErrorCode(err);
       if (code === "EXDEV") {
         res = sameDrive();
       } else if (code === "ENOSPC" || code === "EDQUOT") {

@@ -6,6 +6,13 @@ to load for a task. It deliberately duplicates nothing from `docs/`.
 
 ## Verification
 
+Linux quota diagnosis changes run renderer `fs.quota.test.ts`, `filesystemError.test.ts`
+and both Hardlink/Symlink `isSupported.test.ts` suites on Windows and Linux. Keep
+the platform, negative errno and fallback-code guards: Windows error 122 and
+unrelated known errors must not become EDQUOT. Physical quota and manifest Retry
+recovery require separate bounded-filesystem evidence; injected errors do not
+establish either result. See `docs/linux-filesystem-compatibility.md`.
+
 `pnpm run verify` from the repo root.
 
 Main worker build/cache changes also run `pnpm exec vitest run build-outputs.test.ts` from

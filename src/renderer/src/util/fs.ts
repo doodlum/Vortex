@@ -38,6 +38,7 @@ import type * as whoLocksT from "wholocks";
 import { ProcessCanceled, SelfCopyCheckError, UserCanceled } from "./CustomErrors";
 import { runElevated } from "./elevated";
 import { createErrorReport, getVisibleWindow } from "./errorHandling";
+import { getFilesystemErrorCode } from "./filesystemError";
 import type { TFunction } from "./i18n";
 import lazyRequire from "./lazyRequire";
 import { log } from "./log";
@@ -473,6 +474,10 @@ interface IErrorHandlerOptions {
 }
 
 function augmentError(error: NodeJS.ErrnoException) {
+  if (error.code !== "EDQUOT" && getFilesystemErrorCode(error) === "EDQUOT") {
+    error.code = "EDQUOT";
+    error.message = `EDQUOT: disk quota exceeded (${error.message})`;
+  }
   if (error.message === "dest already exists.") {
     error.code = "EEXIST";
   }
