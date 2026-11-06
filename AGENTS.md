@@ -6,6 +6,14 @@ to load for a task. It deliberately duplicates nothing from `docs/`.
 
 ## Verification
 
+Atomic writer changes run renderer `fsAtomic.write.test.ts` and `fsAtomic.test.ts`
+on both hosts. Preserve descriptor ownership, cleanup completion before settlement
+and checksum retry, original error identity, checksum attempt limits and atomic-copy
+controls. Check activation manifests, startup settings and state backup consumers;
+the cleanup handle stays internal and the public atomic-write API is unchanged. Real fault/Retry,
+restart, purge and removal need separate packaged-app evidence. See the atomic
+cleanup section in `docs/linux-filesystem-compatibility.md`.
+
 Linux quota diagnosis changes run renderer `fs.quota.test.ts`, `filesystemError.test.ts`
 and both Hardlink/Symlink `isSupported.test.ts` suites on Windows and Linux. Keep
 the platform, negative errno and fallback-code guards: Windows error 122 and

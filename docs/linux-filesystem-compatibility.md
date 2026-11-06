@@ -913,6 +913,31 @@ from `src/renderer` for raw errno normalization and platform/sign/error-code
 controls. The support-probe suites below also cover raw Linux quota errors.
 These injected tests supplement a bounded real quota test; they do not replace it.
 
+## Atomic manifest write cleanup
+
+Manifest saves, startup settings and state backups use the shared atomic writer.
+It writes a temporary file beside the destination, closes its own descriptor,
+verifies the checksum and then replaces the destination. Failed writes and
+verification/replacement failures clean up that temporary file before the
+operation settles. Checksum retries also wait for the previous attempt's cleanup.
+Temporary-file cleanup never owns the writer's descriptor, so it cannot later
+close an unrelated file that reuses that descriptor number. If cleanup itself
+fails, Vortex logs that failure and preserves the original operation error.
+Descriptor close is attempted once; a close failure is logged rather than retried
+against a descriptor number that may already have been reused.
+
+From `src/renderer`, run
+`pnpm exec vitest run src/util/fsAtomic.write.test.ts src/util/fsAtomic.test.ts`
+on Windows and Linux. The tests use real private temporary files with controlled
+write, read, rename, checksum and cleanup failures; they also check descriptor
+closure, delayed cleanup and a file that reuses the released descriptor. The
+existing atomic-copy controls remain separate. These tests do not establish
+physical quota recovery, native Cancel, rollback or process-interruption behavior.
+For real quota acceptance, retain the first failed run, verify the visible quota
+cause, free only the owned filler under the unchanged quota, Retry, and require
+both a valid manifest and no orphan temporary files before testing restart,
+purge and removal. Never delete a leftover file manually to make that check pass.
+
 From src/renderer, run pnpm exec vitest run src/extensions/hardlink_activator/isSupported.test.ts
 on Windows and Linux. The regression injects ENOSPC and EDQUOT at both canary operations
 and preserves the cross-device, unsupported-filesystem and file-descriptor-limit

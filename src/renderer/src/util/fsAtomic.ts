@@ -1,4 +1,5 @@
 import { createHash } from "crypto";
+import { close as closeFileDescriptor } from "node:fs";
 import { copyFile, rename, unlink } from "node:fs/promises";
 
 import { getErrorCode, unknownToError } from "@vortex/shared";
@@ -19,38 +20,68 @@ function writeFileAtomicImpl(
   attempts: number,
 ): PromiseBB<void> {
   const stackErr = new Error();
-  let cleanup: (() => void) | undefined;
+  let cleanup: ((next?: (err?: Error) => void) => void) | undefined;
   let tmpPath: string;
   const buf: Buffer = input instanceof Buffer ? input : Buffer.from(input);
 
-  const callCleanup = () => {
-    if (cleanup !== undefined) {
+  const callCleanup = (): PromiseBB<void> => {
+    const remove = cleanup;
+    cleanup = undefined;
+    if (remove === undefined) return PromiseBB.resolve();
+    return new PromiseBB<void>((resolve) => {
       try {
-        cleanup();
+        remove((err) => {
+          if (err) log("error", "failed to clean up temporary file", err);
+          resolve();
+        });
       } catch (err) {
         log("error", "failed to clean up temporary file", err);
+        resolve();
       }
-
-      cleanup = undefined;
-    }
+    });
   };
 
   const hash = checksum(buf);
   let fd = -1;
-  return fs
-    .withTmpFile(
-      (fdIn: number, pathIn: string) => {
-        fd = fdIn;
-        tmpPath = pathIn;
-        return fs
-          .writeAsync(fd, buf, 0, buf.byteLength, 0)
-          .then(() => fs.fsyncAsync(fd).catch(() => PromiseBB.resolve()))
-          .then(() => fs.closeAsync(fd).catch(() => PromiseBB.resolve()));
-      },
-      {
-        cleanup: false,
-        template: `${filePath}.XXXXXX.tmp`,
-      },
+  const closeDescriptor = (): PromiseBB<void> => {
+    const ownedFd = fd;
+    fd = -1;
+    if (ownedFd === -1) return PromiseBB.resolve();
+    return new PromiseBB<void>((resolve) => {
+      try {
+        // Close our descriptor once. Retrying close could affect a recycled descriptor.
+        closeFileDescriptor(ownedFd, (err) => {
+          if (err) log("warn", "failed to close temporary file", err);
+          resolve();
+        });
+      } catch (err) {
+        log("warn", "failed to close temporary file", err);
+        resolve();
+      }
+    });
+  };
+  const createTemporaryFile = fs.genFSWrapperAsync(
+    () =>
+      new PromiseBB<void>((resolve, reject) => {
+        // We own the descriptor; tmp owns only pathname cleanup and its registry entry.
+        file(
+          { template: `${filePath}.XXXXXX.tmp`, detachDescriptor: true },
+          (err, name, fdIn, cleanupCB) => {
+            if (err) return reject(err);
+            fd = fdIn;
+            tmpPath = name;
+            cleanup = cleanupCB;
+            resolve();
+          },
+        );
+      }),
+  );
+  return createTemporaryFile()
+    .then(() =>
+      fs
+        .writeAsync(fd, buf, 0, buf.byteLength, 0)
+        .then(() => fs.fsyncAsync(fd).catch(() => PromiseBB.resolve()))
+        .finally(closeDescriptor),
     )
     .then(() => fs.readFileAsync(tmpPath))
     .catch({ code: "EBADF" }, () => {
@@ -62,11 +93,12 @@ function writeFileAtomicImpl(
     })
     .then((data) => {
       if (data === undefined || checksum(data) !== hash) {
-        callCleanup();
-        return attempts > 0
-          ? // retry
-            writeFileAtomicImpl(filePath, input, attempts - 1)
-          : PromiseBB.reject(new Error("Write failed, checksums differ"));
+        return callCleanup().then(() =>
+          attempts > 0
+            ? // retry
+              writeFileAtomicImpl(filePath, input, attempts - 1)
+            : PromiseBB.reject(new Error("Write failed, checksums differ")),
+        );
       } else {
         return fs.renameAsync(tmpPath, filePath).catch({ code: "EEXIST" }, () =>
           // renameAsync is supposed to overwrite so this is likely to fail as well
@@ -79,9 +111,7 @@ function writeFileAtomicImpl(
       err.stack = err.stack + "\n" + stackErr.stack;
       return PromiseBB.reject(err);
     })
-    .finally(() => {
-      callCleanup();
-    });
+    .finally(callCleanup);
 }
 
 /**
