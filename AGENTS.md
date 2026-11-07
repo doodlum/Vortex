@@ -23,6 +23,11 @@ establish either result. See `docs/linux-filesystem-compatibility.md`.
 
 `pnpm run verify` from the repo root.
 
+The root test command provisions Electron before parallel workers. For a scoped test
+that imports the real Electron package, first run `node scripts/ensure-electron.mjs`.
+Provisioning changes also run `pnpm exec vitest run --config scripts/vitest.config.ts`;
+keep installer failures and incomplete output fatal before test workers start.
+
 Main worker build/cache changes also run `pnpm exec vitest run build-outputs.test.ts` from
 `src/main`. Every literal `bundleWorker` output and source map belongs in the main build
 target outputs. Verify actual restoration from a private local Nx cache on a stopped
