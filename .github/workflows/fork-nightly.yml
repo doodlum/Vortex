@@ -1,8 +1,8 @@
 name: Fork Nightly
 
-# Fork-only, called by linux-port-nightly.yml and aether-vfs-nightly.yml: keeps a branch merged
-# with the branch it follows (`linux` follows upstream master, `aether-vfs` follows `linux`) and
-# publishes unsigned Windows and Linux builds of it as a GitHub pre-release.
+# Fork-only reusable workflow, called by linux-port-nightly.yml. Merges the requested
+# branch with the branch it follows and publishes unsigned Windows and Linux builds
+# as a GitHub pre-release.
 #
 # GITHUB_TOKEN cannot push merges that change workflow files. Set a LINUX_SYNC_TOKEN secret
 # (contents and workflows write) to push those too; without it each build job re-applies the
@@ -28,7 +28,7 @@ on:
         type: string
         required: true
       prefix:
-        description: Release tag and version prefix (nightly, vfs-nightly).
+        description: Release tag and version prefix (for example, nightly).
         type: string
         required: true
       title:
