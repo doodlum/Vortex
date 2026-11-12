@@ -70,6 +70,19 @@ When modifying phase logic:
 - **Call `startPendingForPhase()` after deployment completes**, or queued
   installs for the next phase never start.
 
+## Plugin rules
+
+Collection plugin rules use LOOT's `after`, `req` and `inc` fields. A reference
+can be a plugin name or an object with `name`, `display` and `condition`.
+Import preserves those objects. Rule identity is the case-insensitive plugin
+name plus the exact condition; an absent or empty condition is unconditional.
+Reinstalling does not duplicate equivalent rules. Both the rule editor and
+the plugin dependency popover remove the selected condition while retaining
+other conditions for that plugin. A plain-name removal selects only the
+unconditional rule.
+Cycle recovery offers a separate choice for each stored condition; the cycle
+itself does not identify which condition created the dependency.
+
 ## Tests
 
 - `InstallManager.optionalPhaseGate.test.ts` - Optional-phase gating

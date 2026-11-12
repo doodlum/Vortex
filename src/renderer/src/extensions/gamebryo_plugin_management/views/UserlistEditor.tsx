@@ -16,6 +16,7 @@ import { closeDialog } from "../actions/userlistEdit";
 import type { ILOOTPlugin } from "../types/ILOOTList";
 import type { IPlugins } from "../types/IPlugins";
 import type { IStateWithGamebryo } from "../types/IStateWithGamebryo";
+import { referenceKey, type LootReference } from "../util/lootReference";
 
 type RuleType = "after" | "requires" | "incompatible";
 
@@ -32,20 +33,28 @@ interface IRuleTypeOption {
 interface IRuleEntryProps {
   t: typeof I18next.t;
   pluginId: string;
-  reference: string;
+  reference: LootReference;
   type: RuleType;
-  onDelete: (pluginId: string, reference: string, type: RuleType) => void;
+  onDelete: (pluginId: string, reference: LootReference, type: RuleType) => void;
 }
 
 class RuleEntry extends React.Component<IRuleEntryProps, {}> {
   public render(): JSX.Element {
     const { pluginId, reference, type } = this.props;
     return (
-      <ListGroupItem key={`${pluginId}-${type}-${reference}`}>
+      <ListGroupItem
+        data-testid="plugin-rule"
+        key={`${pluginId}-${type}-${referenceKey(reference)}`}
+      >
         <tooltip.IconButton className="btn-embed" icon="remove" tooltip="" onClick={this.click} />
         <div className="rule-name">{pluginId}</div>
         <div className="rule-type">{this.renderType(type)}</div>
-        <div className="rule-name">{reference}</div>
+        <div
+          className="rule-name"
+          title={typeof reference === "string" ? undefined : reference.condition}
+        >
+          {typeof reference === "string" ? reference : reference.display || reference.name}
+        </div>
       </ListGroupItem>
     );
   }
@@ -84,7 +93,7 @@ interface IConnectedProps {
 interface IActionProps {
   onCloseDialog: () => void;
   onAddRule: (pluginId: string, reference: string, type: string) => void;
-  onRemoveRule: (pluginId: string, reference: string, type: string) => void;
+  onRemoveRule: (pluginId: string, reference: LootReference, type: string) => void;
 }
 
 interface IComponentState {
@@ -202,30 +211,30 @@ class Editor extends ComponentEx<IProps, IComponentState> {
     const { t } = this.props;
     const id = userlistItem.name;
     return [].concat(
-      (userlistItem.after || []).map((ref: string) => (
+      (userlistItem.after || []).map((ref) => (
         <RuleEntry
           t={t}
-          key={`${id}-after-${ref}`}
+          key={`${id}-after-${referenceKey(ref)}`}
           pluginId={id}
           reference={ref}
           type="after"
           onDelete={this.deleteRule}
         />
       )),
-      (userlistItem.req || []).map((ref: string) => (
+      (userlistItem.req || []).map((ref) => (
         <RuleEntry
           t={t}
-          key={`${id}-req-${ref}`}
+          key={`${id}-req-${referenceKey(ref)}`}
           pluginId={id}
           reference={ref}
           type="requires"
           onDelete={this.deleteRule}
         />
       )),
-      (userlistItem.inc || []).map((ref: string) => (
+      (userlistItem.inc || []).map((ref) => (
         <RuleEntry
           t={t}
-          key={`${id}-inc-${ref}`}
+          key={`${id}-inc-${referenceKey(ref)}`}
           pluginId={id}
           reference={ref}
           type="incompatible"
@@ -235,7 +244,7 @@ class Editor extends ComponentEx<IProps, IComponentState> {
     );
   };
 
-  private deleteRule = (pluginId: string, reference: string, type: RuleType) => {
+  private deleteRule = (pluginId: string, reference: LootReference, type: RuleType) => {
     const { onRemoveRule } = this.props;
     onRemoveRule(pluginId, reference, type);
   };

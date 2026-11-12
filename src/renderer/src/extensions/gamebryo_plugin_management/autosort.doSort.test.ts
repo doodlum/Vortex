@@ -1,6 +1,7 @@
 import { rm, utimes, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 
+import Bluebird from "bluebird";
 import { describe, expect, vi } from "vitest";
 
 import { startActivity, stopActivity } from "../../actions/session";
@@ -12,7 +13,7 @@ import {
 } from "../mod_management/actions/transactions";
 import { updatePluginOrder } from "./actions/loadOrder";
 import { setAutoEnable } from "./actions/settings";
-import { setGroup } from "./actions/userlist";
+import { addRule, removeRule, setGroup } from "./actions/userlist";
 import LootInterface from "./autosort";
 import { EdgeType, type ICycleEdge } from "./types/ILoot";
 
@@ -177,6 +178,63 @@ describe("LootInterface doSort", () => {
       expect(harness.dialogCalls).toContainEqual({ type: "info", title: "Cyclic interaction" });
     });
   });
+
+  for (const [type, edgeType, pluginId] of [
+    ["after", EdgeType.userLoadAfter, "B.esp"],
+    ["requires", EdgeType.userRequirement, "B.esp"],
+    ["after", EdgeType.userLoadAfter, "B.*\\.esp"],
+  ] as const) {
+    test(`removes only the selected conditional ${type} cycle rule on ${pluginId}`, async ({
+      makeLoot,
+    }) => {
+      const harness = await makeLoot(LootInterface);
+      await harness.seedPlugins(["A.esp", "B.esp"]);
+      harness.loot.sortPlugins.mockResolvedValue(["A.esp", "B.esp"]);
+      const reference = { name: "A.esp", display: "A", condition: 'active("A:1.esp")' };
+      const retained = { ...reference, condition: 'active("Other.esp")' };
+      harness.api.store.dispatch(addRule(pluginId, reference, type));
+      harness.api.store.dispatch(addRule(pluginId, retained, type));
+      const cycle: ICycleEdge[] = [
+        { name: "A.esp", typeOfEdgeToNextVertex: edgeType },
+        { name: "B.esp", typeOfEdgeToNextVertex: EdgeType.master },
+      ];
+      harness.loot.sortPlugins.mockRejectedValueOnce(
+        Object.assign(new Error("Cyclic interaction"), { cycle }),
+      );
+      await harness.sort(true);
+      const key = `removerule:${encodeURIComponent(JSON.stringify({ pluginId, reference, type }))}`;
+      const dialog = vi
+        .spyOn(harness.api, "showDialog")
+        .mockImplementation((_type, _title, content) =>
+          Bluebird.resolve({
+            action: "Apply Selected",
+            input: { [content.checkboxes[0].id]: true },
+          }),
+        );
+      await vi.waitFor(() =>
+        expect(harness.notifications.some((entry) => entry.id === "loot-cycle-warning")).toBe(true),
+      );
+      harness.notifications
+        .find((entry) => entry.id === "loot-cycle-warning")
+        .actions[0].action(() => undefined);
+      await vi.waitFor(() =>
+        expect(harness.dispatched.some((entry) => entry.type === removeRule.getType())).toBe(true),
+      );
+      await vi.waitFor(() =>
+        expect(
+          harness.dispatched.filter((entry) => entry.type === updatePluginOrder.getType()),
+        ).toHaveLength(1),
+      );
+      await vi.waitFor(() =>
+        expect(harness.getState().session.base.activity["plugins"] ?? []).toEqual([]),
+      );
+      const list = type === "requires" ? "req" : "after";
+      expect(harness.getGamebryoState().userlist.plugins[0][list]).toEqual([retained]);
+      const choices = dialog.mock.calls[0][2].checkboxes;
+      expect(choices).toHaveLength(2);
+      expect(choices.find((choice) => choice.id === key).text).toContain(reference.condition);
+    });
+  }
 
   test("warns without re-sorting when loot rejects a plugin it could not load", async ({
     makeLoot,
